@@ -1,0 +1,119 @@
+# ==============================================================================
+# Trace (ForensiX) — Production .gitignore
+# ==============================================================================
+
+# --- Internal Documentation & Process Artifacts ---
+/docs
+process/
+
+# --- Environment, Secrets & Credentials ---
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+credentials.json
+secrets.json
+auth.json
+
+# --- Forensic Evidence, Disk Images & Acquisition Storage ---
+# Raw and bit-stream disk images
+*.raw
+*.dd
+*.img
+*.bin
+*.iso
+*.vmdk
+*.vdi
+*.vhdx
+# Expert Witness (EWF / SMART) and AFF forensic containers
+*.[eE]0[1-9]
+*.[eE][1-9][0-9]
+*.[eE][xX]0[1-9]
+*.[lL]0[1-9]
+*.aff
+*.aff4
+# Memory dumps and packet captures
+*.dmp
+*.dump
+*.mem
+*.pcap
+*.pcapng
+*.cap
+# Local evidence storage directories
+storage/
+evidence/
+.trace/
+
+# --- Local Databases & Transitory State ---
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sql
+
+# --- Virtual Environments & Package Managers ---
+.venv/
+venv/
+env/
+ENV/
+.local/
+wheels/
+*.wheel
+
+# --- Build Artifacts & Distribution ---
+dist/
+build/
+*.egg
+*.egg-info/
+.eggs/
+
+# --- Python Bytecode & Runtime Caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+.cache/
+
+# --- Testing, Coverage & Static Analysis Caches ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.schemathesis/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# --- Logs & Diagnostics ---
+*.log
+logs/
+*.crash
+
+# --- OS & Editor Specific Files ---
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+desktop.ini
+$RECYCLE.BIN/
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+# Linux
+*~
+# IDEs & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*.tmp
+*.bak
