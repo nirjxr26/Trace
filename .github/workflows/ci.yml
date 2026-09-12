@@ -20,17 +20,17 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
       - name: Install Dependencies
         run: |
-          pip install --only-binary :all: -r requirements.txt
+          pip install --require-hashes --only-binary :all: -r requirements.txt
           pip install --no-deps -e .
 
       - name: Verify Code Formatting (Ruff)
@@ -58,17 +58,17 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
       - name: Install Dependencies
         run: |
-          pip install --only-binary :all: -r requirements.txt
+          pip install --require-hashes --only-binary :all: -r requirements.txt
           pip install --no-deps -e .
 
       - name: Execute Pytest with Branch Coverage
@@ -76,7 +76,7 @@ jobs:
 
       - name: Upload Coverage Artifact (Linux)
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: coverage-report-python-${{ matrix.python-version }}
           path: coverage.xml
@@ -111,17 +111,17 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
       - name: Install Dependencies
         run: |
-          pip install --only-binary :all: -r requirements.txt
+          pip install --require-hashes --only-binary :all: -r requirements.txt
           pip install --no-deps -e .
 
       - name: Verify Database CLI Commands

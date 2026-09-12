@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Column, DateTime, Engine, Integer, MetaData, String, Table, inspect, select
+from sqlalchemy import Column, Connection, DateTime, Engine, Integer, MetaData, String, Table, inspect, select, text
 
 from trace_core.core.clock import now_utc
 from trace_core.core.database.base import Base
@@ -20,7 +20,7 @@ schema_migrations = Table(
     Column("applied_at", DateTime(timezone=True), nullable=False, default=now_utc),
 )
 
-MigrationAction = Callable[[Engine], None]
+MigrationAction = Callable[[Engine | Connection], None]
 
 # Migration registry: (version, name, action)
 MIGRATIONS: list[tuple[int, str, MigrationAction]] = []
@@ -38,20 +38,22 @@ def register_migration(version: int, name: str) -> Callable[[MigrationAction], M
 
 
 @register_migration(1, "001_initial_case_schema")
-def _migration_001_initial_schema(engine: Engine) -> None:
+def _migration_001_initial_schema(bind: Engine | Connection) -> None:
     """Initial schema migration: creates core and case tables."""
-    Base.metadata.create_all(bind=engine)
+    import trace_core.cases.models  # noqa: F401
+
+    Base.metadata.create_all(bind=bind)
 
 
 @register_migration(2, "002_add_concurrency_and_closure_columns")
-def _migration_002_add_columns(engine: Engine) -> None:
+def _migration_002_add_columns(bind: Engine | Connection) -> None:
     """Add closure metadata, archived_at, and OCC version columns to existing tables."""
-    from sqlalchemy import text
-
-    inspector = inspect(engine)
+    inspector = inspect(bind)
     if "cases" in inspector.get_table_names():
         cols = {c["name"] for c in inspector.get_columns("cases")}
-        with engine.begin() as conn:
+        # Execute column additions on the active connection
+        if isinstance(bind, Connection):
+            conn = bind
             if "closed_by" not in cols:
                 conn.execute(text("ALTER TABLE cases ADD COLUMN closed_by VARCHAR(255)"))
             if "closure_reason" not in cols:
@@ -60,9 +62,28 @@ def _migration_002_add_columns(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE cases ADD COLUMN archived_at TIMESTAMP WITH TIME ZONE"))
             if "version" not in cols:
                 conn.execute(text("ALTER TABLE cases ADD COLUMN version INTEGER NOT NULL DEFAULT 1"))
+        else:
+            with bind.begin() as conn:
+                if "closed_by" not in cols:
+                    conn.execute(text("ALTER TABLE cases ADD COLUMN closed_by VARCHAR(255)"))
+                if "closure_reason" not in cols:
+                    conn.execute(text("ALTER TABLE cases ADD COLUMN closure_reason TEXT"))
+                if "archived_at" not in cols:
+                    conn.execute(text("ALTER TABLE cases ADD COLUMN archived_at TIMESTAMP WITH TIME ZONE"))
+                if "version" not in cols:
+                    conn.execute(text("ALTER TABLE cases ADD COLUMN version INTEGER NOT NULL DEFAULT 1"))
 
     # Ensure any new tables (e.g. case_sequences) are created
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=bind)
+
+
+@register_migration(3, "003_create_case_sequences_table")
+def _migration_003_case_sequences(bind: Engine | Connection) -> None:
+    """Create case_sequences table for atomic sequence allocation."""
+    import trace_core.cases.models  # noqa: F401
+
+    if "case_sequences" in Base.metadata.tables:
+        Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables["case_sequences"]])
 
 
 def ensure_migration_table(engine: Engine) -> None:
@@ -104,8 +125,8 @@ def apply_migrations(engine: Engine) -> list[str]:
 
     for version, name, action in MIGRATIONS:
         if version not in applied_versions:
-            action(engine)
             with engine.begin() as conn:
+                action(conn)
                 conn.execute(
                     schema_migrations.insert().values(
                         version=version,

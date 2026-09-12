@@ -2,8 +2,10 @@
 
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from sqlalchemy import text
 
 from trace_core.cases.domain import CaseStatus
 from trace_core.cases.dto import CaseCreateDto, CaseFilterDto, CaseUpdateDto
@@ -34,13 +36,21 @@ def pg_session_manager() -> DatabaseSessionManager:
     if not is_healthy:
         pytest.skip("Cannot reach configured PostgreSQL service")
 
+    # Assert dialect is genuinely PostgreSQL, failing loudly if an unexpected fallback occurred
+    assert mgr.engine.dialect.name == "postgresql", f"Expected postgresql dialect, got {mgr.engine.dialect.name}"
+
+    with mgr.engine.connect() as conn:
+        db_version = conn.execute(text("SELECT version();")).scalar()
+        assert db_version is not None and "postgresql" in str(db_version).lower()
+
     mgr.init_schema()
     return mgr
 
 
 def test_postgres_integration_lifecycle(pg_session_manager: DatabaseSessionManager) -> None:
     """Verify full case lifecycle, migrations, and concurrency on real PostgreSQL."""
-    # 1. Verify schema tables and migrations
+    # 1. Verify PostgreSQL dialect and schema tables
+    assert pg_session_manager.engine.dialect.name == "postgresql"
     tables = get_table_names(pg_session_manager.engine)
     assert "cases" in tables
     assert "case_sequences" in tables
@@ -80,3 +90,29 @@ def test_postgres_integration_lifecycle(pg_session_manager: DatabaseSessionManag
     # 6. Soft delete then purge
     assert service.delete_case(created.number, purge=False) is True
     assert service.delete_case(created.number, purge=True) is True
+
+
+def test_postgres_concurrent_sequence_allocation(pg_session_manager: DatabaseSessionManager) -> None:
+    """Verify concurrent case creation from cold sequence on PostgreSQL generates unique numbers."""
+    service = CaseService(pg_session_manager)
+    created_cases = []
+
+    def create_case(idx: int) -> str:
+        dto = CaseCreateDto(
+            title=f"Concurrent Test {idx}",
+            lead_examiner=f"Investigator {idx}",
+        )
+        c = service.create_case(dto)
+        return c.number
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(create_case, i) for i in range(5)]
+        created_cases = [f.result() for f in futures]
+
+    assert len(created_cases) == 5
+    assert len(set(created_cases)) == 5  # Every case number is unique
+
+    # Clean up created test cases
+    for num in created_cases:
+        service.delete_case(num, purge=False)
+        service.delete_case(num, purge=True)

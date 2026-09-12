@@ -131,8 +131,9 @@ def test_cannot_update_closed_case(service: CaseService) -> None:
     service.create_case(dto)
     service.close_case("2026-SEALED-0001")
 
+    update_dto = CaseUpdateDto(title="Illegal Edit")
     with pytest.raises(InvalidCaseStateError, match="Reopen the case"):
-        service.update_case("2026-SEALED-0001", CaseUpdateDto(title="Illegal Edit"))
+        service.update_case("2026-SEALED-0001", update_dto)
 
 
 def test_cannot_update_deleted_case(service: CaseService) -> None:
@@ -144,8 +145,9 @@ def test_cannot_update_deleted_case(service: CaseService) -> None:
     service.create_case(dto)
     service.delete_case("2026-ARCHIVED-0001", purge=False)
 
+    update_dto = CaseUpdateDto(title="Illegal Edit")
     with pytest.raises(InvalidCaseStateError, match="Cannot update soft-deleted"):
-        service.update_case("2026-ARCHIVED-0001", CaseUpdateDto(title="Illegal Edit"))
+        service.update_case("2026-ARCHIVED-0001", update_dto)
 
 
 def test_sequence_generation_after_purge(service: CaseService) -> None:

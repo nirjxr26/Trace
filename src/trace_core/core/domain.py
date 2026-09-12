@@ -62,4 +62,4 @@ class BaseEntity(BaseModel):
             return None
         if v.tzinfo is None or v.tzinfo.utcoffset(v) is None:
             raise InvariantViolationError("All timestamps must be timezone-aware UTC.")
-        return v
+        return v.astimezone(UTC)

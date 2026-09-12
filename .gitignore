@@ -9,6 +9,7 @@ process/
 # --- Environment, Secrets & Credentials ---
 .env
 .env.*
+!.env.example
 *.env
 *.pem
 *.key
@@ -70,7 +71,6 @@ env/
 ENV/
 .local/
 .uv/
-uv.lock
 wheels/
 *.wheel
 

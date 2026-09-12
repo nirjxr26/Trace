@@ -22,7 +22,7 @@ from trace_core.core.settings import settings
 
 app = typer.Typer(
     name="trace",
-    help="Trace — Forensic Data Acquisition & Case Engine.",
+    help="Trace — Forensic Data Imaging & Retrieval Tool.",
     no_args_is_help=False,
     invoke_without_command=True,
 )

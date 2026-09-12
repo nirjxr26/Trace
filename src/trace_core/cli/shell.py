@@ -195,7 +195,7 @@ class InteractiveShell:
 
         logo_text = Text(logo, style=THEME_TOKENS["accent"])
         sub_text = Text(
-            f"  Forensic Data Acquisition & Case Engine · v{settings.version}\n",
+            f"  Forensic Data Imaging & Retrieval Tool · v{settings.version}\n",
             style=THEME_TOKENS["muted"],
         )
 

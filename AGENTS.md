@@ -120,3 +120,12 @@ entry (Section 12) was written; the solution isn't bigger than the problem it so
 
 The final implementation should be: **secure, reliable, consistent, simple, maintainable — and
 indistinguishable in style from the code it sits beside.**
+
+## 14. Forensic Domain & Architectural Invariants
+
+- **Strict Mutation Flow**: UI / CLI -> Application Service -> Domain Invariants -> Repository -> Database. Never bypass the application service to mutate ORM objects directly from CLI or UI.
+- **Immutable Identity**: Never mutate `Case.id` or `Case.number` once assigned.
+- **Permanently Sealed Closure**: Once closed, a case can never transition back to `OPEN` or `UNDER_REVIEW`.
+- **Canonical UTC Time**: Database, domain entities, audit ledgers, and API payloads must strictly persist in timezone-aware UTC. Local time representations (e.g. IST) are strictly presentation-layer concerns.
+- **Transactional Audit Boundary**: Mandatory forensic audit entries must execute within the database transaction (`UnitOfWork.before_commit()`). Post-commit hooks are reserved exclusively for non-critical side effects.
+- **Purge Guardrails**: Active cases cannot be permanently purged; they must be archived (`is_deleted=True`) first.

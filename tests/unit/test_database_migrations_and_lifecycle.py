@@ -1,5 +1,6 @@
 """Tests for database lifecycle, connection health checks, migrations, and CLI db commands."""
 
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -93,19 +94,29 @@ def test_unit_of_work_transaction_and_hooks() -> None:
 
     assert hook_called is True
 
-    # Failed transaction: hook must not execute
-    failed_hook_called = False
+    # Mandatory before_commit failure must abort transaction and prevent post_commit execution
+    pre_hook_called = False
+    post_hook_called = False
 
-    def failed_hook() -> None:
-        nonlocal failed_hook_called
-        failed_hook_called = True
+    def failing_pre_hook(s: Any) -> None:
+        nonlocal pre_hook_called
+        pre_hook_called = True
+        raise RuntimeError("Mandatory audit write failed")
 
-    with pytest.raises(RuntimeError):
+    def suppressed_post_hook() -> None:
+        nonlocal post_hook_called
+        post_hook_called = True
+
+    def failing_audit_transaction() -> None:
         with service.transaction() as uow:
-            uow.on_commit(failed_hook)
-            raise RuntimeError("Database error simulated")
+            uow.before_commit(failing_pre_hook)
+            uow.on_commit(suppressed_post_hook)
 
-    assert failed_hook_called is False
+    with pytest.raises(RuntimeError, match="Mandatory audit write failed"):
+        failing_audit_transaction()
+
+    assert pre_hook_called is True
+    assert post_hook_called is False
 
 
 def test_cli_db_commands(monkeypatch: pytest.MonkeyPatch, session_manager: DatabaseSessionManager) -> None:

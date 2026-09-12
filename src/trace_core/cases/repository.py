@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from trace_core.cases.domain import Case, CaseStatus
@@ -216,8 +217,19 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
                 suffix = num[len(prefix) :]
                 if suffix.isdigit():
                     max_seq = max(max_seq, int(suffix))
-            seq_record = CaseSequenceModel(year=current_year, last_sequence=max_seq)
-            self.session.add(seq_record)
+
+            try:
+                with self.session.begin_nested():
+                    new_seq = CaseSequenceModel(year=current_year, last_sequence=max_seq)
+                    self.session.add(new_seq)
+                    self.session.flush()
+                seq_record = new_seq
+            except IntegrityError:
+                # Concurrent transaction inserted the initial sequence row for this year; re-query with row lock
+                stmt = select(CaseSequenceModel).where(CaseSequenceModel.year == current_year).with_for_update()
+                seq_record = self.session.scalar(stmt)
+                if seq_record is None:
+                    raise
 
         seq_record.last_sequence += 1
         self.session.flush()

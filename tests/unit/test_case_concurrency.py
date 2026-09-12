@@ -84,6 +84,22 @@ def test_concurrency_safe_sequence_allocation(session_manager: DatabaseSessionMa
         assert seq_record.last_sequence == 3
 
 
+def test_first_sequence_row_race_handling(session_manager: DatabaseSessionManager) -> None:
+    """Verify that when a concurrent transaction inserts the initial sequence row, it recovers gracefully."""
+    # Pre-insert a sequence row for year 2045 simulating concurrent thread completing first
+    with session_manager.session() as s1:
+        s1.add(CaseSequenceModel(year=2045, last_sequence=5))
+        s1.commit()
+
+    # Now call get_next_sequence_number for 2045
+    with session_manager.session() as s2:
+        repo = SqlAlchemyCaseRepository(s2)
+        next_num = repo.get_next_sequence_number(year=2045)
+        s2.commit()
+
+    assert next_num == "2045-CR-0006"
+
+
 def test_narrow_integrity_error_translation(session_manager: DatabaseSessionManager) -> None:
     """Test that IntegrityError is only translated to DuplicateCaseNumberError on number collision."""
     service = CaseService(session_manager)

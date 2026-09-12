@@ -50,14 +50,31 @@ def test_case_validation_rejects_naive_datetime() -> None:
         )
 
 
+def test_case_converts_non_utc_timezone_to_canonical_utc() -> None:
+    from datetime import timedelta, timezone
+    ist = timezone(timedelta(hours=5, minutes=30))
+    ist_time = datetime(2026, 9, 12, 15, 30, 0, tzinfo=ist)
+
+    case = Case(
+        number="2026-CR-0004",
+        title="Test",
+        lead_examiner="Investigator X",
+        opened_at=ist_time,
+    )
+    assert case.opened_at.tzinfo == UTC
+    assert case.opened_at.hour == 10  # 15:30 IST is 10:00 UTC
+    assert case.opened_at.minute == 0
+
+
 def test_case_validation_rejects_open_with_closed_at() -> None:
+    now = datetime.now(UTC)
     with pytest.raises(ValueError, match="An OPEN case cannot have a closed_at timestamp"):
         Case(
             number="2026-CR-0005",
             title="Invalid Open",
             lead_examiner="Investigator X",
             status=CaseStatus.OPEN,
-            closed_at=datetime.now(UTC),
+            closed_at=now,
         )
 
 
@@ -83,8 +100,9 @@ def test_case_identity_immutability() -> None:
         case.number = "2026-CR-9999"
 
     # Attempting to alter UUID id must raise InvariantViolationError
+    new_uuid = uuid.uuid4()
     with pytest.raises(InvariantViolationError, match="Case id is strictly immutable"):
-        case.id = uuid.uuid4()
+        case.id = new_uuid
 
 
 def test_case_validation_rejects_open_with_closure_details() -> None:
