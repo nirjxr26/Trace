@@ -8,9 +8,10 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from trace_core.cases.domain import Case, CaseStatus
-from trace_core.cases.models import CaseModel
+from trace_core.cases.models import CaseModel, CaseSequenceModel
 from trace_core.core.database.repository import SqlAlchemyBaseRepository
-from trace_core.core.domain import ensure_utc
+from trace_core.core.domain import ensure_utc, now_utc
+from trace_core.core.errors import ConcurrencyConflictError
 
 
 class CaseRepository(Protocol):
@@ -25,6 +26,8 @@ class CaseRepository(Protocol):
         status: CaseStatus | None = None,
         search: str | None = None,
         include_deleted: bool = False,
+        limit: int | None = None,
+        offset: int | None = None,
     ) -> list[Case]: ...
     def update(self, entity: Case) -> Case: ...
     def delete(self, entity_id: uuid.UUID, purge: bool = False) -> bool: ...
@@ -50,6 +53,10 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
             status=CaseStatus(model.status),
             opened_at=ensure_utc(model.opened_at) or datetime.now(UTC),
             closed_at=ensure_utc(model.closed_at),
+            closed_by=model.closed_by,
+            closure_reason=model.closure_reason,
+            archived_at=ensure_utc(model.archived_at),
+            version=model.version,
             updated_at=ensure_utc(model.updated_at) or datetime.now(UTC),
             description=model.description,
             notes=model.notes,
@@ -66,6 +73,10 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
             status=case.status.value,
             opened_at=case.opened_at,
             closed_at=case.closed_at,
+            closed_by=case.closed_by,
+            closure_reason=case.closure_reason,
+            archived_at=case.archived_at,
+            version=case.version,
             updated_at=case.updated_at,
             description=case.description,
             notes=case.notes,
@@ -81,6 +92,10 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         model.notes = entity.notes
         model.tags = entity.tags
         model.closed_at = entity.closed_at
+        model.closed_by = entity.closed_by
+        model.closure_reason = entity.closure_reason
+        model.archived_at = entity.archived_at
+        model.version = entity.version
         model.is_deleted = entity.is_deleted
 
     def get_by_number(self, number: str) -> Case | None:
@@ -106,8 +121,10 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         status: CaseStatus | None = None,
         search: str | None = None,
         include_deleted: bool = False,
+        limit: int | None = None,
+        offset: int | None = None,
     ) -> list[Case]:
-        """List cases with search and status filters."""
+        """List cases with search, status filters, deterministic sorting, and pagination."""
         stmt = select(CaseModel)
 
         if not include_deleted:
@@ -116,30 +133,38 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         if status is not None:
             stmt = stmt.where(CaseModel.status == status.value)
 
-        if search:
-            pattern = f"%{search.strip()}%"
+        normalized_search = search.strip() if search and search.strip() else None
+        if normalized_search:
+            pattern = f"%{normalized_search}%"
             stmt = stmt.where(
                 or_(
                     CaseModel.number.ilike(pattern),
                     CaseModel.title.ilike(pattern),
                     CaseModel.lead_examiner.ilike(pattern),
                     CaseModel.description.ilike(pattern),
+                    CaseModel.notes.ilike(pattern),
                 )
             )
 
-        stmt = stmt.order_by(CaseModel.opened_at.desc())
+        stmt = stmt.order_by(CaseModel.opened_at.desc(), CaseModel.id.asc())
+
+        if offset is not None:
+            stmt = stmt.offset(offset)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+
         models = self.session.scalars(stmt).all()
         return [self._to_domain(m) for m in models]
 
     def soft_delete(self, case_id: uuid.UUID) -> bool:
-        """Mark a case as archived/deleted."""
+        """Mark a case as archived/deleted without corrupting investigation status."""
         stmt = select(CaseModel).where(CaseModel.id == case_id)
         model = self.session.scalar(stmt)
         if not model:
             return False
 
         model.is_deleted = True
-        model.status = CaseStatus.ARCHIVED.value
+        model.archived_at = datetime.now(UTC)
         model.updated_at = datetime.now(UTC)
         self.session.flush()
         return True
@@ -154,18 +179,46 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
             return self.purge(entity_id)
         return self.soft_delete(entity_id)
 
+    def update(self, entity: Case) -> Case:
+        """Update case entity with optimistic concurrency checking."""
+        stmt = select(CaseModel).where(CaseModel.id == entity.id)
+        model = self.session.scalar(stmt)
+        if not model:
+            raise ValueError(f"Case with id {entity.id} does not exist.")
+
+        if model.version != entity.version:
+            raise ConcurrencyConflictError(
+                resource_type="Case",
+                identifier=entity.number,
+                expected_version=entity.version,
+                actual_version=model.version,
+            )
+
+        self._update_model(model, entity)
+        model.version += 1
+        model.updated_at = now_utc()
+        self.session.flush()
+        return self._to_domain(model)
+
     def get_next_sequence_number(self, year: int | None = None) -> str:
-        """Generate next sequential case number for the year, e.g. '2026-CR-0001'."""
-        current_year = year or datetime.now(UTC).year
+        """Atomically allocate the next sequential case number for the year (e.g. '2026-CR-0001')."""
+        current_year = year or now_utc().year
         prefix = f"{current_year}-CR-"
 
-        stmt = select(CaseModel.number).where(CaseModel.number.startswith(prefix)).order_by(CaseModel.number.desc())
-        existing_numbers = self.session.scalars(stmt).all()
+        stmt = select(CaseSequenceModel).where(CaseSequenceModel.year == current_year).with_for_update()
+        seq_record = self.session.scalar(stmt)
 
-        max_seq = 0
-        for num in existing_numbers:
-            suffix = num[len(prefix) :]
-            if suffix.isdigit():
-                max_seq = max(max_seq, int(suffix))
+        if seq_record is None:
+            stmt_cases = select(CaseModel.number).where(CaseModel.number.startswith(prefix))
+            existing_numbers = self.session.scalars(stmt_cases).all()
+            max_seq = 0
+            for num in existing_numbers:
+                suffix = num[len(prefix) :]
+                if suffix.isdigit():
+                    max_seq = max(max_seq, int(suffix))
+            seq_record = CaseSequenceModel(year=current_year, last_sequence=max_seq)
+            self.session.add(seq_record)
 
-        return f"{prefix}{max_seq + 1:04d}"
+        seq_record.last_sequence += 1
+        self.session.flush()
+        return f"{prefix}{seq_record.last_sequence:04d}"

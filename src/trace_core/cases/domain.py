@@ -1,11 +1,12 @@
 """Case domain entity, status enum, and lifecycle state machine."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from trace_core.core.domain import BaseEntity, InvariantViolationError
+from trace_core.core.domain import BaseEntity, InvariantViolationError, now_utc
 
 
 class CaseStatus(StrEnum):
@@ -14,7 +15,6 @@ class CaseStatus(StrEnum):
     OPEN = "OPEN"
     UNDER_REVIEW = "UNDER_REVIEW"
     CLOSED = "CLOSED"
-    ARCHIVED = "ARCHIVED"
 
 
 class TransitionError(Exception):
@@ -31,10 +31,9 @@ class TransitionError(Exception):
 
 
 _VALID_TRANSITIONS: dict[CaseStatus, set[CaseStatus]] = {
-    CaseStatus.OPEN: {CaseStatus.UNDER_REVIEW, CaseStatus.CLOSED, CaseStatus.ARCHIVED},
-    CaseStatus.UNDER_REVIEW: {CaseStatus.OPEN, CaseStatus.CLOSED, CaseStatus.ARCHIVED},
-    CaseStatus.CLOSED: {CaseStatus.OPEN, CaseStatus.ARCHIVED},
-    CaseStatus.ARCHIVED: {CaseStatus.OPEN},
+    CaseStatus.OPEN: {CaseStatus.UNDER_REVIEW, CaseStatus.CLOSED},
+    CaseStatus.UNDER_REVIEW: {CaseStatus.OPEN, CaseStatus.CLOSED},
+    CaseStatus.CLOSED: set(),  # Permanently sealed: CLOSED cases cannot transition to any other status
 }
 
 
@@ -43,7 +42,12 @@ def can_transition(current: CaseStatus, target: CaseStatus) -> bool:
     return target in _VALID_TRANSITIONS.get(current, set())
 
 
-def transition_case(case: "Case", target: CaseStatus, reason: str = "") -> "Case":
+def transition_case(
+    case: "Case",
+    target: CaseStatus,
+    reason: str = "",
+    closed_by: str = "",
+) -> "Case":
     """
     Transition a Case entity to a new status.
     Mutates case status and timestamps, returns the mutated case.
@@ -55,13 +59,17 @@ def transition_case(case: "Case", target: CaseStatus, reason: str = "") -> "Case
     if not can_transition(case.status, target):
         raise TransitionError(case.status, target, reason)
 
-    now = datetime.now(UTC)
+    now = now_utc()
 
     if target == CaseStatus.CLOSED:
+        object.__setattr__(case, "closed_at", now)
+        object.__setattr__(case, "closure_reason", reason.strip() if reason else None)
+        object.__setattr__(case, "closed_by", closed_by.strip() if closed_by else None)
         case.status = CaseStatus.CLOSED
-        case.closed_at = now
     elif target == CaseStatus.OPEN:
-        case.closed_at = None
+        object.__setattr__(case, "closed_at", None)
+        object.__setattr__(case, "closure_reason", None)
+        object.__setattr__(case, "closed_by", None)
         case.status = CaseStatus.OPEN
     else:
         case.status = target
@@ -78,6 +86,8 @@ class Case(BaseEntity):
     lead_examiner: str = Field(..., min_length=1, max_length=255, description="Primary investigator identifier/name")
     status: CaseStatus = Field(default=CaseStatus.OPEN)
     closed_at: datetime | None = None
+    closed_by: str | None = None
+    closure_reason: str | None = None
     description: str | None = None
     notes: str | None = None
     tags: list[str] = Field(default_factory=list)
@@ -87,11 +97,26 @@ class Case(BaseEntity):
         validate_assignment=True,
     )
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Enforce strict immutability for Case identity fields once assigned."""
+        if name in ("id", "number") and hasattr(self, name):
+            current = getattr(self, name, None)
+            if current is not None and current != value:
+                raise InvariantViolationError(f"Case {name} is strictly immutable once assigned.")
+        super().__setattr__(name, value)
+
     @model_validator(mode="after")
     def validate_lifecycle_consistency(self) -> "Case":
-        """Enforce domain invariant: OPEN cases must not have closed_at set."""
-        if self.status == CaseStatus.OPEN and self.closed_at is not None:
-            raise InvariantViolationError("An OPEN case cannot have a closed_at timestamp.")
+        """Enforce domain invariants: OPEN cases must not have closure details; CLOSED cases must have closed_at."""
+        if self.status == CaseStatus.OPEN:
+            if self.closed_at is not None:
+                raise InvariantViolationError("An OPEN case cannot have a closed_at timestamp.")
+            if self.closure_reason is not None:
+                raise InvariantViolationError("An OPEN case cannot have a closure_reason.")
+            if self.closed_by is not None:
+                raise InvariantViolationError("An OPEN case cannot have a closed_by examiner.")
+        elif self.status == CaseStatus.CLOSED and self.closed_at is None:
+            raise InvariantViolationError("A CLOSED case must have a closed_at timestamp.")
         return self
 
     @field_validator("closed_at")
@@ -131,10 +156,10 @@ class Case(BaseEntity):
     @field_validator("tags")
     @classmethod
     def validate_tags(cls, v: list[str]) -> list[str]:
-        """Strip whitespace, discard empty tags, and deduplicate."""
+        """Strip whitespace, lowercase, discard empty tags, and deduplicate."""
         cleaned: list[str] = []
         for tag in v:
-            stripped = tag.strip()
+            stripped = tag.strip().lower()
             if stripped and stripped not in cleaned:
                 cleaned.append(stripped)
         return cleaned

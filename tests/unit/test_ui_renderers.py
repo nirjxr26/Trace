@@ -42,7 +42,7 @@ def test_format_status_badge() -> None:
     badge_closed = format_status_badge(CaseStatus.CLOSED)
     assert "CLOSED" in badge_closed.plain
 
-    badge_archived = format_status_badge(CaseStatus.ARCHIVED, is_deleted=True)
+    badge_archived = format_status_badge(CaseStatus.OPEN, is_deleted=True)
     assert "ARCHIVED" in badge_archived.plain
 
     badge_custom = format_status_badge("UNKNOWN_STATUS")
@@ -105,7 +105,7 @@ def test_render_case_detail_open_and_closed(sample_case: CaseResponseDto) -> Non
         title="Deleted Case",
         description=None,
         lead_examiner="Investigator Archived",
-        status=CaseStatus.ARCHIVED,
+        status=CaseStatus.OPEN,
         tags=[],
         opened_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
@@ -163,7 +163,7 @@ def test_render_status_badge_panel() -> None:
 
     badge_open = render_status_badge_panel(CaseStatus.OPEN)
     assert badge_open is not None
-    badge_archived = render_status_badge_panel(CaseStatus.ARCHIVED, is_deleted=True)
+    badge_archived = render_status_badge_panel(CaseStatus.OPEN, is_deleted=True)
     assert badge_archived is not None
     badge_review = render_status_badge_panel(CaseStatus.UNDER_REVIEW)
     assert badge_review is not None

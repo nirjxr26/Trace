@@ -14,8 +14,8 @@ class CaseCreateDto(BaseCreateDto):
     title: str = Field(..., min_length=1, max_length=255)
     lead_examiner: str = Field(..., min_length=1, max_length=255)
     number: str | None = Field(default=None, max_length=100)
-    description: str | None = None
-    notes: str | None = None
+    description: str | None = Field(default=None, max_length=10000)
+    notes: str | None = Field(default=None, max_length=50000)
     tags: list[str] = Field(default_factory=list)
 
 
@@ -24,8 +24,8 @@ class CaseUpdateDto(BaseUpdateDto):
 
     title: str | None = Field(default=None, min_length=1, max_length=255)
     lead_examiner: str | None = Field(default=None, min_length=1, max_length=255)
-    description: str | None = None
-    notes: str | None = None
+    description: str | None = Field(default=None, max_length=10000)
+    notes: str | None = Field(default=None, max_length=50000)
     tags: list[str] | None = None
 
 
@@ -37,6 +37,10 @@ class CaseResponseDto(BaseResponseDto):
     lead_examiner: str
     status: CaseStatus
     closed_at: datetime | None = None
+    closed_by: str | None = None
+    closure_reason: str | None = None
+    archived_at: datetime | None = None
+    version: int = 1
     description: str | None = None
     notes: str | None = None
     tags: list[str] = Field(default_factory=list)
@@ -52,6 +56,10 @@ class CaseResponseDto(BaseResponseDto):
             status=case.status,
             opened_at=case.opened_at,
             closed_at=case.closed_at,
+            closed_by=case.closed_by,
+            closure_reason=case.closure_reason,
+            archived_at=case.archived_at,
+            version=case.version,
             updated_at=case.updated_at,
             description=case.description,
             notes=case.notes,

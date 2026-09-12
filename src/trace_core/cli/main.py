@@ -17,6 +17,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 from trace_core.cases.commands import case_app
 from trace_core.cli.shell import run_interactive_shell
+from trace_core.core.cli.db_commands import db_app
 from trace_core.core.settings import settings
 
 app = typer.Typer(
@@ -28,6 +29,7 @@ app = typer.Typer(
 
 # Register feature subcommands
 app.add_typer(case_app, name="case")
+app.add_typer(db_app, name="db")
 
 
 def version_callback(value: bool) -> None:

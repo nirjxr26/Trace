@@ -81,3 +81,54 @@ jobs:
           name: coverage-report-python-${{ matrix.python-version }}
           path: coverage.xml
           retention-days: 14
+
+  postgres-integration:
+    name: PostgreSQL 16 Integration (${{ matrix.python-version }})
+    needs: [lint-and-types]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: trace_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TRACE_TEST_POSTGRES_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/trace_test"
+      TRACE_STORAGE_ROOT: "./.test_storage"
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          pip install --only-binary :all: -r requirements.txt
+          pip install --no-deps -e .
+
+      - name: Verify Database CLI Commands
+        run: |
+          trace db init
+          trace db status
+          trace db migrate
+
+      - name: Run PostgreSQL Integration Tests
+        run: pytest tests/integration/ -v

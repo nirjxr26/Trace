@@ -28,6 +28,25 @@ class ConflictError(ApplicationError):
         self.value = value
 
 
+class ConcurrencyConflictError(ConflictError):
+    """Raised when an optimistic concurrency version conflict occurs."""
+
+    def __init__(
+        self,
+        resource_type: str,
+        identifier: str,
+        expected_version: int,
+        actual_version: int,
+    ) -> None:
+        super().__init__(
+            resource_type=resource_type,
+            field="version",
+            value=f"expected {expected_version}, found {actual_version}",
+        )
+        self.expected_version = expected_version
+        self.actual_version = actual_version
+
+
 class StateTransitionError(ApplicationError):
     """Raised when an invalid state machine transition is attempted."""
 

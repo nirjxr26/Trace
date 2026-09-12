@@ -2,29 +2,30 @@
 
 from typing import Any
 
-from rich.panel import Panel
 from rich.text import Text
 
 from trace_core.cases.dto import CaseResponseDto
 from trace_core.core.ui.renderers import (
+    format_india_datetime,
+    format_india_table_time,
+    format_status_badge,
     get_rule_char,
     get_status_style_and_label,
     render_dossier,
     render_minimalist_table,
-    render_status_badge_panel,
 )
 from trace_core.core.ui.theme import THEME_TOKENS
 
 
-def _create_case_status_badge(case: CaseResponseDto) -> Panel:
-    """Create a standardized rounded status pill panel for case dossier."""
-    return render_status_badge_panel(case.status, case.is_deleted)
+def _create_case_status_badge(case: CaseResponseDto) -> Text:
+    """Create a standardized status badge text for case dossier."""
+    return format_status_badge(case.status, case.is_deleted)
 
 
 def _format_closed_timestamp(case: CaseResponseDto, rule_char: str) -> str:
-    """Format closed timestamp or active status indicator."""
+    """Format closed timestamp or active status indicator in IST."""
     if case.closed_at:
-        return f"{case.closed_at.strftime('%Y-%m-%d %H:%M:%S')} UTC"
+        return format_india_datetime(case.closed_at)
     if rule_char == "-":
         return "-  (case is active)"
     return "—  (case is active)"
@@ -49,7 +50,7 @@ def render_case_table(cases: list[CaseResponseDto]) -> None:
                 c.title or "Untitled",
                 c.lead_examiner or "-",
                 Text(label, style=style),
-                c.opened_at.strftime("%m-%d %H:%M"),
+                format_india_table_time(c.opened_at),
             ]
         )
 
@@ -72,10 +73,17 @@ def render_case_detail(case: CaseResponseDto) -> None:
         ("Lead Examiner", case.lead_examiner or "None"),
         ("Tags", Text(tags_str, style=THEME_TOKENS["tag"] if case.tags else THEME_TOKENS["muted"])),
         ("", ""),
-        ("Opened", f"{case.opened_at.strftime('%Y-%m-%d %H:%M:%S')} UTC"),
-        ("Updated", f"{case.updated_at.strftime('%Y-%m-%d %H:%M:%S')} UTC"),
+        ("Opened", format_india_datetime(case.opened_at)),
+        ("Updated", format_india_datetime(case.updated_at)),
         ("Closed", Text(closed_str, style=THEME_TOKENS["value"] if case.closed_at else THEME_TOKENS["muted"])),
     ]
+
+    if case.closed_by:
+        fields.append(("Closed By", case.closed_by))
+    if case.closure_reason:
+        fields.append(("Closure Reason", case.closure_reason))
+    if case.archived_at:
+        fields.append(("Archived At", format_india_datetime(case.archived_at)))
 
     sections: list[tuple[str, str | None]] = [
         ("Description", case.description),

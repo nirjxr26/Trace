@@ -1,8 +1,6 @@
 """Modular Interactive Forensic Console Shell (REPL) for Trace."""
 
-import os
 import shlex
-import sys
 from typing import Any
 
 from prompt_toolkit import PromptSession
@@ -14,8 +12,8 @@ from rich.text import Text
 from trace_core.cases.domain import Case
 from trace_core.cases.service import CaseService
 from trace_core.cases.shell_handler import CaseShellCommandHandler
+from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.registry import ShellCommandHandler, ShellCommandRegistry, ShellContext
-from trace_core.core.database.session import db_manager
 from trace_core.core.settings import settings
 from trace_core.core.ui.renderers import (
     console,
@@ -179,7 +177,6 @@ class InteractiveShell:
 
     def _ensure_service(self) -> CaseService:
         if self.service is None:
-            db_manager.init_schema()
             self.service = CaseService()
             self.context.service = self.service
         return self.service
@@ -263,15 +260,15 @@ class InteractiveShell:
                 console.print("\n[dim italic]Exiting Trace console.[/dim italic]\n")
                 break
             except Exception as e:
-                render_error_card("Execution Error", str(e))
+                with capture_cli_errors("Execution Error", exit_on_error=False):
+                    raise e
 
     def _handle_control_command(self, cmd: str) -> bool:
         if cmd in ("help", "?"):
             self.show_help()
             return True
         if cmd in ("clear", "cls"):
-            clear_cmd = "cls" if sys.platform == "win32" else "clear"
-            os.system(clear_cmd)
+            console.clear()
             self.print_banner()
             return True
         if cmd == "status":

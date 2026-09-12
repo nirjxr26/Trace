@@ -82,9 +82,19 @@ def test_close_case(service: CaseService) -> None:
     )
     service.create_case(dto)
 
-    closed = service.close_case("2026-CLOSE-0001", reason="Completed")
+    closed = service.close_case(
+        "2026-CLOSE-0001",
+        reason="Completed successfully",
+        closed_by="Special Agent Scully",
+    )
     assert closed.status == CaseStatus.CLOSED
     assert closed.closed_at is not None
+    assert closed.closure_reason == "Completed successfully"
+    assert closed.closed_by == "Special Agent Scully"
+
+    # Attempting to re-close already sealed case must raise InvalidCaseStateError
+    with pytest.raises(InvalidCaseStateError, match="already permanently closed"):
+        service.close_case("2026-CLOSE-0001", reason="Duplicate close")
 
 
 def test_soft_delete_and_purge(service: CaseService) -> None:
@@ -143,7 +153,8 @@ def test_sequence_generation_after_purge(service: CaseService) -> None:
     c1 = service.create_case(CaseCreateDto(title="Case 1", lead_examiner="Inv 1"))
     c2 = service.create_case(CaseCreateDto(title="Case 2", lead_examiner="Inv 2"))
 
-    # Purge c1
+    # Soft delete and then purge c1
+    service.delete_case(c1.number, purge=False)
     service.delete_case(c1.number, purge=True)
 
     # Creating c3 must generate a number higher than c2, never colliding with c2

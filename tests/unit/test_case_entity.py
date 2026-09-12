@@ -1,10 +1,10 @@
-"""Unit tests for Case domain entity."""
-
+import uuid
 from datetime import UTC, datetime
 
 import pytest
 
 from trace_core.cases.domain import Case, CaseStatus
+from trace_core.core.domain import InvariantViolationError
 
 pytestmark = pytest.mark.unit
 
@@ -61,11 +61,47 @@ def test_case_validation_rejects_open_with_closed_at() -> None:
         )
 
 
-def test_case_tag_cleaning() -> None:
+def test_case_tag_cleaning_and_lowercasing() -> None:
     case = Case(
         number="2026-CR-0006",
         title="Tag Test",
         lead_examiner="Investigator X",
-        tags=["usb", "  usb ", "", "  laptop  "],
+        tags=["USB", "  usb ", "", "  LAPTOP  ", "laptop"],
     )
     assert case.tags == ["usb", "laptop"]
+
+
+def test_case_identity_immutability() -> None:
+    case = Case(
+        number="2026-CR-0007",
+        title="Immutability Test",
+        lead_examiner="Investigator X",
+    )
+
+    # Attempting to alter number must raise InvariantViolationError
+    with pytest.raises(InvariantViolationError, match="Case number is strictly immutable"):
+        case.number = "2026-CR-9999"
+
+    # Attempting to alter UUID id must raise InvariantViolationError
+    with pytest.raises(InvariantViolationError, match="Case id is strictly immutable"):
+        case.id = uuid.uuid4()
+
+
+def test_case_validation_rejects_open_with_closure_details() -> None:
+    with pytest.raises(ValueError, match="An OPEN case cannot have a closure_reason"):
+        Case(
+            number="2026-CR-0008",
+            title="Invalid Open",
+            lead_examiner="Investigator X",
+            status=CaseStatus.OPEN,
+            closure_reason="Premature reason",
+        )
+
+    with pytest.raises(ValueError, match="An OPEN case cannot have a closed_by examiner"):
+        Case(
+            number="2026-CR-0009",
+            title="Invalid Open",
+            lead_examiner="Investigator X",
+            status=CaseStatus.OPEN,
+            closed_by="Examiner Y",
+        )

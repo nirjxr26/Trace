@@ -6,10 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
-def now_utc() -> datetime:
-    """Return current timestamp in timezone-aware UTC."""
-    return datetime.now(UTC)
+from trace_core.core.clock import now_utc
 
 
 def ensure_utc(dt: datetime | None) -> datetime | None:
@@ -48,6 +45,8 @@ class BaseEntity(BaseModel):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     opened_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
+    archived_at: datetime | None = Field(default=None)
+    version: int = Field(default=1, ge=1)
     is_deleted: bool = Field(default=False)
 
     model_config = ConfigDict(
@@ -55,7 +54,7 @@ class BaseEntity(BaseModel):
         validate_assignment=True,
     )
 
-    @field_validator("opened_at", "updated_at")
+    @field_validator("opened_at", "updated_at", "archived_at")
     @classmethod
     def validate_utc(cls, v: datetime | None) -> datetime | None:
         """Enforce timezone-aware UTC timestamps."""

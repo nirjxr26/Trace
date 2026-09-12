@@ -7,7 +7,6 @@ from typing import Any
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
-from trace_core.core.database.base import Base
 from trace_core.core.settings import settings
 
 
@@ -65,33 +64,22 @@ class DatabaseSessionManager:
             )
         return self._session_factory
 
-    def _ensure_postgres_database(self) -> None:
-        """If target PostgreSQL database does not exist, connect to postgres maintenance db and create it."""
+    def check_connection(self) -> tuple[bool, str]:
+        """Verify database connectivity. Returns (is_healthy, status_message)."""
         from sqlalchemy import text
-        from sqlalchemy.engine import make_url
 
         try:
-            url_obj = make_url(self._url)
-            target_db = url_obj.database
-            if not target_db or target_db == "postgres":
-                return
-
-            maint_url = url_obj.set(database="postgres")
-            maint_engine = create_engine(maint_url, isolation_level="AUTOCOMMIT")
-            with maint_engine.connect() as conn:
-                check_stmt = text("SELECT 1 FROM pg_database WHERE datname = :dbname")
-                result = conn.execute(check_stmt, {"dbname": target_db}).scalar()
-                if not result:
-                    conn.execute(text(f'CREATE DATABASE "{target_db}"'))
-            maint_engine.dispose()
-        except Exception:
-            pass
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return True, "Database connection successful"
+        except Exception as exc:
+            return False, f"Connection failed: {exc}"
 
     def init_schema(self) -> None:
-        """Create database tables if they do not exist."""
-        if "postgres" in self._url.lower():
-            self._ensure_postgres_database()
-        Base.metadata.create_all(bind=self.engine)
+        """Create database tables and apply pending migrations."""
+        from trace_core.core.database.migrations import apply_migrations
+
+        apply_migrations(self.engine)
 
     @contextmanager
     def session(self) -> Generator[Session, None, None]:

@@ -69,12 +69,17 @@ def test_cli_case_crud_flow() -> None:
     assert res_close.exit_code == 0
     assert "CLOSED" in res_close.stdout
 
-    # 7. Delete case
+    # 7. Soft delete (archive) case
+    res_archive = runner.invoke(app, ["case", "delete", "2026-CLI-0001", "--yes"])
+    assert res_archive.exit_code == 0
+    assert "archive/soft-deleted" in res_archive.stdout
+
+    # 8. Permanent purge of archived case
     res_del = runner.invoke(app, ["case", "delete", "2026-CLI-0001", "--purge", "--yes"])
     assert res_del.exit_code == 0
     assert "PERMANENTLY PURGEd" in res_del.stdout
 
-    # 8. Querying non-existent case exits with NOT_FOUND
+    # 9. Querying non-existent case exits with NOT_FOUND
     res_missing = runner.invoke(app, ["case", "show", "NON-EXISTENT-CASE"])
     assert res_missing.exit_code != 0
     assert "Case Not Found" in res_missing.stdout

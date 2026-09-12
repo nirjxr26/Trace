@@ -60,7 +60,7 @@ FORMAT_CHOICES = [("table", "Formatted table view"), ("json", "Raw JSON export")
 
 
 def _parse_status(val: str | None) -> CaseStatus | None:
-    if val and val.upper() != "ALL":
+    if val and val.upper() not in ("ALL", "ARCHIVED"):
         try:
             return CaseStatus(val.upper())
         except ValueError:
@@ -69,10 +69,11 @@ def _parse_status(val: str | None) -> CaseStatus | None:
 
 
 def _parse_list_options(sub_args: list[str]) -> tuple[CaseFilterDto, str]:
-    status = _parse_status(extract_flag_value(sub_args, "--status", "-s"))
+    raw_status = extract_flag_value(sub_args, "--status", "-s")
+    status = _parse_status(raw_status)
     search = extract_flag_value(sub_args, "--search", "-q")
     output = (extract_flag_value(sub_args, "--output", "-o") or "table").lower()
-    include_deleted = has_flag(sub_args, "--all", "-a")
+    include_deleted = has_flag(sub_args, "--all", "-a") or (raw_status is not None and raw_status.upper() == "ARCHIVED")
     return CaseFilterDto(status=status, search=search, include_deleted=include_deleted), output
 
 
@@ -325,18 +326,19 @@ class CaseShellCommandHandler(ShellCommandHandler):
         ident = self._resolve_or_prompt_identifier(sub_args, ctx, "to close")
 
         console.print("")
-        if not prompt_confirm(f"Close case '{ident}'?"):
+        if not prompt_confirm(f"Seal & permanently close case '{ident}'?"):
             console.print("\n[dim]Action cancelled.[/dim]\n")
             return
 
         reason = prompt_optional("Reason             ", hint="optional")
+        closed_by = prompt_optional("Closed By          ", hint="examiner name, optional")
         with capture_cli_errors("Close Case", exit_on_error=False):
-            closed = service.close_case(ident, reason=reason)
+            closed = service.close_case(ident, reason=reason, closed_by=closed_by)
             if ctx.active_case and ctx.active_case.id == closed.id:
                 ctx.active_case = closed
             check_icon = get_success_icon()
             console.print(
-                f"\n  [{THEME_TOKENS['success']}]{check_icon} Case {closed.number} closed.[/{THEME_TOKENS['success']}]\n"
+                f"\n  [{THEME_TOKENS['success']}]{check_icon} Case {closed.number} permanently closed.[/{THEME_TOKENS['success']}]\n"
             )
             render_case_detail(closed)
 

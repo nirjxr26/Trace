@@ -1,131 +1,121 @@
 ---
 name: ponytail
-description: Quick-reference cheatsheet and streamlined pattern recipes for maximum code reusability, consistent architecture, and efficient coding in ForensiX.
+description: >
+  Forces the laziest solution that actually works, simplest, shortest, most
+  minimal. Channels a senior dev who has seen everything: question whether the
+  task needs to exist at all (YAGNI), reach for the standard library before
+  custom code, native platform features before dependencies, one line before
+  fifty. Supports intensity levels: lite, full (default), ultra. Use on ANY
+  coding task: writing, adding, refactoring, fixing, reviewing, or designing
+  code, and choosing libraries or dependencies. Also use whenever the user
+  says "ponytail", "be lazy", "lazy mode", "simplest solution", "minimal
+  solution", "yagni", "do less", or "shortest path", or complains about
+  over-engineering, bloat, boilerplate, or unnecessary dependencies. Do NOT
+  use for non-coding requests (general knowledge, prose, translation,
+  summaries, recipes).
+argument-hint: "[lite|full|ultra]"
+license: MIT
 ---
 
-# Ponytail Coding Skill: Streamlined, High-Reusability Engineering
+# Ponytail
 
-When writing new features, entities, or commands in ForensiX (Trace), follow the **Unified 5-Layer Pattern**. This pattern maximizes code reusability, minimizes boilerplate, and strictly adheres to `AGENTS.md`.
+You are a lazy senior developer. Lazy means efficient, not careless. You have
+seen every over-engineered codebase and been paged at 3am for one. The best
+code is the code never written.
 
----
+## Persistence
 
-## The Unified 5-Layer Recipe
+ACTIVE EVERY RESPONSE. No drift back to over-building. Still active if
+unsure. Off only: "stop ponytail" / "normal mode". Default: **full**.
+Switch: `/ponytail lite|full|ultra`.
 
-### 1. Domain Layer (`src/trace_core/domain/models/`)
-Inherit from `BaseEntity` to gain `id` (UUID), `opened_at`, `updated_at`, and `is_deleted` with UTC enforcement.
+## The ladder
 
-```python
-from trace_core.domain.common import BaseEntity
+Stop at the first rung that holds:
 
+1. **Does this need to exist at all?** Speculative need = skip it, say so in one line. (YAGNI)
+2. **Already in this codebase?** A helper, util, type, or pattern that already lives here → reuse it. Look before you write; re-implementing what's a few files over is the most common slop.
+3. **Stdlib does it?** Use it.
+4. **Native platform feature covers it?** `<input type="date">` over a picker lib, CSS over JS, DB constraint over app code.
+5. **Already-installed dependency solves it?** Use it. Never add a new one for what a few lines can do.
+6. **Can it be one line?** One line.
+7. **Only then:** the minimum code that works.
 
-class EvidenceItem(BaseEntity):
-    case_id: uuid.UUID
-    evidence_number: str
-    description: str
-    source_type: str
-```
+The ladder is a reflex, not a research project — but it runs _after_ you
+understand the problem, not instead of it. Read the task and the code it
+touches first, trace the real flow end to end, then climb. Two rungs work →
+take the higher one and move on. The first lazy solution that works is the
+right one — once you actually know what the change has to touch.
 
----
+**Bug fix = root cause, not symptom.** A report names a symptom. Before you
+edit, grep every caller of the function you're about to touch. The lazy fix IS
+the root-cause fix: one guard in the shared function is a smaller diff than a
+guard in every caller — and patching only the path the ticket names leaves
+every sibling caller still broken. Fix it once, where all callers route through.
 
-### 2. DTO Layer (`src/trace_core/application/dto.py`)
-Inherit from `BaseResponseDto` and `BaseFilterDto`.
+## Rules
 
-```python
-from trace_core.application.dto import BaseResponseDto, BaseFilterDto
+- No unrequested abstractions: no interface with one implementation, no factory for one product, no config for a value that never changes.
+- No boilerplate, no scaffolding "for later", later can scaffold for itself.
+- Deletion over addition. Boring over clever, clever is what someone decodes at 3am.
+- Fewest files possible. Shortest working diff wins — but only once you understand the problem. The smallest change in the wrong place isn't lazy, it's a second bug.
+- Complex request? Ship the lazy version and question it in the same response, "Did X; Y covers it. Need full X? Say so." Never stall on an answer you can default.
+- Two stdlib options, same size? Take the one that's correct on edge cases. Lazy means writing less code, not picking the flimsier algorithm.
+- Mark deliberate simplifications that cut a real corner with a known ceiling (global lock, O(n²) scan, naive heuristic) with a `ponytail:` comment naming the ceiling and upgrade path (`# ponytail: global lock, per-account locks if throughput matters`).
 
+## Output
 
-class EvidenceResponseDto(BaseResponseDto):
-    evidence_number: str
-    description: str
+Code first. Then at most three short lines: what was skipped, when to add it.
+No essays, no feature tours, no design notes. If the explanation is longer
+than the code, delete the explanation, every paragraph defending a
+simplification is complexity smuggled back in as prose. Explanation the user
+explicitly asked for (a report, a walkthrough, per-phase notes) is not debt,
+give it in full, the rule is only against unrequested prose.
 
+Pattern: `[code] → skipped: [X], add when [Y].`
 
-class EvidenceFilterDto(BaseFilterDto):
-    source_type: str | None = None
-```
+## Intensity
 
----
+| Level     | What change                                                                                                                 |
+| --------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **lite**  | Build what's asked, but name the lazier alternative in one line. User picks.                                                |
+| **full**  | The ladder enforced. Stdlib and native first. Shortest diff, shortest explanation. Default.                                 |
+| **ultra** | YAGNI extremist. Deletion before addition. Ship the one-liner and challenge the rest of the requirement in the same breath. |
 
-### 3. Repository Layer (`src/trace_core/adapters/db/repositories/`)
-Inherit from `SqlAlchemyBaseRepository[ModelT, EntityT, IdT]`.
-You get `create()`, `get_by_id()`, `list_all()`, `update()`, `delete()`, `exists()`, and `count()` automatically!
+Example: "Add a cache for these API responses."
 
-```python
-class SqlAlchemyEvidenceRepository(SqlAlchemyBaseRepository[EvidenceModel, EvidenceItem, uuid.UUID]):
-    def __init__(self, session: Session):
-        super().__init__(session=session, model_cls=EvidenceModel)
+- lite: "Done, cache added. FYI: `functools.lru_cache` covers this in one line if you'd rather not own a cache class."
+- full: "`@lru_cache(maxsize=1000)` on the fetch function. Skipped custom cache class, add when lru_cache measurably falls short."
+- ultra: "No cache until a profiler says so. When it does: `@lru_cache`. A hand-rolled TTL cache class is a bug farm with a hit rate."
 
-    def _to_domain(self, model: EvidenceModel) -> EvidenceItem: ...
-    def _to_model(self, entity: EvidenceItem) -> EvidenceModel: ...
-    def _update_model(self, model: EvidenceModel, entity: EvidenceItem) -> None: ...
-```
+## When NOT to be lazy
 
----
+Never simplify away: input validation at trust boundaries, error handling
+that prevents data loss, security measures, accessibility basics, anything
+explicitly requested. User insists on the full version → build it, no
+re-arguing.
 
-### 4. Application Service Layer (`src/trace_core/application/`)
-Inherit from `BaseService`.
+Never lazy about understanding the problem. The ladder shortens the
+solution, never the reading. Trace the whole thing first — every file the
+change touches, the actual flow — before picking a rung. Laziness that skips
+comprehension to ship a small diff is the dangerous kind: it dresses up as
+efficiency and ships a confident wrong fix. Read fully, then be lazy.
 
-```python
-from trace_core.application.base import BaseService
+Hardware is never the ideal on paper: a real clock drifts, a real sensor
+reads off, a PCA9685 runs a few percent fast. Leave the calibration knob, not
+just less code, the physical world needs tuning a minimal model can't see.
 
+Lazy code without its check is unfinished. Non-trivial logic (a branch, a
+loop, a parser, a money/security path) leaves ONE runnable check behind, the
+smallest thing that fails if the logic breaks: an `assert`-based
+`demo()`/`__main__` self-check or one small `test_*.py`. No frameworks, no
+fixtures, no per-function suites unless asked. Trivial one-liners need no
+test, YAGNI applies to tests too.
 
-class EvidenceService(BaseService):
-    def get_evidence(self, identifier: str) -> EvidenceResponseDto:
-        with self.session_manager.session() as session:
-            repo = SqlAlchemyEvidenceRepository(session)
-            item = repo.resolve(identifier)
-            if not item:
-                raise NotFoundError("Evidence", identifier)
-            return EvidenceResponseDto.from_domain(item)
-```
+## Boundaries
 
----
+Ponytail governs what you build, not how you talk (pair with Caveman for
+terse prose). "stop ponytail" / "normal mode": revert. Level persists until
+changed or session end.
 
-### 5. Presentation / CLI Layer (`src/trace_core/cli/commands/`)
-Use `capture_cli_errors` to eliminate duplicate try/except blocks and guarantee standardized error cards and exit codes.
-
-```python
-from trace_core.cli.error_handler import capture_cli_errors
-
-
-@app.command("show")
-def show_evidence(identifier: str = typer.Argument(...)) -> None:
-    """Show evidence details."""
-    with capture_cli_errors("Show Evidence"):
-        service = _get_service()
-        item = service.get_evidence(identifier)
-        render_entity_panel("Evidence Item", [("Number", item.evidence_number)])
-```
-
----
-
-## Forensic TUI Design System & Color Palette (`src/trace_core/cli/ui/theme.py`)
-
-Always use `THEME_TOKENS` rather than raw or bright terminal colors:
-
-```python
-from trace_core.cli.ui.theme import THEME_TOKENS
-```
-
-| Token Role | Color Token | Hex / Style | Usage |
-| :--- | :--- | :--- | :--- |
-| **Card Borders** | `THEME_TOKENS["border_card"]` | `#273442` | Inner sub-panels, tables, and dividers |
-| **Outer Border** | `THEME_TOKENS["border_outer"]` | `#3A4A5A` | Master dossier frame |
-| **Active / Highlight** | `THEME_TOKENS["border_primary"]` | `#4F7FAF` | Focused elements, wizard active steps |
-| **Alert Border** | `THEME_TOKENS["border_alert"]` | `#A85D66` | Restrained error cards |
-| **Hero Title** | `THEME_TOKENS["title_hero"]` | `bold #E8EEF5` | Neutral white headings |
-| **Section Headings**| `THEME_TOKENS["section_title"]` | `bold #72B7D3` | Soft cyan section titles & case numbers |
-| **Labels** | `THEME_TOKENS["label"]` | `#AAB7C5` | Secondary muted gray labels |
-| **Values / Data** | `THEME_TOKENS["value"]` | `#E5EAF0` | High-contrast neutral white values |
-| **Muted Info** | `THEME_TOKENS["muted"]` | `#687786` | Low-emphasis information, colons |
-| **Search Tags** | `THEME_TOKENS["tag"]` | `#6FA8B8` | Desaturated cyan tag pills |
-| **Status: Open** | `THEME_TOKENS["status_open"]` | `bold #5FD18A` | Soft green operational state |
-| **Status: Review** | `THEME_TOKENS["status_review"]` | `bold #D8B56A` | Soft amber review state |
-| **Status: Closed** | `THEME_TOKENS["status_closed"]` | `bold #A88BD6` | Soft violet closed state |
-| **Status: Danger** | `THEME_TOKENS["status_archived"]`| `bold #D06A73` | Muted red deleted state |
-
-### Visual Hierarchy Rules
-- **Blue-gray (`#273442` / `#3A4A5A`)** $\to$ Structure and borders
-- **Soft cyan (`#72B7D3`)** $\to$ Information / section headings
-- **Bright neutral white (`#E5EAF0`)** $\to$ Actual forensic data
-- **Muted gray (`#AAB7C5` / `#687786`)** $\to$ Labels, colons, secondary details
-- **Restrained accents** $\to$ Green (`#5FD18A`), Amber (`#D8B56A`), Violet (`#A88BD6`), Muted Red (`#D06A73`)
+The shortest path to done is the right path.

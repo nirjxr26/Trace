@@ -20,7 +20,6 @@ case_app = typer.Typer(name="case", help="Create, list, show, edit, and close fo
 
 
 def _get_service() -> CaseService:
-    db_manager.init_schema()
     return CaseService(db_manager)
 
 
@@ -82,20 +81,24 @@ def list_cases(
         service = _get_service()
 
         case_status: CaseStatus | None = None
+        include_deleted = all_cases
         if status and status.upper() != "ALL":
-            try:
-                case_status = CaseStatus(status.upper())
-            except ValueError:
-                render_error_card(
-                    "Invalid Status",
-                    f"Status '{status}' is not valid. Valid: OPEN, UNDER_REVIEW, CLOSED, ARCHIVED, ALL.",
-                )
-                raise typer.Exit(EXIT_ERROR)
+            if status.upper() == "ARCHIVED":
+                include_deleted = True
+            else:
+                try:
+                    case_status = CaseStatus(status.upper())
+                except ValueError:
+                    render_error_card(
+                        "Invalid Status",
+                        f"Status '{status}' is not valid. Valid: OPEN, UNDER_REVIEW, CLOSED, ARCHIVED, ALL.",
+                    )
+                    raise typer.Exit(EXIT_ERROR)
 
         filter_dto = CaseFilterDto(
             status=case_status,
             search=search,
-            include_deleted=all_cases,
+            include_deleted=include_deleted,
         )
 
         cases = service.list_cases(filter_dto)
@@ -156,19 +159,22 @@ def edit_case(
 def close_case(
     identifier: str = typer.Argument(..., help="Case number or UUID to close"),
     reason: str = typer.Option("", "--reason", "-r", help="Reason for closing the case"),
+    closed_by: str = typer.Option(
+        "", "--closed-by", "-c", help="Examiner closing the case (defaults to lead examiner)"
+    ),
     force: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
-    """Close a forensic case."""
+    """Close and permanently seal a forensic case."""
     with capture_cli_errors("Case Closure Failed"):
         if not force:
-            confirmed = Confirm.ask(f"Are you sure you want to close case '{identifier}'?")
+            confirmed = Confirm.ask(f"Are you sure you want to seal & close case '{identifier}'?")
             if not confirmed:
                 console.print("[dim]Operation cancelled.[/dim]")
                 raise typer.Exit(EXIT_SUCCESS)
 
         service = _get_service()
-        closed = service.close_case(identifier, reason=reason)
-        console.print(f"[bold green][OK] Case '{closed.number}' has been CLOSED.[/bold green]")
+        closed = service.close_case(identifier, reason=reason, closed_by=closed_by)
+        console.print(f"[bold green][OK] Case '{closed.number}' has been permanently CLOSED.[/bold green]")
         render_case_detail(closed)
 
 

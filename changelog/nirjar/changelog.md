@@ -102,3 +102,153 @@
   - Full test suite expanded to 37 unit tests (100% passing) with 75.96% coverage.
   - Strict static type checking verified (0 mypy errors across 40 source files).
   - Code formatting and linting verified with Ruff (0 errors, 44 files clean).
+
+---
+
+## 2026-09-12 — Subpart 1 Hardening: Phase 1 (Forensic Domain Invariants & State Machine)
+
+- **Permanently Sealed `CLOSED` State**:
+  - Removed `CLOSED -> OPEN` and `CLOSED -> ARCHIVED` transitions in `_VALID_TRANSITIONS` (`src/trace_core/cases/domain.py`). Once sealed, closed cases can never transition to any other status.
+  - Guarded `CaseService.close_case` against re-closing already closed cases.
+- **Decoupled Lifecycle Status from Archival/Retention**:
+  - Cleaned `CaseStatus` enum to reflect strictly investigation lifecycle states: `OPEN`, `UNDER_REVIEW`, `CLOSED`.
+  - Orthogonalized archival/soft-delete retention under `is_deleted: bool` and `archived_at: datetime | None` in `BaseEntity`, `SoftDeleteMixin`, and `CaseModel`. Soft-deleting a case no longer corrupts its lifecycle state to `"ARCHIVED"`.
+- **Closure Metadata & Audit Traceability**:
+  - Added `closure_reason` and `closed_by` fields to `Case` entity, `CaseModel`, `CaseResponseDto`, and database schemas.
+  - Capturing `closure_reason` and `closed_by` during transition and rendering them in the dossier presentation view (`render_case_detail`).
+- **Enforced Identity Immutability**:
+  - Enforced strict immutability on `id` (UUID) and `number` (`YYYY-CR-XXXX`) in `Case.__setattr__`, raising `InvariantViolationError` if mutation is attempted after assignment.
+- **Tag Normalization**:
+  - Updated `validate_tags` in `Case` to strip whitespace, lowercase, and deduplicate tags (`["USB", "usb"]` -> `["usb"]`).
+- **Quality & Verification**:
+  - Unit test suite expanded from 37 to 39 passing tests (100% pass rate).
+  - Total test coverage increased to 76.47% (exceeding 70% threshold).
+  - Verified 0 Ruff lint errors and 0 Mypy type issues across 40 source files.
+
+---
+
+## 2026-09-12 — Subpart 1 Hardening: Phase 2 (Concurrency, Sequence Safety & Error Narrowing)
+
+- **Optimistic Concurrency Control (OCC)**:
+  - Added `version: int` tracking to `BaseEntity`, `CaseModel`, and `CaseResponseDto`.
+  - Implemented version validation in `SqlAlchemyCaseRepository.update()`: updates verify `model.version == entity.version`, increment version on flush, and raise `ConcurrencyConflictError` on stale write collisions.
+  - Added `ConcurrencyConflictError` presentation handling in `capture_cli_errors` with targeted actionable remediation.
+- **Concurrency-Safe Sequence Allocation**:
+  - Implemented `CaseSequenceModel` (`case_sequences` table) tracking `last_sequence` per calendar year with `with_for_update()` row-level locking.
+  - Eliminated the `max + 1` race condition in `SqlAlchemyCaseRepository.get_next_sequence_number()`, guaranteeing monotonic sequential numbering even under parallel worker operations.
+- **Narrowed Exception Classification**:
+  - Refined `CaseService.create_case` to inspect SQLAlchemy `IntegrityError` details; only genuine case number collisions raise `DuplicateCaseNumberError`, while other database constraint violations raise general `ApplicationError`.
+- **Injectable Clock Abstraction**:
+  - Created minimal `Clock` protocol and `SystemUtcClock` in `src/trace_core/core/clock.py` (`get_clock()`, `set_clock()`, `reset_clock()`).
+  - Integrated `now_utc()` with `get_clock().now()` ensuring unified, deterministic time generation for tests and domain operations without external dependencies.
+- **Testing & Verification**:
+  - Created `tests/unit/test_case_concurrency.py` covering optimistic lock collisions, sequence allocations, integrity error translation, and custom clocks.
+  - Test suite expanded to 43 passing unit tests (100% pass rate).
+  - 0 Ruff lint/formatting errors, 0 Mypy type issues across 42 source files.
+
+---
+
+## 2026-09-12 — Subpart 1 Hardening: Phase 3 (Database Decoupling, Migrations & Startup Hygiene)
+
+- **Database Startup & Provisioning Decoupled (P0-6)**:
+  - Removed `_ensure_postgres_database()` from `DatabaseSessionManager` (`src/trace_core/core/database/session.py`), eliminating runtime `CREATE DATABASE` commands and silent exception swallowing.
+  - Database provisioning is formally isolated to setup/admin tooling and external infrastructure orchestration.
+- **Unswallowed Initialization Errors (P0-7)**:
+  - Replaced silent `except Exception: pass` in `Settings.model_post_init` (`src/trace_core/core/settings.py`) with explicit `OSError` catching and structured warning logging via `structlog`.
+- **Database Connection Health Checks**:
+  - Added `check_connection() -> tuple[bool, str]` to `DatabaseSessionManager` allowing non-destructive connectivity verification (`SELECT 1`) across CLI commands and startup checks.
+- **Schema Management Decoupled from CLI Execution (P1-11)**:
+  - Removed implicit `db_manager.init_schema()` calls from `_get_service()` in `src/trace_core/cases/commands.py` and `_ensure_service()` in `src/trace_core/cli/shell.py`.
+  - Runtime commands now execute assuming the database schema is managed, eliminating unexpected DDL execution during read/write queries.
+- **Lightweight Schema Migration System (P0-5, P1-12)**:
+  - Created `src/trace_core/core/database/migrations.py` with `schema_migrations` tracking table recording migration version, name, and application timestamp.
+  - Implemented initial migration `001_initial_case_schema` with idempotent migration execution via `apply_migrations(engine)`.
+  - Added `alembic.ini` configuration file in project root for production migration tooling compatibility.
+- **Dedicated Database CLI Commands**:
+  - Created `src/trace_core/core/cli/db_commands.py` exposing the `trace db` command group registered in `main.py`:
+    - `trace db status`: Displays connection status, masked credentials, existing tables, and migration history.
+    - `trace db init`: Initializes schema and applies baseline migrations.
+    - `trace db migrate`: Executes any pending database migrations safely.
+- **Audit & Transaction Boundary (P0-9)**:
+  - Implemented `UnitOfWork` and `BaseService.transaction()` context manager in `src/trace_core/core/service.py` supporting transactional unit-of-work boundaries and `on_commit` event/audit hooks for Subpart 2.
+- **Testing & Verification**:
+  - Added `tests/unit/test_database_migrations_and_lifecycle.py` testing connection checks, storage logging, migration idempotency, unit-of-work hooks, and CLI `db` commands.
+  - Test suite expanded to 49 passing unit tests (100% pass rate).
+  - Maintained 77.56% branch coverage (exceeding 70% threshold).
+  - Verified 0 Ruff lint errors and 0 Mypy type issues across 45 source files.
+
+---
+
+## 2026-09-12 — Subpart 1 Hardening: Phase 4 (Query Engine, Pagination, Purge Policy & UI/CLI Polish)
+
+- **Wired Pagination into Repository & Service (P1-4)**:
+  - Extended `CaseRepository` protocol and `SqlAlchemyCaseRepository.list_cases()` with `limit: int | None` and `offset: int | None`.
+  - Wired `CaseService.list_cases()` to consume `CaseFilterDto.limit` and `CaseFilterDto.offset`, bringing pagination into full active effect.
+- **Search Engine Expansion & Query Normalization (P1-5)**:
+  - Added `CaseModel.notes` to the multi-column search clause in `SqlAlchemyCaseRepository.list_cases()`, matching the formal architectural specification.
+  - Normalized search terms so that empty or whitespace-only queries (`"   "`) evaluate to `None` rather than generating redundant wildcard `"%%"` scans.
+- **Deterministic Secondary Query Ordering (P1-7)**:
+  - Added secondary tie-breaker sorting by `CaseModel.id.asc()` alongside `CaseModel.opened_at.desc()` ensuring fully deterministic pagination across all database backends.
+- **Forensic Purge Policy Guardrail (P0-10)**:
+  - Hardened `CaseService.delete_case` with a forensic guardrail: active investigations cannot be permanently purged; cases must be explicitly archived (`is_deleted=True`) first, preventing catastrophic accidental permanent record loss.
+- **Operational Error Sanitization (P1-8)**:
+  - Hardened `capture_cli_errors` in `src/trace_core/core/cli/error_handler.py`: non-`ApplicationError` operational exceptions are sanitized to user-safe messages unless `settings.debug` is enabled, eliminating leaks of internal database credentials, stack traces, or file paths.
+- **Terminal OS Decoupling**:
+  - Replaced OS-dependent `os.system("cls"/"clear")` in `src/trace_core/cli/shell.py` with standard `console.clear()`.
+  - Integrated `capture_cli_errors` boundary into shell REPL command execution loop for unified error cards and safe exception rendering.
+- **Testing & Verification**:
+  - Added `tests/unit/test_query_pagination_and_purge_policy.py` verifying pagination slicing, notes discovery, whitespace query normalization, purge policy guardrails, and error sanitization.
+  - Test suite expanded to 54 passing unit tests (100% pass rate).
+  - Test branch coverage maintained at 77.82% (exceeding 70% threshold).
+  - Clean Ruff linting (0 errors) and strict Mypy typing (0 issues across 46 source files).
+
+---
+
+## 2026-09-12 — Subpart 1 Hardening: Phase 5 (CI/CD Pipeline, PostgreSQL Integration & Documentation)
+
+- **PostgreSQL 16 CI Integration (P0-8)**:
+  - Updated `.github/workflows/ci.yml` adding a dedicated `postgres-integration` job running with a live `postgres:16-alpine` service container.
+  - Automated testing of database CLI management commands (`trace db init`, `trace db status`, `trace db migrate`) directly against real PostgreSQL.
+- **PostgreSQL Lifecycle Integration Test Suite**:
+  - Created `tests/integration/test_postgres.py` with `@pytest.mark.integration`.
+  - Tests full end-to-end case creation, sequential number allocation, optimistic concurrency versioning, notes discovery, pagination, sealed closure, and soft-delete/purge on PostgreSQL 16.
+  - Skips gracefully in local developer environments when PostgreSQL is not configured, while automatically executing in CI.
+- **Architectural Specification Alignment**:
+  - Verified all P0 and P1 items from `docs/architecture/changes_need_to_make.txt` across Subpart 1 are resolved and tested.
+  - Preserved codebase minimalism per `AGENTS.md` and ponytail rules: zero external bloated frameworks introduced; standard library and existing dependencies leveraged throughout.
+- **Quality & Verification**:
+  - Full test suite: 55 passing unit tests, 1 skipped integration test (100% passing rate).
+  - Branch test coverage maintained at 77.62% (above 70% requirement).
+  - Ruff formatting: 51 files already formatted cleanly (0 errors).
+  - Ruff linting: all checks passed (0 errors).
+  - Mypy static typing: strict pass (0 issues across 47 source files).
+
+---
+
+---
+
+## 2026-09-12 — Indian Standard Time (IST) Presentation Formatting
+
+- **Indian Datetime Presentation**:
+  - Implemented `format_india_datetime` and `format_india_table_time` in `src/trace_core/core/ui/renderers.py` using Python standard library `timezone(timedelta(hours=5, minutes=30))` (IST).
+  - Preserved strict UTC storage in the domain and database layer while presenting timestamps in Indian format:
+    - **Detail / Dossier view (`case show`)**: `DD-MM-YYYY hh:mm:ss AM/PM IST` (e.g., `12-09-2026 09:28:55 AM IST`).
+    - **Table / List view (`case list`)**: `DD-MM hh:mm AM/PM` (e.g., `12-09 10:09 AM`).
+    - **Database Migration status (`db status`)**: `DD-MM-YYYY hh:mm:ss AM/PM IST`.
+  - Added naive datetime protection to safely assume UTC before converting to IST.
+- **Verification**:
+  - Verified across `trace case list`, `trace case show <case-num>`, and `trace db status`.
+  - Maintained 100% test pass rate (55 passed, 1 skipped), 77.53% branch coverage (above 70% threshold).
+  - Passed Ruff linting (0 errors) and Mypy static typing (0 issues).
+
+---
+
+## 2026-09-12 — Repository Hygiene: Gitignore & Unused Artifact Removal
+
+- **Artifact Deletion**:
+  - Deleted unused `alembic.ini` (obsoleted by native pure-SQLAlchemy runner; eliminated plaintext credential risk).
+  - Deleted untracked `uv.lock` (not utilized by standard `pip` / `requirements.txt` build and CI pipeline).
+- **Gitignore Hardening**:
+  - Added `alembic.ini` to `.gitignore` under `# --- Local Databases & Transitory State ---`.
+  - Added `uv.lock` and `.uv/` to `.gitignore` under `# --- Virtual Environments & Package Managers ---`.
+

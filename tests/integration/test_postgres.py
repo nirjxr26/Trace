@@ -1,0 +1,82 @@
+"""Integration tests running against real PostgreSQL database when available."""
+
+import os
+import uuid
+
+import pytest
+
+from trace_core.cases.domain import CaseStatus
+from trace_core.cases.dto import CaseCreateDto, CaseFilterDto, CaseUpdateDto
+from trace_core.cases.service import CaseService
+from trace_core.core.database.migrations import get_applied_migrations, get_table_names
+from trace_core.core.database.session import DatabaseSessionManager
+
+pytestmark = pytest.mark.integration
+
+
+def get_postgres_url() -> str | None:
+    """Retrieve PostgreSQL test connection URL from environment if configured."""
+    url = os.environ.get("TRACE_TEST_POSTGRES_URL") or os.environ.get("TRACE_DATABASE_URL")
+    if url and "postgres" in url.lower():
+        return url
+    return None
+
+
+@pytest.fixture
+def pg_session_manager() -> DatabaseSessionManager:
+    """Provide a DatabaseSessionManager connected to PostgreSQL, or skip if unavailable."""
+    pg_url = get_postgres_url()
+    if not pg_url:
+        pytest.skip("PostgreSQL environment not configured (set TRACE_TEST_POSTGRES_URL)")
+
+    mgr = DatabaseSessionManager(pg_url)
+    is_healthy, _ = mgr.check_connection()
+    if not is_healthy:
+        pytest.skip("Cannot reach configured PostgreSQL service")
+
+    mgr.init_schema()
+    return mgr
+
+
+def test_postgres_integration_lifecycle(pg_session_manager: DatabaseSessionManager) -> None:
+    """Verify full case lifecycle, migrations, and concurrency on real PostgreSQL."""
+    # 1. Verify schema tables and migrations
+    tables = get_table_names(pg_session_manager.engine)
+    assert "cases" in tables
+    assert "case_sequences" in tables
+    assert "schema_migrations" in tables
+
+    applied = get_applied_migrations(pg_session_manager.engine)
+    assert any(m["name"] == "001_initial_case_schema" for m in applied)
+
+    # 2. Case CRUD and sequence generation
+    service = CaseService(pg_session_manager)
+    uid = uuid.uuid4().hex[:6]
+    dto = CaseCreateDto(
+        title=f"PostgreSQL Integration Case {uid}",
+        lead_examiner="Agent Mulder",
+        notes="PostgreSQL database integration verification",
+        tags=["postgres", "integration", "ci"],
+    )
+    created = service.create_case(dto)
+    assert created.id is not None
+    assert created.status == CaseStatus.OPEN
+    assert created.version == 1
+
+    # 3. Optimistic concurrency update
+    updated = service.update_case(created.number, CaseUpdateDto(title=f"Updated Case {uid}"))
+    assert updated.version == 2
+    assert updated.title == f"Updated Case {uid}"
+
+    # 4. Search and pagination
+    results = service.list_cases(CaseFilterDto(search=uid, limit=10))
+    assert len(results) >= 1
+    assert any(c.number == created.number for c in results)
+
+    # 5. Close case
+    closed = service.close_case(created.number, reason="PostgreSQL test complete", closed_by="CI Runner")
+    assert closed.status == CaseStatus.CLOSED
+
+    # 6. Soft delete then purge
+    assert service.delete_case(created.number, purge=False) is True
+    assert service.delete_case(created.number, purge=True) is True

@@ -1,7 +1,6 @@
-"""Shared, reusable UI renderers and console output components."""
-
 import json
 import sys
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 from rich import box
@@ -71,6 +70,30 @@ def get_warning_icon() -> str:
 
 
 console = Console()
+
+IST = timezone(timedelta(hours=5, minutes=30), name="IST")
+
+
+def format_india_datetime(dt: datetime | None, include_seconds: bool = True) -> str:
+    """Format UTC datetime into Indian Standard Time (IST) format (DD-MM-YYYY hh:mm:ss AM/PM IST)."""
+    if dt is None:
+        return "-"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    ist_dt = dt.astimezone(IST)
+    if include_seconds:
+        return ist_dt.strftime("%d-%m-%Y %I:%M:%S %p IST")
+    return ist_dt.strftime("%d-%m-%Y %I:%M %p IST")
+
+
+def format_india_table_time(dt: datetime | None) -> str:
+    """Format UTC datetime into concise Indian table format (DD-MM %I:%M %p)."""
+    if dt is None:
+        return "-"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    ist_dt = dt.astimezone(IST)
+    return ist_dt.strftime("%d-%m %I:%M %p")
 
 
 def get_status_style_and_label(status: Any, is_deleted: bool = False) -> tuple[str, str, str]:
@@ -195,21 +218,24 @@ def render_dossier(
     rule_char = get_rule_char()
     rule_line = "  " + (rule_char * 66)
 
-    header_grid = Table.grid(expand=True)
-    header_grid.add_column(justify="left")
-    header_grid.add_column(justify="right", no_wrap=True)
-
     left_text = Text()
     left_text.append(f"  {header_prefix} ", style=THEME_TOKENS["title"])
-    left_text.append(f"{identifier}\n", style=THEME_TOKENS["accent"])
-    left_text.append(f"  {title}\n\n", style=THEME_TOKENS["value"])
+    left_text.append(f"{identifier}  ", style=THEME_TOKENS["accent"])
+    if status_badge:
+        if isinstance(status_badge, Panel) and isinstance(status_badge.renderable, Text):
+            raw = status_badge.renderable.plain.strip()
+            style = status_badge.renderable.style or THEME_TOKENS["value"]
+            left_text.append(f"[{raw}]", style=style)
+        elif isinstance(status_badge, Text):
+            left_text.append_text(status_badge)
+        else:
+            left_text.append(str(status_badge))
+    left_text.append(f"\n  {title}\n\n", style=THEME_TOKENS["value"])
     if subtitle:
         left_text.append(f"  {subtitle}", style=THEME_TOKENS["muted"])
 
-    header_grid.add_row(left_text, status_badge or Text(""))
-
     console.print("")
-    console.print(header_grid)
+    console.print(left_text)
     console.print("")
     console.print(Text(rule_line, style=THEME_TOKENS["border"]))
 

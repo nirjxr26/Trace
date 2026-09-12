@@ -1,4 +1,4 @@
-"""Unit tests for Case lifecycle state machine."""
+from datetime import UTC, datetime
 
 import pytest
 
@@ -11,33 +11,45 @@ def test_valid_transitions() -> None:
     case = Case(number="2026-CR-0010", title="Test", lead_examiner="Inv")
 
     # OPEN -> UNDER_REVIEW
+    assert can_transition(CaseStatus.OPEN, CaseStatus.UNDER_REVIEW)
     transition_case(case, CaseStatus.UNDER_REVIEW)
     assert case.status == CaseStatus.UNDER_REVIEW
 
-    # UNDER_REVIEW -> CLOSED
-    transition_case(case, CaseStatus.CLOSED)
+    # UNDER_REVIEW -> OPEN
+    assert can_transition(CaseStatus.UNDER_REVIEW, CaseStatus.OPEN)
+    transition_case(case, CaseStatus.OPEN)
+    assert case.status == CaseStatus.OPEN
+
+    # OPEN -> CLOSED (Permanently sealed with closure metadata)
+    assert can_transition(CaseStatus.OPEN, CaseStatus.CLOSED)
+    transition_case(case, CaseStatus.CLOSED, reason="Investigation completed", closed_by="Chief Inv")
     assert case.status == CaseStatus.CLOSED
     assert case.closed_at is not None
-
-    # CLOSED -> OPEN (reopened)
-    transition_case(case, CaseStatus.OPEN)
-    assert case.status == CaseStatus.OPEN
-    assert case.closed_at is None
-
-    # OPEN -> CLOSED -> ARCHIVED -> OPEN
-    transition_case(case, CaseStatus.CLOSED)
-    assert case.closed_at is not None
-    transition_case(case, CaseStatus.ARCHIVED)
-    assert case.status == CaseStatus.ARCHIVED
-    transition_case(case, CaseStatus.OPEN)
-    assert case.status == CaseStatus.OPEN
-    assert case.closed_at is None
+    assert case.closure_reason == "Investigation completed"
+    assert case.closed_by == "Chief Inv"
 
 
 def test_invalid_transitions() -> None:
-    case = Case(number="2026-CR-0011", title="Test", lead_examiner="Inv", status=CaseStatus.CLOSED)
+    now = datetime.now(UTC)
+    case = Case(
+        number="2026-CR-0011",
+        title="Test",
+        lead_examiner="Inv",
+        status=CaseStatus.CLOSED,
+        closed_at=now,
+    )
 
-    # CLOSED -> UNDER_REVIEW is illegal
+    # CLOSED -> OPEN is strictly forbidden (permanently sealed)
+    assert not can_transition(CaseStatus.CLOSED, CaseStatus.OPEN)
+    with pytest.raises(TransitionError) as exc_info:
+        transition_case(case, CaseStatus.OPEN)
+    assert "Illegal transition from CLOSED to OPEN" in str(exc_info.value)
+
+    # CLOSED -> UNDER_REVIEW is strictly forbidden
     assert not can_transition(CaseStatus.CLOSED, CaseStatus.UNDER_REVIEW)
     with pytest.raises(TransitionError):
         transition_case(case, CaseStatus.UNDER_REVIEW)
+
+    # Cannot instantiate CLOSED case without closed_at
+    with pytest.raises(ValueError, match="A CLOSED case must have a closed_at timestamp"):
+        Case(number="2026-CR-0012", title="Test", lead_examiner="Inv", status=CaseStatus.CLOSED, closed_at=None)

@@ -83,9 +83,12 @@ class CaseService(BaseService):
                 created = repo.create(case_entity)
                 session.commit()
                 return CaseResponseDto.from_domain(created)
-            except IntegrityError:
+            except IntegrityError as e:
                 session.rollback()
-                raise DuplicateCaseNumberError(case_number)
+                err_msg = str(e).lower()
+                if "number" in err_msg or "uq_cases_number" in err_msg:
+                    raise DuplicateCaseNumberError(case_number) from e
+                raise ApplicationError(f"Database constraint violation: {e}") from e
 
     def get_case(self, identifier: str) -> CaseResponseDto:
         """Retrieve a case by UUID or Case Number."""
@@ -105,6 +108,8 @@ class CaseService(BaseService):
                 status=query_filter.status,
                 search=query_filter.search,
                 include_deleted=query_filter.include_deleted,
+                limit=query_filter.limit,
+                offset=query_filter.offset,
             )
             return [CaseResponseDto.from_domain(c) for c in cases]
 
@@ -140,8 +145,8 @@ class CaseService(BaseService):
             session.commit()
             return CaseResponseDto.from_domain(updated)
 
-    def close_case(self, identifier: str, reason: str = "") -> CaseResponseDto:
-        """Transition case from OPEN to CLOSED."""
+    def close_case(self, identifier: str, reason: str = "", closed_by: str = "") -> CaseResponseDto:
+        """Transition case to permanently sealed CLOSED state."""
         with self.session_manager.session() as session:
             repo = SqlAlchemyCaseRepository(session)
             case = repo.resolve(identifier)
@@ -151,8 +156,12 @@ class CaseService(BaseService):
             if case.is_deleted:
                 raise InvalidCaseStateError(f"Cannot close soft-deleted or archived case '{identifier}'.")
 
+            if case.status == CaseStatus.CLOSED:
+                raise InvalidCaseStateError(f"Case '{identifier}' is already permanently closed.")
+
+            examiner = closed_by.strip() or case.lead_examiner
             try:
-                transition_case(case, CaseStatus.CLOSED, reason=reason)
+                transition_case(case, CaseStatus.CLOSED, reason=reason, closed_by=examiner)
             except TransitionError as e:
                 raise InvalidCaseStateError(str(e)) from e
 
@@ -176,6 +185,10 @@ class CaseService(BaseService):
                 raise InvalidCaseStateError(f"Case '{identifier}' is already archived/deleted.")
 
             if purge:
+                if not case.is_deleted:
+                    raise InvalidCaseStateError(
+                        f"Forensic safety violation: Case '{identifier}' must be archived before it can be purged."
+                    )
                 success = repo.purge(case.id)
             else:
                 success = repo.soft_delete(case.id)

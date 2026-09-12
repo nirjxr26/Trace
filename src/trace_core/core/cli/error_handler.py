@@ -8,6 +8,7 @@ import typer
 from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_NOT_FOUND
 from trace_core.core.errors import (
     ApplicationError,
+    ConcurrencyConflictError,
     ConflictError,
     NotFoundError,
     StateTransitionError,
@@ -23,6 +24,13 @@ def _resolve_error_details(
         remediation = default_remediation or f"Run 'list' to inspect available {e.resource_type.lower()} records."
         return title, str(e), remediation, EXIT_NOT_FOUND
 
+    if isinstance(e, ConcurrencyConflictError):
+        title = "Concurrency Conflict"
+        remediation = (
+            default_remediation or "Another process modified this record. Reload the latest state before modifying."
+        )
+        return title, str(e), remediation, EXIT_ERROR
+
     if isinstance(e, ConflictError):
         title = operation_title or "Duplicate Record"
         remediation = default_remediation or "Ensure the record number or unique field is unique."
@@ -34,9 +42,17 @@ def _resolve_error_details(
     if isinstance(e, ApplicationError):
         return operation_title or "Application Error", str(e), default_remediation, EXIT_ERROR
 
+    from trace_core.core.settings import settings
+
+    err_msg = (
+        str(e)
+        if settings.debug
+        else "An unexpected operational error occurred. Run with TRACE_DEBUG=1 or inspect system logs for technical details."
+    )
+
     return (
         operation_title or "Unexpected Error",
-        str(e),
+        err_msg,
         default_remediation or "Verify database connectivity or system configuration.",
         EXIT_ERROR,
     )

@@ -3,8 +3,11 @@
 from pathlib import Path
 from typing import Any
 
+import structlog
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = structlog.get_logger()
 
 
 class Settings(BaseSettings):
@@ -43,8 +46,12 @@ class Settings(BaseSettings):
     def model_post_init(self, __context: Any) -> None:
         try:
             self.storage_root.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
+        except OSError as exc:
+            logger.warning(
+                "Could not initialize storage directory",
+                path=str(self.storage_root),
+                error=str(exc),
+            )
 
 
 settings = Settings()
