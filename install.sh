@@ -43,9 +43,9 @@ else
             ARCHIVE_URL="https://github.com/nirjxr26/Trace/archive/refs/heads/main.tar.gz"
             mkdir -p "$REPO_ROOT"
             if [ -n "$AUTH_HEADER" ]; then
-                curl -fsSL -H "$AUTH_HEADER" "$ARCHIVE_URL" | tar -xz --strip-components=1 -C "$REPO_ROOT"
+                curl --proto '=https' --proto-redir '=https' -fsSL -H "$AUTH_HEADER" "$ARCHIVE_URL" | tar -xz --strip-components=1 -C "$REPO_ROOT"
             else
-                curl -fsSL "$ARCHIVE_URL" | tar -xz --strip-components=1 -C "$REPO_ROOT"
+                curl --proto '=https' --proto-redir '=https' -fsSL "$ARCHIVE_URL" | tar -xz --strip-components=1 -C "$REPO_ROOT"
             fi
         fi
     fi
@@ -167,6 +167,7 @@ printf "  \033[1;32m[OK] Installed launcher script to '%s'.\033[0m\n" "$LAUNCHER
 PATH_INCLUDED=0
 case ":$PATH:" in
     *:"$USER_BIN":*) PATH_INCLUDED=1 ;;
+    *) PATH_INCLUDED=0 ;;
 esac
 
 printf "\n"

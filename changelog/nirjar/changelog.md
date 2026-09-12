@@ -333,6 +333,13 @@
   - Provisioned a cryptographically secure 256-bit token (`secrets.token_hex(32)`) for `TRACE_SECRET_KEY` in `.env`.
 - **Architectural Guidelines Hardening (`AGENTS.md`)**:
   - Added Section 14 to `AGENTS.md` explicitly codifying forensic domain invariants: strict application service mutation flows, immutable case identity, permanently sealed closures, canonical UTC storage, pre-commit audit boundaries, and purge guardrails.
+- **SonarCloud & CI Issue Remediation**:
+  - Enforced HTTPS redirect safety on `curl` invocations in `install.sh` (`--proto '=https' --proto-redir '=https'`).
+  - Added default wildcard `*)` handler to `case` statement in `install.sh`.
+  - Refactored `_migration_002_add_columns` in `src/trace_core/core/database/migrations.py` with static column definitions, reducing Cognitive Complexity from 28 to < 5 (SonarCloud S3776).
+  - Split composite `assert ... and ...` in `tests/integration/test_postgres.py` into separate discrete assertions (SonarCloud S5958).
+  - Cleanly formatted all files via `ruff format` to resolve CI formatting failures.
+
 
 
 

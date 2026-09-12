@@ -52,6 +52,7 @@ def test_case_validation_rejects_naive_datetime() -> None:
 
 def test_case_converts_non_utc_timezone_to_canonical_utc() -> None:
     from datetime import timedelta, timezone
+
     ist = timezone(timedelta(hours=5, minutes=30))
     ist_time = datetime(2026, 9, 12, 15, 30, 0, tzinfo=ist)
 

@@ -41,7 +41,8 @@ def pg_session_manager() -> DatabaseSessionManager:
 
     with mgr.engine.connect() as conn:
         db_version = conn.execute(text("SELECT version();")).scalar()
-        assert db_version is not None and "postgresql" in str(db_version).lower()
+        assert db_version is not None
+        assert "postgresql" in str(db_version).lower()
 
     mgr.init_schema()
     return mgr

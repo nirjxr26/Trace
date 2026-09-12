@@ -45,33 +45,31 @@ def _migration_001_initial_schema(bind: Engine | Connection) -> None:
     Base.metadata.create_all(bind=bind)
 
 
+_CASE_COLUMN_DEFINITIONS = (
+    ("closed_by", "ALTER TABLE cases ADD COLUMN closed_by VARCHAR(255)"),
+    ("closure_reason", "ALTER TABLE cases ADD COLUMN closure_reason TEXT"),
+    ("archived_at", "ALTER TABLE cases ADD COLUMN archived_at TIMESTAMP WITH TIME ZONE"),
+    ("version", "ALTER TABLE cases ADD COLUMN version INTEGER NOT NULL DEFAULT 1"),
+)
+
+
+def _apply_missing_columns(conn: Connection, existing_cols: set[str]) -> None:
+    for col_name, ddl in _CASE_COLUMN_DEFINITIONS:
+        if col_name not in existing_cols:
+            conn.execute(text(ddl))
+
+
 @register_migration(2, "002_add_concurrency_and_closure_columns")
 def _migration_002_add_columns(bind: Engine | Connection) -> None:
     """Add closure metadata, archived_at, and OCC version columns to existing tables."""
     inspector = inspect(bind)
     if "cases" in inspector.get_table_names():
         cols = {c["name"] for c in inspector.get_columns("cases")}
-        # Execute column additions on the active connection
         if isinstance(bind, Connection):
-            conn = bind
-            if "closed_by" not in cols:
-                conn.execute(text("ALTER TABLE cases ADD COLUMN closed_by VARCHAR(255)"))
-            if "closure_reason" not in cols:
-                conn.execute(text("ALTER TABLE cases ADD COLUMN closure_reason TEXT"))
-            if "archived_at" not in cols:
-                conn.execute(text("ALTER TABLE cases ADD COLUMN archived_at TIMESTAMP WITH TIME ZONE"))
-            if "version" not in cols:
-                conn.execute(text("ALTER TABLE cases ADD COLUMN version INTEGER NOT NULL DEFAULT 1"))
+            _apply_missing_columns(bind, cols)
         else:
             with bind.begin() as conn:
-                if "closed_by" not in cols:
-                    conn.execute(text("ALTER TABLE cases ADD COLUMN closed_by VARCHAR(255)"))
-                if "closure_reason" not in cols:
-                    conn.execute(text("ALTER TABLE cases ADD COLUMN closure_reason TEXT"))
-                if "archived_at" not in cols:
-                    conn.execute(text("ALTER TABLE cases ADD COLUMN archived_at TIMESTAMP WITH TIME ZONE"))
-                if "version" not in cols:
-                    conn.execute(text("ALTER TABLE cases ADD COLUMN version INTEGER NOT NULL DEFAULT 1"))
+                _apply_missing_columns(conn, cols)
 
     # Ensure any new tables (e.g. case_sequences) are created
     Base.metadata.create_all(bind=bind)
