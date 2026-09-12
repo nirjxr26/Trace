@@ -40,6 +40,7 @@ class CaseResponseDto(BaseResponseDto):
     closed_by: str | None = None
     closure_reason: str | None = None
     archived_at: datetime | None = None
+    archived_by: str | None = None
     version: int = 1
     description: str | None = None
     notes: str | None = None
@@ -59,6 +60,7 @@ class CaseResponseDto(BaseResponseDto):
             closed_by=case.closed_by,
             closure_reason=case.closure_reason,
             archived_at=case.archived_at,
+            archived_by=case.archived_by,
             version=case.version,
             updated_at=case.updated_at,
             description=case.description,
@@ -72,3 +74,10 @@ class CaseFilterDto(BaseFilterDto):
     """Query filters for listing cases."""
 
     status: CaseStatus | None = None
+
+
+def parse_tags(value: str | None) -> list[str] | None:
+    """Parse comma-separated tag string into stripped non-empty list. None stays None."""
+    if value is None:
+        return None
+    return [t.strip() for t in value.split(",") if t.strip()]

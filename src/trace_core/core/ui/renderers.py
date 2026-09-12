@@ -12,75 +12,91 @@ from rich.text import Text
 
 from trace_core.core.ui.theme import THEME_TOKENS
 
-if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+
+def configure_utf8_streams() -> None:
+    """Reconfigure stdout/stderr to UTF-8 where the runtime supports it."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8")
+            except Exception:
+                pass
+
+
+configure_utf8_streams()
+
+
+def _supports_char(char: str) -> bool:
+    """Check if the active stdout encoding can render a unicode character."""
     try:
-        sys.stdout.reconfigure(encoding="utf-8")
+        char.encode(getattr(sys.stdout, "encoding", None) or "utf-8")
+        return True
     except Exception:
-        pass
-if sys.stderr and hasattr(sys.stderr, "reconfigure"):
-    try:
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
+        return False
 
 
 def get_rule_char() -> str:
     """Return box drawing horizontal bar if supported, else fallback to ASCII dash."""
-    try:
-        "─".encode(getattr(sys.stdout, "encoding", None) or "utf-8")
-        return "─"
-    except Exception:
-        return "-"
+    return "─" if _supports_char("─") else "-"
 
 
 def get_error_icon() -> str:
     """Return UTF-8 cross mark if supported, else fallback to ASCII."""
-    try:
-        "✗".encode(getattr(sys.stdout, "encoding", None) or "utf-8")
-        return "✗"
-    except Exception:
-        return "[!]"
+    return "✗" if _supports_char("✗") else "[!]"
 
 
 def get_arrow_char() -> str:
     """Return UTF-8 right arrow if supported, else fallback to ASCII."""
-    try:
-        "→".encode(getattr(sys.stdout, "encoding", None) or "utf-8")
-        return "→"
-    except Exception:
-        return "->"
+    return "→" if _supports_char("→") else "->"
 
 
 def get_success_icon() -> str:
     """Return UTF-8 checkmark if supported, else fallback to ASCII."""
-    try:
-        "✓".encode(getattr(sys.stdout, "encoding", None) or "utf-8")
-        return "✓"
-    except Exception:
-        return "[OK]"
+    return "✓" if _supports_char("✓") else "[OK]"
 
 
 def get_warning_icon() -> str:
     """Return UTF-8 warning symbol if supported, else fallback to ASCII."""
-    try:
-        "⚠".encode(getattr(sys.stdout, "encoding", None) or "utf-8")
-        return "⚠"
-    except Exception:
-        return "[!]"
+    return "⚠" if _supports_char("⚠") else "[!]"
 
 
 console = Console()
 
 IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 
+_STATUS_STYLES: dict[str, tuple[str, str]] = {}
+
+
+def _status_styles() -> dict[str, tuple[str, str]]:
+    """Lazily built status -> (text_style, border_color) map reusing theme tokens."""
+    global _STATUS_STYLES
+    if not _STATUS_STYLES:
+        _STATUS_STYLES = {
+            "OPEN": (THEME_TOKENS["status_open"], "#5FD18A"),
+            "UNDER_REVIEW": (THEME_TOKENS["status_review"], "#D8B56A"),
+            "CLOSED": (THEME_TOKENS["status_closed"], "#A88BD6"),
+            "ARCHIVED": (THEME_TOKENS["status_archived"], "#D06A73"),
+            "ACTIVE": (THEME_TOKENS["record_active"], "#5FD18A"),
+            "VERIFIED": (THEME_TOKENS["status_open"], "#5FD18A"),
+            "FAILED": (THEME_TOKENS["status_archived"], "#D06A73"),
+            "QUARANTINED": (THEME_TOKENS["warning"], "#D8B56A"),
+        }
+    return _STATUS_STYLES
+
+
+def _to_ist(dt: datetime) -> datetime:
+    """Normalize any datetime to IST, assuming UTC when naive."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(IST)
+
 
 def format_india_datetime(dt: datetime | None, include_seconds: bool = True) -> str:
     """Format UTC datetime into Indian Standard Time (IST) format (DD-MM-YYYY hh:mm:ss AM/PM IST)."""
     if dt is None:
         return "-"
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    ist_dt = dt.astimezone(IST)
+    ist_dt = _to_ist(dt)
     if include_seconds:
         return ist_dt.strftime("%d-%m-%Y %I:%M:%S %p IST")
     return ist_dt.strftime("%d-%m-%Y %I:%M %p IST")
@@ -90,10 +106,7 @@ def format_india_table_time(dt: datetime | None) -> str:
     """Format UTC datetime into concise Indian table format (DD-MM %I:%M %p)."""
     if dt is None:
         return "-"
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    ist_dt = dt.astimezone(IST)
-    return ist_dt.strftime("%d-%m %I:%M %p")
+    return _to_ist(dt).strftime("%d-%m %I:%M %p")
 
 
 def get_status_style_and_label(status: Any, is_deleted: bool = False) -> tuple[str, str, str]:
@@ -104,17 +117,7 @@ def get_status_style_and_label(status: Any, is_deleted: bool = False) -> tuple[s
     status_str = status.value if hasattr(status, "value") else str(status)
     status_upper = status_str.upper()
 
-    styles = {
-        "OPEN": (THEME_TOKENS["status_open"], "#5FD18A"),
-        "UNDER_REVIEW": (THEME_TOKENS["status_review"], "#D8B56A"),
-        "CLOSED": (THEME_TOKENS["status_closed"], "#A88BD6"),
-        "ARCHIVED": (THEME_TOKENS["status_archived"], "#D06A73"),
-        "ACTIVE": (THEME_TOKENS["record_active"], "#5FD18A"),
-        "VERIFIED": (THEME_TOKENS["status_open"], "#5FD18A"),
-        "FAILED": (THEME_TOKENS["status_archived"], "#D06A73"),
-        "QUARANTINED": (THEME_TOKENS["warning"], "#D8B56A"),
-    }
-    style, border = styles.get(status_upper, (THEME_TOKENS["value"], THEME_TOKENS["border"]))
+    style, border = _status_styles().get(status_upper, (THEME_TOKENS["value"], THEME_TOKENS["border"]))
     label = "REVIEW" if status_upper == "UNDER_REVIEW" else status_upper.replace("_", " ")
     return label, style, border
 
@@ -143,6 +146,16 @@ def render_status_badge_panel(status: Any, is_deleted: bool = False) -> Panel:
     )
 
 
+def _print_empty_message(empty_message: str) -> None:
+    """Print standardized empty-collection notice shared by table renderers."""
+    console.print(f"\n[{THEME_TOKENS['muted']} italic]{empty_message}[/{THEME_TOKENS['muted']} italic]\n")
+
+
+def _format_table_cells(row: list[Any]) -> list[Any]:
+    """Coerce row cells to Text-or-string form shared by table renderers."""
+    return [cell if isinstance(cell, Text) else str(cell) for cell in row]
+
+
 def render_minimalist_table(
     title: str,
     columns: list[tuple[str, dict[str, Any]]],
@@ -151,7 +164,7 @@ def render_minimalist_table(
 ) -> None:
     """Render streamlined table with a clean single-rule header and record count."""
     if not rows:
-        console.print(f"\n[{THEME_TOKENS['muted']} italic]{empty_message}[/{THEME_TOKENS['muted']} italic]\n")
+        _print_empty_message(empty_message)
         return
 
     header_grid = Table.grid(expand=True)
@@ -177,8 +190,7 @@ def render_minimalist_table(
         table.add_column(col_name, **col_opts)
 
     for row in rows:
-        formatted_row = [cell if isinstance(cell, Text) else str(cell) for cell in row]
-        table.add_row(*formatted_row)
+        table.add_row(*_format_table_cells(row))
 
     console.print("")
     console.print(header_grid)
@@ -358,7 +370,7 @@ def render_table(
 ) -> None:
     """Generic reusable table renderer with rounded border, spacious padding, and clean styling."""
     if not rows:
-        console.print(f"\n[{THEME_TOKENS['muted']} italic]{empty_message}[/{THEME_TOKENS['muted']} italic]\n")
+        _print_empty_message(empty_message)
         return
 
     table = Table(
@@ -376,8 +388,7 @@ def render_table(
         table.add_column(col_name, **col_opts)
 
     for row in rows:
-        formatted_row = [cell if isinstance(cell, Text) else str(cell) for cell in row]
-        table.add_row(*formatted_row)
+        table.add_row(*_format_table_cells(row))
 
     console.print("")
     console.print(table)

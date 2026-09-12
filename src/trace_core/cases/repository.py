@@ -1,7 +1,6 @@
 """Case repository port interface and SQLAlchemy adapter implementation."""
 
 import uuid
-from datetime import UTC, datetime
 from typing import Protocol
 
 from sqlalchemy import or_, select
@@ -10,8 +9,9 @@ from sqlalchemy.orm import Session
 
 from trace_core.cases.domain import Case, CaseStatus
 from trace_core.cases.models import CaseModel, CaseSequenceModel
+from trace_core.core.clock import now_utc
 from trace_core.core.database.repository import SqlAlchemyBaseRepository
-from trace_core.core.domain import ensure_utc, now_utc
+from trace_core.core.domain import ensure_utc
 from trace_core.core.errors import ConcurrencyConflictError
 
 
@@ -32,7 +32,8 @@ class CaseRepository(Protocol):
     ) -> list[Case]: ...
     def update(self, entity: Case) -> Case: ...
     def delete(self, entity_id: uuid.UUID, purge: bool = False) -> bool: ...
-    def soft_delete(self, case_id: uuid.UUID) -> bool: ...
+    def soft_delete(self, case_id: uuid.UUID, archived_by: str | None = None) -> bool: ...
+    def restore(self, case_id: uuid.UUID) -> bool: ...
     def purge(self, case_id: uuid.UUID) -> bool: ...
     def get_next_sequence_number(self, year: int | None = None) -> str: ...
     def exists(self, entity_id: uuid.UUID) -> bool: ...
@@ -52,13 +53,14 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
             title=model.title,
             lead_examiner=model.lead_examiner,
             status=CaseStatus(model.status),
-            opened_at=ensure_utc(model.opened_at) or datetime.now(UTC),
+            opened_at=ensure_utc(model.opened_at) or now_utc(),
             closed_at=ensure_utc(model.closed_at),
             closed_by=model.closed_by,
             closure_reason=model.closure_reason,
             archived_at=ensure_utc(model.archived_at),
+            archived_by=model.archived_by,
             version=model.version,
-            updated_at=ensure_utc(model.updated_at) or datetime.now(UTC),
+            updated_at=ensure_utc(model.updated_at) or now_utc(),
             description=model.description,
             notes=model.notes,
             tags=list(model.tags or []),
@@ -77,6 +79,7 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
             closed_by=case.closed_by,
             closure_reason=case.closure_reason,
             archived_at=case.archived_at,
+            archived_by=case.archived_by,
             version=case.version,
             updated_at=case.updated_at,
             description=case.description,
@@ -96,6 +99,7 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         model.closed_by = entity.closed_by
         model.closure_reason = entity.closure_reason
         model.archived_at = entity.archived_at
+        model.archived_by = entity.archived_by
         model.version = entity.version
         model.is_deleted = entity.is_deleted
 
@@ -157,7 +161,7 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         models = self.session.scalars(stmt).all()
         return [self._to_domain(m) for m in models]
 
-    def soft_delete(self, case_id: uuid.UUID) -> bool:
+    def soft_delete(self, case_id: uuid.UUID, archived_by: str | None = None) -> bool:
         """Mark a case as archived/deleted without corrupting investigation status."""
         stmt = select(CaseModel).where(CaseModel.id == case_id)
         model = self.session.scalar(stmt)
@@ -165,8 +169,23 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
             return False
 
         model.is_deleted = True
-        model.archived_at = datetime.now(UTC)
-        model.updated_at = datetime.now(UTC)
+        model.archived_at = now_utc()
+        model.archived_by = archived_by
+        model.updated_at = now_utc()
+        self.session.flush()
+        return True
+
+    def restore(self, case_id: uuid.UUID) -> bool:
+        """Restore an archived case back to active retention."""
+        stmt = select(CaseModel).where(CaseModel.id == case_id)
+        model = self.session.scalar(stmt)
+        if not model:
+            return False
+
+        model.is_deleted = False
+        model.archived_at = None
+        model.archived_by = None
+        model.updated_at = now_utc()
         self.session.flush()
         return True
 

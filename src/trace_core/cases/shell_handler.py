@@ -2,16 +2,18 @@ from typing import Any
 
 from rich.prompt import Prompt
 
-from trace_core.cases.domain import CaseStatus
+from trace_core.cases.domain import CaseStatus, is_archived_filter, parse_status_value
 from trace_core.cases.dto import (
     CaseCreateDto,
     CaseFilterDto,
     CaseUpdateDto,
+    parse_tags,
 )
-from trace_core.cases.renderers import render_case_detail, render_case_table
+from trace_core.cases.renderers import render_case, render_case_detail, render_cases
 from trace_core.cases.service import CaseService
 from trace_core.core.cli.args import extract_flag_value, has_flag
 from trace_core.core.cli.error_handler import capture_cli_errors
+from trace_core.core.cli.output import parse_output_format
 from trace_core.core.cli.registry import ShellCommandHandler, ShellContext
 from trace_core.core.ui.renderers import (
     console,
@@ -21,7 +23,6 @@ from trace_core.core.ui.renderers import (
     prompt_optional,
     prompt_required,
     render_error_card,
-    render_json,
     render_wizard_header,
 )
 from trace_core.core.ui.theme import THEME_TOKENS
@@ -33,6 +34,7 @@ CASE_ACTIONS = [
     ("edit", "Update case metadata"),
     ("close", "Seal & close case"),
     ("delete", "Archive or purge case"),
+    ("restore", "Restore archived case"),
     ("select", "Set active case context"),
     ("deselect", "Clear active case context"),
 ]
@@ -58,22 +60,31 @@ STATUS_CHOICES = [
 
 FORMAT_CHOICES = [("table", "Formatted table view"), ("json", "Raw JSON export")]
 
+_ACTION_CANCELLED = "\n[dim]Action cancelled.[/dim]\n"
+
 
 def _parse_status(val: str | None) -> CaseStatus | None:
-    if val and val.upper() not in ("ALL", "ARCHIVED"):
-        try:
-            return CaseStatus(val.upper())
-        except ValueError:
-            return None
-    return None
+    return parse_status_value(val)
+
+
+def _sync_active_case(ctx: ShellContext, case: Any) -> None:
+    """Refresh shell active-case snapshot when the underlying case changed."""
+    if ctx.active_case and ctx.active_case.id == case.id:
+        ctx.active_case = case
+
+
+def _clear_active_if_matches(ctx: ShellContext, case_id: Any) -> None:
+    """Clear shell active-case context when its case was archived/purged."""
+    if ctx.active_case and ctx.active_case.id == case_id:
+        ctx.active_case = None
 
 
 def _parse_list_options(sub_args: list[str]) -> tuple[CaseFilterDto, str]:
     raw_status = extract_flag_value(sub_args, "--status", "-s")
     status = _parse_status(raw_status)
     search = extract_flag_value(sub_args, "--search", "-q")
-    output = (extract_flag_value(sub_args, "--output", "-o") or "table").lower()
-    include_deleted = has_flag(sub_args, "--all", "-a") or (raw_status is not None and raw_status.upper() == "ARCHIVED")
+    output = parse_output_format(sub_args)
+    include_deleted = has_flag(sub_args, "--all", "-a") or is_archived_filter(raw_status)
     return CaseFilterDto(status=status, search=search, include_deleted=include_deleted), output
 
 
@@ -93,6 +104,7 @@ class CaseShellCommandHandler(ShellCommandHandler):
             "edit case",
             "close case",
             "delete case",
+            "restore case",
             "use case",
             "unuse case",
             "select case",
@@ -109,6 +121,7 @@ class CaseShellCommandHandler(ShellCommandHandler):
             ("case edit [<ID|NUM>]", "edit case", "Update case metadata (title, examiner, notes, tags)"),
             ("case close [<ID|NUM>]", "close case", "Close a case"),
             ("case delete [<ID|NUM>] [--purge]", "delete case", "Archive or permanently purge a case"),
+            ("case restore [<ID|NUM>]", "restore case", "Restore an archived case"),
         ]
 
     def get_completions(self, text: str, ctx: ShellContext) -> list[Any]:
@@ -130,7 +143,7 @@ class CaseShellCommandHandler(ShellCommandHandler):
     def _complete_action_args(self, act: str, parts: list[str], text: str, ctx: ShellContext) -> list[Any]:
         if act == "list":
             return self._complete_list_args(parts, text)
-        if act in ("show", "select", "use", "edit", "close", "delete"):
+        if act in ("show", "select", "use", "edit", "close", "delete", "restore"):
             return self._complete_case_targets(act, parts, text, ctx)
         return []
 
@@ -155,7 +168,7 @@ class CaseShellCommandHandler(ShellCommandHandler):
             return [("cases", "List all forensic cases")]
         if first_word == "create" and (len(parts) == 1 or text.endswith(" ")):
             return [("case", "Guided case creation wizard")]
-        if first_word in ("show", "select", "use", "edit", "close", "delete"):
+        if first_word in ("show", "select", "use", "edit", "close", "delete", "restore"):
             curr = parts[-1] if not text.endswith(" ") else ""
             res = [("case", "Case action")] + self._get_candidate_case_numbers(ctx)
             if first_word == "delete":
@@ -199,6 +212,9 @@ class CaseShellCommandHandler(ShellCommandHandler):
         if act == "delete":
             self._interactive_delete_case(service, args, ctx)
             return True
+        if act == "restore":
+            self._interactive_restore_case(service, args, ctx)
+            return True
         if act in ("select", "use"):
             self._select_case(service, args, ctx)
             return True
@@ -238,7 +254,7 @@ class CaseShellCommandHandler(ShellCommandHandler):
         description = prompt_optional("Description        ", hint="optional")
         tags_raw = prompt_optional("Tags               ", hint="comma-separated, optional")
 
-        tags = [t.strip() for t in tags_raw.split(",") if t.strip()] if tags_raw else []
+        tags = parse_tags(tags_raw) or []
 
         dto = CaseCreateDto(
             title=title,
@@ -264,23 +280,17 @@ class CaseShellCommandHandler(ShellCommandHandler):
     def _interactive_list_cases(self, service: CaseService, sub_args: list[str]) -> None:
         filter_dto, output_format = _parse_list_options(sub_args)
         cases = service.list_cases(filter_dto)
-        if output_format == "json":
-            render_json(cases)
-        else:
-            render_case_table(cases)
+        render_cases(cases, output_format)
 
     def _interactive_show_case(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:
-        output_format = (extract_flag_value(sub_args, "--output", "-o") or "table").lower()
+        output_format = parse_output_format(sub_args)
         ident = self._resolve_or_prompt_identifier(sub_args, ctx)
 
         with capture_cli_errors(
             "Show Case", exit_on_error=False, default_remediation="Use 'case list' to inspect available cases."
         ):
             case = service.get_case(ident)
-            if output_format == "json":
-                render_json(case)
-            else:
-                render_case_detail(case)
+            render_case(case, output_format)
 
     def _interactive_edit_case(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:
         ident = self._resolve_or_prompt_identifier(sub_args, ctx, "to edit")
@@ -305,7 +315,7 @@ class CaseShellCommandHandler(ShellCommandHandler):
                 default=", ".join(case.tags) if case.tags else "",
             )
 
-            tag_list = [t.strip() for t in new_tags.split(",") if t.strip()] if new_tags else []
+            tag_list = parse_tags(new_tags) or []
 
             dto = CaseUpdateDto(
                 title=new_title,
@@ -315,8 +325,7 @@ class CaseShellCommandHandler(ShellCommandHandler):
                 tags=tag_list,
             )
             updated = service.update_case(ident, dto)
-            if ctx.active_case and ctx.active_case.id == updated.id:
-                ctx.active_case = updated
+            _sync_active_case(ctx, updated)
             console.print(
                 f"\n[{THEME_TOKENS['success']}][OK] Case '{updated.number}' updated successfully![/{THEME_TOKENS['success']}]"
             )
@@ -327,15 +336,14 @@ class CaseShellCommandHandler(ShellCommandHandler):
 
         console.print("")
         if not prompt_confirm(f"Seal & permanently close case '{ident}'?"):
-            console.print("\n[dim]Action cancelled.[/dim]\n")
+            console.print(_ACTION_CANCELLED)
             return
 
         reason = prompt_optional("Reason             ", hint="optional")
         closed_by = prompt_optional("Closed By          ", hint="examiner name, optional")
         with capture_cli_errors("Close Case", exit_on_error=False):
             closed = service.close_case(ident, reason=reason, closed_by=closed_by)
-            if ctx.active_case and ctx.active_case.id == closed.id:
-                ctx.active_case = closed
+            _sync_active_case(ctx, closed)
             check_icon = get_success_icon()
             console.print(
                 f"\n  [{THEME_TOKENS['success']}]{check_icon} Case {closed.number} permanently closed.[/{THEME_TOKENS['success']}]\n"
@@ -357,17 +365,32 @@ class CaseShellCommandHandler(ShellCommandHandler):
             action_label = "archived"
 
         if not prompt_confirm(prompt_msg, is_danger=purge):
-            console.print("\n[dim]Action cancelled.[/dim]\n")
+            console.print(_ACTION_CANCELLED)
             return
 
         with capture_cli_errors("Delete Case", exit_on_error=False):
             target = service.get_case(ident)
             service.delete_case(ident, purge=purge)
-            if ctx.active_case and ctx.active_case.id == target.id:
-                ctx.active_case = None
+            _clear_active_if_matches(ctx, target.id)
             check_icon = get_success_icon()
             console.print(
                 f"\n  [{THEME_TOKENS['success']}]{check_icon} Case {ident} {action_label}.[/{THEME_TOKENS['success']}]\n"
+            )
+
+    def _interactive_restore_case(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:
+        ident = self._resolve_or_prompt_identifier(sub_args, ctx, "to restore")
+
+        console.print("")
+        if not prompt_confirm(f"Restore archived case '{ident}'?"):
+            console.print(_ACTION_CANCELLED)
+            return
+
+        with capture_cli_errors("Restore Case", exit_on_error=False):
+            restored = service.restore_case(ident)
+            _sync_active_case(ctx, restored)
+            check_icon = get_success_icon()
+            console.print(
+                f"\n  [{THEME_TOKENS['success']}]{check_icon} Case {ident} restored.[/{THEME_TOKENS['success']}]\n"
             )
 
     def _select_case(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:

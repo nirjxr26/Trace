@@ -22,6 +22,7 @@ class CaseModel(Base, TimestampMixin, SoftDeleteMixin):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     closure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    archived_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     version: Mapped[int] = mapped_column(default=1, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

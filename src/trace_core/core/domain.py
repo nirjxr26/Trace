@@ -46,6 +46,7 @@ class BaseEntity(BaseModel):
     opened_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
     archived_at: datetime | None = Field(default=None)
+    archived_by: str | None = Field(default=None, max_length=255)
     version: int = Field(default=1, ge=1)
     is_deleted: bool = Field(default=False)
 

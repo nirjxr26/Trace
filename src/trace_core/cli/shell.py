@@ -14,6 +14,7 @@ from trace_core.cases.service import CaseService
 from trace_core.cases.shell_handler import CaseShellCommandHandler
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.registry import ShellCommandHandler, ShellCommandRegistry, ShellContext
+from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.settings import settings
 from trace_core.core.ui.renderers import (
     console,
@@ -40,6 +41,7 @@ class TraceAutoSuggest(AutoSuggest):
             "case edit",
             "case close",
             "case delete",
+            "case restore",
             "list cases",
             "create case",
             "show case",
@@ -65,7 +67,14 @@ class TraceAutoSuggest(AutoSuggest):
     def _suggest_from_active_case(self, text: str) -> Suggestion | None:
         if text.startswith("case ") and self.shell.active_case:
             active_num = self.shell.active_case.number
-            case_prefixes = ("case show ", "case select ", "case edit ", "case close ", "case delete ")
+            case_prefixes = (
+                "case show ",
+                "case select ",
+                "case edit ",
+                "case close ",
+                "case delete ",
+                "case restore ",
+            )
             if any(text == p for p in case_prefixes):
                 return Suggestion(active_num)
         return None
@@ -111,6 +120,7 @@ class TraceShellCompleter(Completer):
                 ("edit", "Edit case metadata"),
                 ("close", "Close case"),
                 ("delete", "Delete / purge case"),
+                ("restore", "Restore archived case"),
             ]
             for cmd, meta in root_options:
                 if cmd.startswith(text.lower()):
@@ -127,11 +137,43 @@ class TraceShellCompleter(Completer):
                 yield Completion(val, start_position=-len(word), display_meta=meta)
 
 
+def _format_active_case(active_case: Any, empty_hint: str) -> Text:
+    """Format active-case label shared by banner and status views."""
+    if active_case:
+        return Text.assemble(
+            (active_case.number, THEME_TOKENS["accent"]),
+            (" · ", THEME_TOKENS["muted"]),
+            (active_case.title, THEME_TOKENS["value"]),
+        )
+    return Text(empty_hint, style=THEME_TOKENS["muted"])
+
+
+def _print_help_row(syntax: str, alias: str, desc: str) -> None:
+    """Print one manual row shared by feature and console command listings."""
+    alias_str = f"({alias})" if alias else ""
+    console.print(
+        f"    [{THEME_TOKENS['value']}]{syntax:<36}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{alias_str:<16}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]{desc}[/{THEME_TOKENS['label']}]"
+    )
+
+
+CONSOLE_HELP_ENTRIES: tuple[tuple[str, str, str], ...] = (
+    ("status", "", "Display system status and connection info"),
+    ("clear / cls", "", "Clear console screen and re-render banner"),
+    ("help / ?", "", "Show this command manual"),
+    ("exit / quit", "", "Exit the interactive shell"),
+)
+
+
 class InteractiveShell:
     """Production-ready interactive forensic shell with pluggable command dispatch."""
 
-    def __init__(self, service: CaseService | None = None) -> None:
+    def __init__(
+        self,
+        service: CaseService | None = None,
+        session_manager: DatabaseSessionManager | None = None,
+    ) -> None:
         self.context = ShellContext(service=service)
+        self._session_manager = session_manager
         self.registry = ShellCommandRegistry()
         self.history = InMemoryHistory()
         self._session: PromptSession[str] | None = None
@@ -177,7 +219,7 @@ class InteractiveShell:
 
     def _ensure_service(self) -> CaseService:
         if self.service is None:
-            self.service = CaseService()
+            self.service = CaseService(self._session_manager)
             self.context.service = self.service
         return self.service
 
@@ -208,14 +250,7 @@ class InteractiveShell:
         except Exception:
             db_label = Text("Offline / Standalone", style=THEME_TOKENS["danger"])
 
-        if self.active_case:
-            active_label = Text.assemble(
-                (self.active_case.number, THEME_TOKENS["accent"]),
-                (" · ", THEME_TOKENS["muted"]),
-                (self.active_case.title, THEME_TOKENS["value"]),
-            )
-        else:
-            active_label = Text("None (use 'case select' or 'case create')", style=THEME_TOKENS["muted"])
+        active_label = _format_active_case(self.active_case, "None (use 'case select' or 'case create')")
 
         status_grid = create_key_value_grid(
             [
@@ -333,26 +368,13 @@ class InteractiveShell:
             if entries:
                 console.print(Text(f"  {handler.command_name.capitalize()}", style=THEME_TOKENS["accent"]))
                 for syntax, alias, desc in entries:
-                    alias_str = f"({alias})" if alias else ""
-                    console.print(
-                        f"    [{THEME_TOKENS['value']}]{syntax:<36}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{alias_str:<16}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]{desc}[/{THEME_TOKENS['label']}]"
-                    )
+                    _print_help_row(syntax, alias, desc)
                 console.print("")
 
         # Global session commands
         console.print(Text("  Console", style=THEME_TOKENS["accent"]))
-        console.print(
-            f"    [{THEME_TOKENS['value']}]{'status':<36}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{'':<16}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]Display system status and connection info[/{THEME_TOKENS['label']}]"
-        )
-        console.print(
-            f"    [{THEME_TOKENS['value']}]{'clear / cls':<36}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{'':<16}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]Clear console screen and re-render banner[/{THEME_TOKENS['label']}]"
-        )
-        console.print(
-            f"    [{THEME_TOKENS['value']}]{'help / ?':<36}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{'':<16}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]Show this command manual[/{THEME_TOKENS['label']}]"
-        )
-        console.print(
-            f"    [{THEME_TOKENS['value']}]{'exit / quit':<36}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{'':<16}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]Exit the interactive shell[/{THEME_TOKENS['label']}]"
-        )
+        for syntax, alias, desc in CONSOLE_HELP_ENTRIES:
+            _print_help_row(syntax, alias, desc)
         console.print("")
 
     def show_status(self) -> None:
@@ -363,14 +385,7 @@ class InteractiveShell:
         except Exception:
             db_status = Text("Disconnected", style=THEME_TOKENS["danger"])
 
-        if self.active_case:
-            active_str = Text.assemble(
-                (self.active_case.number, THEME_TOKENS["accent"]),
-                (" · ", THEME_TOKENS["muted"]),
-                (self.active_case.title, THEME_TOKENS["value"]),
-            )
-        else:
-            active_str = Text("None (No active case selected)", style=THEME_TOKENS["muted"])
+        active_str = _format_active_case(self.active_case, "None (No active case selected)")
 
         render_key_value_grid(
             "System Status",
@@ -384,7 +399,7 @@ class InteractiveShell:
         )
 
 
-def run_interactive_shell() -> None:
+def run_interactive_shell(session_manager: DatabaseSessionManager | None = None) -> None:
     """Entrypoint function to run the interactive shell."""
-    shell = InteractiveShell()
+    shell = InteractiveShell(session_manager=session_manager)
     shell.run()

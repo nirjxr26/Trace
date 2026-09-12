@@ -3,24 +3,34 @@
 import typer
 from rich.prompt import Confirm, Prompt
 
-from trace_core.cases.domain import CaseStatus
+from trace_core.cases.domain import STATUS_FILTER_KEYWORDS, CaseStatus, is_archived_filter, parse_status_value
 from trace_core.cases.dto import (
     CaseCreateDto,
     CaseFilterDto,
     CaseUpdateDto,
+    parse_tags,
 )
-from trace_core.cases.renderers import render_case_detail, render_case_table
+from trace_core.cases.renderers import render_case, render_case_detail, render_cases
 from trace_core.cases.service import CaseService
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_SUCCESS
-from trace_core.core.database.session import db_manager
-from trace_core.core.ui.renderers import console, render_error_card, render_json
+from trace_core.core.database.session import DatabaseSessionManager, db_manager
+from trace_core.core.ui.renderers import console, render_error_card
 
 case_app = typer.Typer(name="case", help="Create, list, show, edit, and close forensic cases.")
 
+_SKIP_CONFIRM_HELP = "Skip confirmation prompt"
 
-def _get_service() -> CaseService:
-    return CaseService(db_manager)
+
+def _get_service(session_manager: DatabaseSessionManager | None = None) -> CaseService:
+    return CaseService(session_manager or db_manager)
+
+
+def _confirm_or_exit(prompt: str) -> None:
+    """Ask for confirmation, exiting cleanly when declined."""
+    if not Confirm.ask(prompt):
+        console.print("[dim]Operation cancelled.[/dim]")
+        raise typer.Exit(EXIT_SUCCESS)
 
 
 @case_app.command("create")
@@ -41,7 +51,7 @@ def create_case(
         if not examiner:
             examiner = Prompt.ask("[cyan]Lead Examiner[/cyan]")
 
-        tag_list = [t.strip() for t in tags.split(",")] if tags else []
+        tag_list = parse_tags(tags) or []
 
         service = _get_service()
         dto = CaseCreateDto(
@@ -52,7 +62,7 @@ def create_case(
             notes=notes,
             tags=tag_list,
         )
-        created = service.create_case(dto)
+        created = service.create_case(dto, actor=examiner)
         console.print(f"[bold green][OK] Case '{created.number}' created successfully![/bold green]")
         render_case_detail(created)
 
@@ -80,20 +90,14 @@ def list_cases(
     ):
         service = _get_service()
 
-        case_status: CaseStatus | None = None
-        include_deleted = all_cases
-        if status and status.upper() != "ALL":
-            if status.upper() == "ARCHIVED":
-                include_deleted = True
-            else:
-                try:
-                    case_status = CaseStatus(status.upper())
-                except ValueError:
-                    render_error_card(
-                        "Invalid Status",
-                        f"Status '{status}' is not valid. Valid: OPEN, UNDER_REVIEW, CLOSED, ARCHIVED, ALL.",
-                    )
-                    raise typer.Exit(EXIT_ERROR)
+        case_status: CaseStatus | None = parse_status_value(status)
+        include_deleted = all_cases or is_archived_filter(status)
+        if status and status.upper() not in STATUS_FILTER_KEYWORDS and case_status is None:
+            render_error_card(
+                "Invalid Status",
+                f"Status '{status}' is not valid. Valid: OPEN, UNDER_REVIEW, CLOSED, ARCHIVED, ALL.",
+            )
+            raise typer.Exit(EXIT_ERROR)
 
         filter_dto = CaseFilterDto(
             status=case_status,
@@ -102,11 +106,7 @@ def list_cases(
         )
 
         cases = service.list_cases(filter_dto)
-
-        if output.lower() == "json":
-            render_json(cases)
-        else:
-            render_case_table(cases)
+        render_cases(cases, output)
 
 
 @case_app.command("show")
@@ -118,11 +118,7 @@ def show_case(
     with capture_cli_errors("Show Case", default_remediation="Run 'trace case list' to inspect available cases."):
         service = _get_service()
         case = service.get_case(identifier)
-
-        if output.lower() == "json":
-            render_json(case)
-        else:
-            render_case_detail(case)
+        render_case(case, output)
 
 
 @case_app.command("edit")
@@ -141,7 +137,7 @@ def edit_case(
             return
 
         service = _get_service()
-        tag_list = [t.strip() for t in tags.split(",")] if tags is not None else None
+        tag_list = parse_tags(tags)
 
         dto = CaseUpdateDto(
             title=title,
@@ -162,18 +158,15 @@ def close_case(
     closed_by: str = typer.Option(
         "", "--closed-by", "-c", help="Examiner closing the case (defaults to lead examiner)"
     ),
-    force: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    force: bool = typer.Option(False, "--yes", "-y", help=_SKIP_CONFIRM_HELP),
 ) -> None:
     """Close and permanently seal a forensic case."""
     with capture_cli_errors("Case Closure Failed"):
         if not force:
-            confirmed = Confirm.ask(f"Are you sure you want to seal & close case '{identifier}'?")
-            if not confirmed:
-                console.print("[dim]Operation cancelled.[/dim]")
-                raise typer.Exit(EXIT_SUCCESS)
+            _confirm_or_exit(f"Are you sure you want to seal & close case '{identifier}'?")
 
         service = _get_service()
-        closed = service.close_case(identifier, reason=reason, closed_by=closed_by)
+        closed = service.close_case(identifier, reason=reason, closed_by=closed_by, actor=closed_by)
         console.print(f"[bold green][OK] Case '{closed.number}' has been permanently CLOSED.[/bold green]")
         render_case_detail(closed)
 
@@ -182,16 +175,13 @@ def close_case(
 def delete_case(
     identifier: str = typer.Argument(..., help="Case number or UUID to delete"),
     purge: bool = typer.Option(False, "--purge", help="Permanently purge record from database (irreversible)"),
-    force: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    force: bool = typer.Option(False, "--yes", "-y", help=_SKIP_CONFIRM_HELP),
 ) -> None:
     """Delete or archive a forensic case."""
     with capture_cli_errors("Case Deletion Failed"):
         action_name = "PERMANENTLY PURGE" if purge else "archive/soft-delete"
         if not force:
-            confirmed = Confirm.ask(f"Are you sure you want to {action_name} case '{identifier}'?")
-            if not confirmed:
-                console.print("[dim]Operation cancelled.[/dim]")
-                raise typer.Exit(EXIT_SUCCESS)
+            _confirm_or_exit(f"Are you sure you want to {action_name} case '{identifier}'?")
 
         service = _get_service()
         success = service.delete_case(identifier, purge=purge)
@@ -200,3 +190,19 @@ def delete_case(
         else:
             render_error_card("Delete Failed", f"Could not delete case '{identifier}'.")
             raise typer.Exit(EXIT_ERROR)
+
+
+@case_app.command("restore")
+def restore_case(
+    identifier: str = typer.Argument(..., help="Case number or UUID to restore"),
+    force: bool = typer.Option(False, "--yes", "-y", help=_SKIP_CONFIRM_HELP),
+) -> None:
+    """Restore an archived case back to active retention."""
+    with capture_cli_errors("Case Restore Failed"):
+        if not force:
+            _confirm_or_exit(f"Are you sure you want to restore case '{identifier}'?")
+
+        service = _get_service()
+        restored = service.restore_case(identifier)
+        console.print(f"[bold green][OK] Case '{restored.number}' restored successfully![/bold green]")
+        render_case_detail(restored)

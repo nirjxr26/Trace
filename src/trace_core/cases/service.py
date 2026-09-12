@@ -50,16 +50,31 @@ class InvalidCaseStateError(StateTransitionError, CaseError):
         super().__init__(current_state="UNKNOWN", target_state="UNKNOWN", reason=message)
 
 
+def _resolve_actor(actor: str | None, fallback: str = "system") -> str:
+    """Resolve audit actor, defaulting to fallback examiner or system."""
+    cleaned = actor.strip() if actor else ""
+    return cleaned or fallback.strip() or "system"
+
+
+def _require_case(repo: SqlAlchemyCaseRepository, identifier: str) -> Case:
+    """Resolve case by number/UUID or raise not-found. Shared by all service actions."""
+    case = repo.resolve(identifier)
+    if not case:
+        raise CaseNotFoundError(identifier)
+    return case
+
+
 class CaseService(BaseService):
     """Application service for managing Case lifecycle and queries."""
 
     def __init__(self, session_manager: DatabaseSessionManager | None = None):
         super().__init__(session_manager)
 
-    def create_case(self, dto: CaseCreateDto) -> CaseResponseDto:
+    def create_case(self, dto: CaseCreateDto, actor: str | None = None) -> CaseResponseDto:
         """Create and persist a new forensic case."""
-        with self.session_manager.session() as session:
-            repo = SqlAlchemyCaseRepository(session)
+        _ = _resolve_actor(actor, dto.lead_examiner)
+        with self.transaction() as uow:
+            repo = SqlAlchemyCaseRepository(uow.session)
 
             case_number = dto.number.strip() if dto.number else repo.get_next_sequence_number()
 
@@ -81,10 +96,8 @@ class CaseService(BaseService):
 
             try:
                 created = repo.create(case_entity)
-                session.commit()
                 return CaseResponseDto.from_domain(created)
             except IntegrityError as e:
-                session.rollback()
                 err_msg = str(e).lower()
                 if "number" in err_msg or "uq_cases_number" in err_msg:
                     raise DuplicateCaseNumberError(case_number) from e
@@ -94,10 +107,7 @@ class CaseService(BaseService):
         """Retrieve a case by UUID or Case Number."""
         with self.session_manager.session() as session:
             repo = SqlAlchemyCaseRepository(session)
-            case = repo.resolve(identifier)
-            if not case:
-                raise CaseNotFoundError(identifier)
-            return CaseResponseDto.from_domain(case)
+            return CaseResponseDto.from_domain(_require_case(repo, identifier))
 
     def list_cases(self, filter_dto: CaseFilterDto | None = None) -> list[CaseResponseDto]:
         """List cases according to filter criteria."""
@@ -113,13 +123,12 @@ class CaseService(BaseService):
             )
             return [CaseResponseDto.from_domain(c) for c in cases]
 
-    def update_case(self, identifier: str, dto: CaseUpdateDto) -> CaseResponseDto:
+    def update_case(self, identifier: str, dto: CaseUpdateDto, actor: str | None = None) -> CaseResponseDto:
         """Update mutable fields of an existing case."""
-        with self.session_manager.session() as session:
-            repo = SqlAlchemyCaseRepository(session)
-            case = repo.resolve(identifier)
-            if not case:
-                raise CaseNotFoundError(identifier)
+        _ = _resolve_actor(actor, "system")
+        with self.transaction() as uow:
+            repo = SqlAlchemyCaseRepository(uow.session)
+            case = _require_case(repo, identifier)
 
             if case.is_deleted:
                 raise InvalidCaseStateError(f"Cannot update soft-deleted or archived case '{identifier}'.")
@@ -142,16 +151,15 @@ class CaseService(BaseService):
                 case.tags = dto.tags
 
             updated = repo.update(case)
-            session.commit()
             return CaseResponseDto.from_domain(updated)
 
-    def close_case(self, identifier: str, reason: str = "", closed_by: str = "") -> CaseResponseDto:
+    def close_case(
+        self, identifier: str, reason: str = "", closed_by: str = "", actor: str | None = None
+    ) -> CaseResponseDto:
         """Transition case to permanently sealed CLOSED state."""
-        with self.session_manager.session() as session:
-            repo = SqlAlchemyCaseRepository(session)
-            case = repo.resolve(identifier)
-            if not case:
-                raise CaseNotFoundError(identifier)
+        with self.transaction() as uow:
+            repo = SqlAlchemyCaseRepository(uow.session)
+            case = _require_case(repo, identifier)
 
             if case.is_deleted:
                 raise InvalidCaseStateError(f"Cannot close soft-deleted or archived case '{identifier}'.")
@@ -159,27 +167,25 @@ class CaseService(BaseService):
             if case.status == CaseStatus.CLOSED:
                 raise InvalidCaseStateError(f"Case '{identifier}' is already permanently closed.")
 
-            examiner = closed_by.strip() or case.lead_examiner
+            examiner = closed_by.strip() or _resolve_actor(actor, case.lead_examiner)
             try:
                 transition_case(case, CaseStatus.CLOSED, reason=reason, closed_by=examiner)
             except TransitionError as e:
                 raise InvalidCaseStateError(str(e)) from e
 
             updated = repo.update(case)
-            session.commit()
             return CaseResponseDto.from_domain(updated)
 
-    def delete_case(self, identifier: str, purge: bool = False) -> bool:
+    def delete_case(self, identifier: str, purge: bool = False, actor: str | None = None) -> bool:
         """
         Delete a case.
         Default: soft-delete (archive).
         purge=True: permanently remove row from database.
         """
-        with self.session_manager.session() as session:
-            repo = SqlAlchemyCaseRepository(session)
-            case = repo.resolve(identifier)
-            if not case:
-                raise CaseNotFoundError(identifier)
+        resolved_actor = _resolve_actor(actor, "system")
+        with self.transaction() as uow:
+            repo = SqlAlchemyCaseRepository(uow.session)
+            case = _require_case(repo, identifier)
 
             if not purge and case.is_deleted:
                 raise InvalidCaseStateError(f"Case '{identifier}' is already archived/deleted.")
@@ -189,9 +195,21 @@ class CaseService(BaseService):
                     raise InvalidCaseStateError(
                         f"Forensic safety violation: Case '{identifier}' must be archived before it can be purged."
                     )
-                success = repo.purge(case.id)
-            else:
-                success = repo.soft_delete(case.id)
+                return repo.purge(case.id)
+            return repo.soft_delete(case.id, archived_by=resolved_actor)
 
-            session.commit()
-            return success
+    def restore_case(self, identifier: str, actor: str | None = None) -> CaseResponseDto:
+        """Restore an archived case back to active retention."""
+        _ = _resolve_actor(actor, "system")
+        with self.transaction() as uow:
+            repo = SqlAlchemyCaseRepository(uow.session)
+            case = _require_case(repo, identifier)
+
+            if not case.is_deleted:
+                raise InvalidCaseStateError(f"Case '{identifier}' is not archived.")
+
+            repo.restore(case.id)
+            restored = repo.resolve(identifier)
+            if not restored:
+                raise CaseNotFoundError(identifier)
+            return CaseResponseDto.from_domain(restored)

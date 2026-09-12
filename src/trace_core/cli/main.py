@@ -1,24 +1,14 @@
 """Trace CLI main entrypoint."""
 
-import sys
-
 import typer
-
-if hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
-if hasattr(sys.stderr, "reconfigure"):
-    try:
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
 
 from trace_core.cases.commands import case_app
 from trace_core.cli.shell import run_interactive_shell
 from trace_core.core.cli.db_commands import db_app
 from trace_core.core.settings import settings
+from trace_core.core.ui.renderers import configure_utf8_streams
+
+configure_utf8_streams()
 
 app = typer.Typer(
     name="trace",

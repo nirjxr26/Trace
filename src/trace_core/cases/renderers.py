@@ -12,6 +12,7 @@ from trace_core.core.ui.renderers import (
     get_rule_char,
     get_status_style_and_label,
     render_dossier,
+    render_json,
     render_minimalist_table,
 )
 from trace_core.core.ui.theme import THEME_TOKENS
@@ -84,6 +85,8 @@ def render_case_detail(case: CaseResponseDto) -> None:
         fields.append(("Closure Reason", case.closure_reason))
     if case.archived_at:
         fields.append(("Archived At", format_india_datetime(case.archived_at)))
+    if case.archived_by:
+        fields.append(("Archived By", case.archived_by))
 
     sections: list[tuple[str, str | None]] = [
         ("Description", case.description),
@@ -99,3 +102,19 @@ def render_case_detail(case: CaseResponseDto) -> None:
         fields=fields,
         sections=sections,
     )
+
+
+def render_case(case: CaseResponseDto, output: str = "table") -> None:
+    """Render a single case in table dossier or raw JSON form."""
+    if output.lower() == "json":
+        render_json(case)
+    else:
+        render_case_detail(case)
+
+
+def render_cases(cases: list[CaseResponseDto], output: str = "table") -> None:
+    """Render a case collection in minimalist table or raw JSON form."""
+    if output.lower() == "json":
+        render_json(cases)
+    else:
+        render_case_table(cases)

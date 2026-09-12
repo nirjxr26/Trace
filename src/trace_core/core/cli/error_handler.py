@@ -5,15 +5,35 @@ from contextlib import contextmanager
 
 import typer
 
-from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_NOT_FOUND
+from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_NOT_FOUND, EXIT_VERIFY_FAILED
 from trace_core.core.errors import (
     ApplicationError,
+    AuditTamperError,
     ConcurrencyConflictError,
     ConflictError,
     NotFoundError,
     StateTransitionError,
 )
 from trace_core.core.ui.renderers import render_error_card
+
+
+def _resolve_unexpected_error(
+    e: Exception, operation_title: str | None, default_remediation: str | None
+) -> tuple[str, str, str | None, int]:
+    from trace_core.core.settings import settings
+
+    err_msg = (
+        str(e)
+        if settings.debug
+        else "An unexpected operational error occurred. Run with TRACE_DEBUG=1 or inspect system logs for technical details."
+    )
+
+    return (
+        operation_title or "Unexpected Error",
+        err_msg,
+        default_remediation or "Verify database connectivity or system configuration.",
+        EXIT_ERROR,
+    )
 
 
 def _resolve_error_details(
@@ -39,23 +59,18 @@ def _resolve_error_details(
     if isinstance(e, StateTransitionError):
         return operation_title or "Invalid State Transition", str(e), default_remediation, EXIT_ERROR
 
+    if isinstance(e, AuditTamperError):
+        return (
+            operation_title or "Audit Verification Failed",
+            str(e),
+            default_remediation or "Inspect audit chain for tampered sequence and restore from backup.",
+            EXIT_VERIFY_FAILED,
+        )
+
     if isinstance(e, ApplicationError):
         return operation_title or "Application Error", str(e), default_remediation, EXIT_ERROR
 
-    from trace_core.core.settings import settings
-
-    err_msg = (
-        str(e)
-        if settings.debug
-        else "An unexpected operational error occurred. Run with TRACE_DEBUG=1 or inspect system logs for technical details."
-    )
-
-    return (
-        operation_title or "Unexpected Error",
-        err_msg,
-        default_remediation or "Verify database connectivity or system configuration.",
-        EXIT_ERROR,
-    )
+    return _resolve_unexpected_error(e, operation_title, default_remediation)
 
 
 @contextmanager

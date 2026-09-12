@@ -82,19 +82,18 @@ class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):
         return self._to_domain(model)
 
     def delete(self, entity_id: IdT, purge: bool = False) -> bool:
-        """Delete an entity. If purge=False and model has is_deleted, soft-deletes."""
+        """Permanently delete a row by primary key.
+
+        Forensic policy lives in feature repositories (e.g. soft-delete/archive).
+        Do not add soft-delete magic here; callers must implement retention explicitly.
+        """
+        _ = purge
         stmt = select(self.model_cls).where(getattr(self.model_cls, "id") == entity_id)
         model = self.session.scalar(stmt)
         if not model:
             return False
 
-        if purge or not hasattr(model, "is_deleted"):
-            self.session.delete(model)
-        else:
-            setattr(model, "is_deleted", True)
-            if hasattr(model, "updated_at"):
-                setattr(model, "updated_at", now_utc())
-
+        self.session.delete(model)
         self.session.flush()
         return True
 

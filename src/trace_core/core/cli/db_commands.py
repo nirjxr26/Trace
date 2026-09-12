@@ -29,6 +29,14 @@ def _mask_db_url(url: str) -> str:
     return url
 
 
+def _require_db() -> None:
+    """Abort command when the database is unreachable."""
+    is_healthy, message = db_manager.check_connection()
+    if not is_healthy:
+        console.print(f"[bold red]Cannot connect to database:[/bold red] {message}")
+        raise typer.Exit(code=1)
+
+
 @db_app.command("status")
 def db_status() -> None:
     """Check database connection and show migration / table status."""
@@ -89,11 +97,7 @@ def db_status() -> None:
 def db_init() -> None:
     """Initialize database schema and apply initial migrations."""
     with capture_cli_errors("Database Initialization Failed"):
-        is_healthy, message = db_manager.check_connection()
-        if not is_healthy:
-            console.print(f"[bold red]Cannot connect to database:[/bold red] {message}")
-            raise typer.Exit(code=1)
-
+        _require_db()
         db_manager.init_schema()
         tables = get_table_names(db_manager.engine)
         console.print("[bold green][OK] Database schema initialized successfully![/bold green]")
@@ -104,11 +108,7 @@ def db_init() -> None:
 def db_migrate() -> None:
     """Apply pending schema migrations."""
     with capture_cli_errors("Database Migration Failed"):
-        is_healthy, message = db_manager.check_connection()
-        if not is_healthy:
-            console.print(f"[bold red]Cannot connect to database:[/bold red] {message}")
-            raise typer.Exit(code=1)
-
+        _require_db()
         applied = apply_migrations(db_manager.engine)
         if applied:
             console.print(f"[bold green][OK] Applied {len(applied)} migration(s):[/bold green]")

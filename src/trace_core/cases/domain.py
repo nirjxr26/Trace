@@ -42,6 +42,24 @@ def can_transition(current: CaseStatus, target: CaseStatus) -> bool:
     return target in _VALID_TRANSITIONS.get(current, set())
 
 
+STATUS_FILTER_KEYWORDS = ("ALL", "ARCHIVED")
+
+
+def is_archived_filter(raw: str | None) -> bool:
+    """Check if a status filter string requests archived (soft-deleted) records."""
+    return raw is not None and raw.upper() == "ARCHIVED"
+
+
+def parse_status_value(raw: str | None) -> CaseStatus | None:
+    """Parse CLI status filter. ALL/ARCHIVED/None/invalid map to None (no lifecycle filter)."""
+    if not raw or raw.upper() in STATUS_FILTER_KEYWORDS:
+        return None
+    try:
+        return CaseStatus(raw.upper())
+    except ValueError:
+        return None
+
+
 def transition_case(
     case: "Case",
     target: CaseStatus,
