@@ -96,7 +96,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: trace_test
+          POSTGRES_DB: trace
         ports:
           - 5432:5432
         options: >-
@@ -106,7 +106,8 @@ jobs:
           --health-retries 5
 
     env:
-      TRACE_TEST_POSTGRES_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/trace_test"
+      TRACE_DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/trace"
+      TRACE_TEST_POSTGRES_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/trace"
       TRACE_STORAGE_ROOT: "./.test_storage"
 
     steps:
