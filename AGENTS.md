@@ -2,121 +2,121 @@
 
 ## 1. Core Principle
 
-Before writing or modifying code, understand the existing codebase first. The existing architecture, conventions, patterns, and implementation style are the source of truth — not general best practices, not the agent's own preferences, not what would be "better" in a greenfield project. Do not introduce a new pattern when an existing project pattern can be reused. **New code must match the surrounding codebase's patterns and style exactly — same structure, same idioms, same conventions — not merely "similar" or "inspired by."** When a requested change conflicts with an existing convention, flag the conflict and ask rather than silently picking one side.
+Understand the existing codebase before writing or modifying anything. The existing
+architecture, conventions, and style are the source of truth — not general best practices, not
+the agent's own preferences. Reuse existing patterns instead of introducing new ones. New code
+must match the surrounding code's structure, idioms, and conventions exactly — not "similar,"
+identical. If a request conflicts with an existing convention, flag it and ask rather than
+silently picking a side.
 
 ## 2. Before Writing Code
 
-Always:
+- Inspect the relevant files and surrounding implementation first.
+- Understand how the feature currently works, including edge cases already handled.
+- Identify existing utilities, services, and patterns to reuse.
+- Check related models, APIs, and data flows, plus what else imports or calls this code.
+- Read existing tests covering the area before changing behavior they assert on.
+- Form a clear plan before making changes.
 
-- Inspect the relevant files and surrounding implementation before touching anything.
-- Understand how the existing feature works, including edge cases already handled.
-- Identify existing utilities, services, components, middleware, and patterns that can be reused.
-- Check related database models, APIs, and frontend/backend flows.
-- Identify dependencies and possible side effects — what else imports or calls this code.
-- Check for existing tests covering the area, and read them before changing behavior they assert on.
-- Form a clear implementation plan before making changes.
-
-Do not start coding based only on assumptions. If a file, API, or behavior can't be verified by inspection, say so explicitly instead of guessing.
+Never code from assumptions. If a file or behavior can't be verified by inspection, say so
+instead of guessing.
 
 ## 3. Codebase Consistency
 
-All new code must be indistinguishable in style from the existing codebase — it should read as if the same author, following the same conventions, wrote it. Match, exactly, the existing:
+New code should read as if the same author wrote it. Match exactly: folder structure, naming,
+types, API and database patterns, error handling, validation, logging, testing, component and
+state-management patterns, and formatting (indentation, quotes, import order, comment style).
 
-- Folder structure
-- Naming conventions
-- Type conventions
-- API patterns
-- Database patterns
-- Error handling
-- Validation
-- Logging
-- Testing patterns
-- Component patterns
-- State management patterns
-- Formatting and style (indentation, quote style, import ordering, comment style)
+Don't introduce new frameworks, libraries, or abstractions the codebase doesn't already use. If
+two conflicting patterns already exist, match whichever the immediate surrounding code uses. If
+no existing pattern fits, say so and propose the closest match before writing code — don't
+invent a convention silently.
 
-Do not introduce unnecessary frameworks, libraries, abstractions, or architectural patterns. If two conflicting patterns already exist in the codebase, match whichever the immediate surrounding code uses rather than inventing a third. If no existing pattern covers the case, say so explicitly and propose the closest fit before writing code — don't invent a new convention silently.
+## 4. Simplicity — Don't Over-Engineer
 
-## 4. Simplicity — Do Not Over-Engineer
-
-Prefer: simple over clever, explicit over overly abstract, reusable over duplicated, maintainable over prematurely optimized.
-
-Match the size of the solution to the size of the problem. If a task can be solved in 2 lines, write 2 lines — not a 50-line abstraction with configs, helper classes, or "future-proofing" no one asked for. Do not add layers, wrappers, design patterns, or generalized utilities for a single, simple use case. Only introduce an abstraction when there is a clear reason for it — a real second use case, not a hypothetical future one. Before writing a solution, ask: what's the smallest change that correctly and durably solves exactly what was requested, in the codebase's existing style? Write that.
+Simple over clever. Explicit over abstract. Match the size of the solution to the size of the
+problem — a 2-line fix stays 2 lines, not a new abstraction, config layer, or "future-proofing"
+nobody asked for. Only add an abstraction when there's a real second use case, not a
+hypothetical one. Ask: what's the smallest change that correctly and durably solves exactly
+what was requested, in the codebase's existing style? Write that.
 
 ## 5. Security
 
-Security is a default requirement. Never:
+Never:
+- Expose secrets/credentials in logs, errors, commits, or config/example files.
+- Log passwords, tokens, MFA secrets, API keys, or session identifiers.
+- Disable security controls, bypass auth (even "temporarily"), or trust client-side authorization.
+- Roll custom crypto where a vetted library exists.
+- Introduce injection risk — always use parameterized queries and existing sanitization.
 
-- Expose secrets or credentials, including in logs, error messages, commit history, or example/config files.
-- Log passwords, tokens, MFA secrets, API keys, session identifiers, or other sensitive data.
-- Disable security controls to make implementation easier.
-- Trust client-side authorization; always re-check on the server/backend.
-- Bypass existing authentication or authorization, even temporarily "for testing."
-- Introduce insecure cryptographic implementations, or roll custom crypto where a vetted library exists.
-- Store or transmit sensitive authentication data insecurely.
-- Introduce injection risks (SQL, command, template, XSS) — always use parameterized queries and existing sanitization utilities.
+Use the project's existing security patterns and libraries. If a task seems to require
+weakening a security control, stop and flag it instead of proceeding.
 
-Use established security libraries and existing project security patterns whenever possible. If a task seems to require weakening a security control, stop and flag it instead of proceeding.
+## 6. Scope of Changes
 
-## 6. Changes
-
-Keep changes focused on the requested task. Do not modify unrelated code, reformat untouched files, or fix unrelated bugs in the same change — note them separately instead. Do not perform large refactors unless they are required for the requested feature. Prefer small, understandable changes over large rewrites. Prefer existing dependencies already used in the project over adding new ones; don't add a dependency for something a few lines of code, written in the codebase's own style, already handles.
+Keep changes focused on the requested task. Don't modify unrelated code, reformat untouched
+files, or fix unrelated bugs in the same change — note them separately. Avoid large refactors
+unless the requested feature requires one. Prefer an existing dependency already in the project
+over adding a new one for something a few lines of code can handle.
 
 ## 7. Database Changes
 
-Before changing the database:
-
-- Inspect the existing schema.
-- Follow existing naming and relationship conventions exactly.
-- Consider migrations and existing data — will this change break current rows or in-flight queries?
-- Avoid unnecessary schema changes.
-- Keep database logic consistent with the existing architecture and query patterns already in use.
-
-Never make destructive database changes without a clear, explicit requirement to do so.
+Inspect the existing schema first. Follow existing naming/relationship conventions exactly.
+Check whether the change breaks current rows or in-flight queries. Avoid unnecessary schema
+changes. Never make a destructive database change without an explicit requirement for it.
 
 ## 8. Error Handling
 
-Follow the existing error-handling strategy exactly — don't introduce a new error shape, exception type, or response format even if it seems cleaner. Errors should:
-
-- Be predictable and consistent with how errors are already surfaced elsewhere in the codebase.
-- Avoid leaking sensitive information (stack traces, internal paths, credentials) to end users.
-- Be handled at the appropriate layer, not swallowed early or re-thrown without context.
-- Follow existing API response conventions (status codes, error object shape).
-
-Do not silently ignore errors.
+Follow the existing error-handling strategy exactly — same exception types, same response
+shape — even if a different approach seems cleaner. Errors must be predictable, consistent with
+the rest of the codebase, and free of leaked internals (stack traces, paths, credentials).
+Handle errors at the right layer; never swallow or silently ignore them.
 
 ## 9. Testing and Verification
 
-After implementing a change:
+After implementing a change: run relevant tests, type checking, linting, and any relevant
+static analysis; review the final diff line by line; fix issues before calling the task done.
+Never assume code works without verification, and never fabricate a passing result — if a check
+can't be run in the current environment, say so explicitly.
 
-- Run relevant tests.
-- Run type checking.
-- Run linting.
-- Run relevant security/static analysis.
-- Review the final diff line by line.
-- Fix issues before considering the task complete.
+## 10. Comments
 
-Do not assume code works without verification. If a check can't be run in the current environment, say so explicitly rather than assuming it passed or fabricating a result.
+Keep comments where they explain *why*, not *what* — preserve existing comments unless they're
+now wrong, and add new ones only where the surrounding code's own commenting style already
+would (e.g. non-obvious logic, safety-critical checks, workarounds). Don't strip comments
+during unrelated edits, and don't add comment noise the existing style doesn't have.
 
-## 10. Agent Workflow
+## 11. Workflow
 
 Sequence for every change: **Understand → Plan → Implement → Verify → Review.**
 
-When uncertain, inspect the repository before making assumptions — never guess at a file's contents, an API's shape, or a convention's existence. Reuse existing code whenever appropriate. Do not create duplicate implementations of functionality that already exists. Do not change architecture simply because another approach looks better in isolation — the existing architecture is the constraint, not a suggestion. If a request is ambiguous or could be implemented multiple reasonable ways, state the interpretation being used before proceeding, and prefer whichever interpretation keeps the change closest to existing patterns.
+Inspect before assuming — never guess at a file's contents, an API's shape, or a convention.
+Don't duplicate existing functionality. Don't change architecture because another approach
+looks better in isolation — the existing architecture is the constraint. If a request is
+ambiguous, state the interpretation being used before proceeding, favoring whichever keeps the
+change closest to existing patterns.
 
-## 11. Final Review
+## 12. Codebase Location & Per-Person Changelog
 
-Before finishing a task, verify:
+The codebase should always follow the guidenlines of the `/ponytail` skills, if it isnt downloaded, download it from the github and start to use it, code should be written using that skill . All new code must match the conventions of what's already
+there (per Sections 1–4) — nothing about this location relaxes those rules.
 
-- The requested functionality works.
-- Existing functionality still works.
-- The new code is stylistically identical to the surrounding codebase — no visible seam between old and new code.
-- No unnecessary files were changed.
-- No unnecessary dependencies were added.
-- No security controls were weakened.
-- Code follows existing conventions exactly, not approximately.
-- Tests and checks pass.
-- The implementation is understandable to another developer already familiar with this codebase.
-- The solution isn't bigger than the problem it solves.
+At the end of any task that changes code, record what changed under that person's own folder:
 
-The final implementation should be: **secure, reliable, consistent, simple, maintainable — and indistinguishable in style from the code it sits beside.**
+- Path: `/changelog/<person-name>/changelog.md`
+- If that person's folder doesn't exist yet, create it.
+- Append an entry (don't overwrite prior entries) with: date, a short summary of what changed
+  and why, and the files touched.
+- This is separate from commit messages/PR descriptions — it's a running per-person log, not a
+  replacement for either.
+
+## 13. Final Review
+
+Before finishing, verify: the requested functionality works; existing functionality still
+works; the new code is stylistically identical to its surroundings, with no visible seam;
+comments were preserved/added per Section 10; no unnecessary files or dependencies were
+touched; no security control was weakened; tests and checks pass; the per-person changelog
+entry (Section 12) was written; the solution isn't bigger than the problem it solves.
+
+The final implementation should be: **secure, reliable, consistent, simple, maintainable — and
+indistinguishable in style from the code it sits beside.**

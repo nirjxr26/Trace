@@ -1,28 +1,24 @@
 """Unit tests for Case application service using in-memory database."""
 
+from pathlib import Path
+
 import pytest
 
-from trace_core.adapters.db.session import DatabaseSessionManager
-from trace_core.application.cases import (
+from trace_core.cases.domain import CaseStatus
+from trace_core.cases.dto import (
+    CaseCreateDto,
+    CaseFilterDto,
+    CaseResponseDto,
+    CaseUpdateDto,
+)
+from trace_core.cases.service import (
     CaseNotFoundError,
     CaseService,
     DuplicateCaseNumberError,
     InvalidCaseStateError,
 )
-from trace_core.application.dto import (
-    CaseCreateDto,
-    CaseFilterDto,
-    CaseUpdateDto,
-)
-from trace_core.domain.models.case import CaseStatus
 
-
-@pytest.fixture
-def service() -> CaseService:
-    # Use SQLite in-memory for lightning-fast, isolated unit testing
-    session_mgr = DatabaseSessionManager("sqlite:///:memory:")
-    session_mgr.init_schema()
-    return CaseService(session_mgr)
+pytestmark = pytest.mark.unit
 
 
 def test_create_and_get_case(service: CaseService) -> None:
@@ -156,3 +152,42 @@ def test_sequence_generation_after_purge(service: CaseService) -> None:
     c2_seq = int(c2.number.split("-")[-1])
     c3_seq = int(c3.number.split("-")[-1])
     assert c3_seq > c2_seq
+
+
+def test_reusable_service_and_dto_hierarchy(service: CaseService) -> None:
+    import uuid
+
+    from trace_core.cases.repository import SqlAlchemyCaseRepository
+    from trace_core.core.dto import BaseFilterDto, BaseResponseDto
+    from trace_core.core.service import BaseService
+
+    # 1. BaseService inheritance
+    assert isinstance(service, BaseService)
+
+    # 2. BaseResponseDto and BaseFilterDto inheritance
+    case = service.create_case(CaseCreateDto(title="Hierarchy Test", lead_examiner="Inv 1"))
+    assert isinstance(case, BaseResponseDto)
+    assert isinstance(case.id, uuid.UUID)
+
+    filter_dto = CaseFilterDto(search="Hierarchy")
+    assert isinstance(filter_dto, BaseFilterDto)
+
+    # 3. SqlAlchemyBaseRepository exists() and count()
+    with service.session_manager.session() as session:
+        repo = SqlAlchemyCaseRepository(session)
+        assert repo.exists(case.id) is True
+        assert repo.exists(uuid.uuid4()) is False
+        assert repo.count() >= 1
+
+
+def test_sample_cases_batch_and_storage(
+    service: CaseService,
+    sample_cases_batch: list[CaseResponseDto],
+    temp_storage: Path,
+) -> None:
+    assert len(sample_cases_batch) == 3
+    assert temp_storage.is_dir()
+
+    results = service.list_cases(CaseFilterDto(search="Malware"))
+    assert len(results) == 1
+    assert results[0].number == "2026-BATCH-0002"

@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, dev, develop]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-types:
+    name: Lint & Type Safety (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          pip install --only-binary :all: -r requirements.txt
+          pip install --no-deps -e .
+
+      - name: Verify Code Formatting (Ruff)
+        run: ruff format --check .
+
+      - name: Lint Codebase (Ruff)
+        run: ruff check .
+
+      - name: Strict Static Type Check (Mypy)
+        run: mypy src tests
+
+  test-matrix:
+    name: Test Suite (${{ matrix.os }} - Python ${{ matrix.python-version }})
+    needs: [lint-and-types]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12"]
+
+    env:
+      TRACE_DATABASE_URL: "sqlite:///:memory:"
+      TRACE_STORAGE_ROOT: "./.test_storage"
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          pip install --only-binary :all: -r requirements.txt
+          pip install --no-deps -e .
+
+      - name: Execute Pytest with Branch Coverage
+        run: pytest --cov=trace_core --cov-report=term-missing --cov-report=xml
+
+      - name: Upload Coverage Artifact (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-python-${{ matrix.python-version }}
+          path: coverage.xml
+          retention-days: 14

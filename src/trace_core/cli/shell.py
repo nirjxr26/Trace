@@ -1,86 +1,179 @@
-"""Interactive forensic console for Trace."""
+"""Modular Interactive Forensic Console Shell (REPL) for Trace."""
 
+import os
 import shlex
+import sys
+from typing import Any
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.auto_suggest import AutoSuggest, AutoSuggestFromHistory, Suggestion
+from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import InMemoryHistory
-from rich.console import Console
-from rich.panel import Panel
-from rich.prompt import Confirm, Prompt
+from rich.text import Text
 
-from trace_core.adapters.db.session import db_manager
-from trace_core.application.cases import (
-    CaseNotFoundError,
-    CaseService,
-    DuplicateCaseNumberError,
-    InvalidCaseStateError,
+from trace_core.cases.domain import Case
+from trace_core.cases.service import CaseService
+from trace_core.cases.shell_handler import CaseShellCommandHandler
+from trace_core.core.cli.registry import ShellCommandHandler, ShellCommandRegistry, ShellContext
+from trace_core.core.database.session import db_manager
+from trace_core.core.settings import settings
+from trace_core.core.ui.renderers import (
+    console,
+    create_key_value_grid,
+    get_rule_char,
+    render_error_card,
+    render_key_value_grid,
 )
-from trace_core.application.dto import (
-    CaseCreateDto,
-    CaseFilterDto,
-    CaseResponseDto,
-    CaseUpdateDto,
-)
-from trace_core.cli.error_handler import render_error_card
-from trace_core.cli.ui.renderers import render_case_detail, render_case_table, render_json
-from trace_core.domain.models.case import CaseStatus
-from trace_core.settings import settings
+from trace_core.core.ui.theme import THEME_TOKENS
 
-console = Console()
 
-SHELL_WORDS = [
-    "case",
-    "create",
-    "list",
-    "show",
-    "edit",
-    "close",
-    "delete",
-    "select",
-    "deselect",
-    "use",
-    "status",
-    "clear",
-    "cls",
-    "help",
-    "exit",
-    "quit",
-    "--status",
-    "--search",
-    "--output",
-    "--purge",
-    "--title",
-    "--examiner",
-    "--desc",
-    "--notes",
-    "--tags",
-    "OPEN",
-    "UNDER_REVIEW",
-    "CLOSED",
-    "ARCHIVED",
-    "ALL",
-]
+class TraceAutoSuggest(AutoSuggest):
+    """Context-aware inline ghost command suggestion generator."""
+
+    def __init__(self, shell: "InteractiveShell") -> None:
+        self.shell = shell
+        self.history_suggest = AutoSuggestFromHistory()
+        self.default_suggestions = [
+            "case list",
+            "case create",
+            "case show",
+            "case select",
+            "case deselect",
+            "case edit",
+            "case close",
+            "case delete",
+            "list cases",
+            "create case",
+            "show case",
+            "select case",
+            "deselect case",
+            "status",
+            "clear",
+            "help",
+            "exit",
+        ]
+
+    def _suggest_from_history(self, buffer: Any, document: Any) -> Suggestion | None:
+        if buffer is not None and hasattr(buffer, "history"):
+            return self.history_suggest.get_suggestion(buffer, document)
+        return None
+
+    def _suggest_from_defaults(self, text: str) -> Suggestion | None:
+        for cmd in self.default_suggestions:
+            if cmd.startswith(text) and len(cmd) > len(text):
+                return Suggestion(cmd[len(text) :])
+        return None
+
+    def _suggest_from_active_case(self, text: str) -> Suggestion | None:
+        if text.startswith("case ") and self.shell.active_case:
+            active_num = self.shell.active_case.number
+            case_prefixes = ("case show ", "case select ", "case edit ", "case close ", "case delete ")
+            if any(text == p for p in case_prefixes):
+                return Suggestion(active_num)
+        return None
+
+    def get_suggestion(self, buffer: Any, document: Any) -> Suggestion | None:
+        if (hist := self._suggest_from_history(buffer, document)) is not None:
+            return hist
+
+        text = document.text.lstrip()
+        if not text:
+            return None
+
+        return self._suggest_from_defaults(text) or self._suggest_from_active_case(text)
+
+
+class TraceShellCompleter(Completer):
+    """Context-aware command autocompleter for the interactive shell."""
+
+    def __init__(self, shell: "InteractiveShell") -> None:
+        self.shell = shell
+
+    def get_completions(self, document: Any, complete_event: Any) -> Any:
+        text = document.text_before_cursor.lstrip()
+        word = document.get_word_before_cursor()
+
+        if " " not in text:
+            root_options = [
+                ("case", "Forensic case management commands"),
+                ("status", "Display system & database status"),
+                ("clear", "Clear screen & re-render banner"),
+                ("cls", "Clear screen & re-render banner"),
+                ("help", "Display command manual"),
+                ("?", "Display command manual"),
+                ("exit", "Exit interactive console"),
+                ("quit", "Exit interactive console"),
+                ("list", "List cases (alias: list cases)"),
+                ("create", "Create case (alias: create case)"),
+                ("show", "Show case (alias: show case)"),
+                ("select", "Set active case context"),
+                ("use", "Set active case context"),
+                ("deselect", "Clear active case context"),
+                ("unuse", "Clear active case context"),
+                ("edit", "Edit case metadata"),
+                ("close", "Close case"),
+                ("delete", "Delete / purge case"),
+            ]
+            for cmd, meta in root_options:
+                if cmd.startswith(text.lower()):
+                    yield Completion(cmd, start_position=-len(word), display_meta=meta)
+            return
+
+        ctx = self.shell.context
+        for handler in self.shell.registry.all_handlers():
+            for completion in handler.get_completions(text, ctx):
+                if isinstance(completion, tuple):
+                    val, meta = completion
+                else:
+                    val, meta = completion, ""
+                yield Completion(val, start_position=-len(word), display_meta=meta)
 
 
 class InteractiveShell:
-    """Manages state and command execution in the interactive Trace console."""
+    """Production-ready interactive forensic shell with pluggable command dispatch."""
 
-    def __init__(self) -> None:
-        self.active_case: CaseResponseDto | None = None
-        self.service: CaseService | None = None
+    def __init__(self, service: CaseService | None = None) -> None:
+        self.context = ShellContext(service=service)
+        self.registry = ShellCommandRegistry()
         self.history = InMemoryHistory()
-        self.completer = WordCompleter(SHELL_WORDS, ignore_case=True)
         self._session: PromptSession[str] | None = None
+        self.completer = TraceShellCompleter(self)
+
+        # Register standard feature command handlers
+        self._register_default_handlers()
+
+    def _register_default_handlers(self) -> None:
+        """Register built-in feature handlers."""
+        self.registry.register(CaseShellCommandHandler())
+
+    def register_handler(self, handler: ShellCommandHandler) -> None:
+        """Allow other AI agents and feature modules to plug in commands."""
+        self.registry.register(handler)
+
+    @property
+    def service(self) -> CaseService | None:
+        return self.context.service
+
+    @service.setter
+    def service(self, s: CaseService | None) -> None:
+        self.context.service = s
+
+    @property
+    def active_case(self) -> Case | None:
+        return self.context.active_case
+
+    @active_case.setter
+    def active_case(self, case: Case | None) -> None:
+        self.context.active_case = case
 
     @property
     def session(self) -> PromptSession[str]:
         if self._session is None:
             self._session = PromptSession(
                 history=self.history,
-                auto_suggest=AutoSuggestFromHistory(),
+                auto_suggest=TraceAutoSuggest(self),
                 completer=self.completer,
+                complete_while_typing=True,
             )
         return self._session
 
@@ -88,18 +181,60 @@ class InteractiveShell:
         if self.service is None:
             db_manager.init_schema()
             self.service = CaseService()
+            self.context.service = self.service
         return self.service
 
     def print_banner(self) -> None:
-        """Display branded startup banner."""
-        banner_text = (
-            "[bold cyan]╔═══════════════════════════════════════════════════════════════════════════════╗[/bold cyan]\n"
-            "[bold cyan]║[/bold cyan]           [bold white]T R A C E[/bold white] — [dim]Forensic Data Acquisition & Case Engine[/dim]            [bold cyan]║[/bold cyan]\n"
-            "[bold cyan]╚═══════════════════════════════════════════════════════════════════════════════╝[/bold cyan]\n"
-            f" • [dim]Version:[/dim] [white]{settings.version}[/white]  |  [dim]Engine:[/dim] [green]Active[/green]\n"
-            " • [dim]Type[/dim] [bold yellow]help[/bold yellow] [dim]or[/dim] [bold yellow]?[/bold yellow] [dim]for command list, or[/dim] [bold yellow]exit[/bold yellow] [dim]to return to terminal.[/dim]"
+        """Display simplified startup banner with breathing room and clean status rules."""
+        logo = r"""
+   _____ ____      _    ____ _____ 
+  |_   _|  _ \    / \  / ___| ____|
+    | | | |_) |  / _ \| |   |  _|  
+    | | |  _ <  / ___ \ |___| |___ 
+    |_| |_| \_\/_/   \_\____|_____|"""
+
+        rule_char = get_rule_char()
+        rule_line = "  " + (rule_char * 50)
+
+        logo_text = Text(logo, style=THEME_TOKENS["accent"])
+        sub_text = Text(
+            f"  Forensic Data Acquisition & Case Engine · v{settings.version}\n",
+            style=THEME_TOKENS["muted"],
         )
-        console.print(banner_text)
+
+        try:
+            self._ensure_service()
+            db_label = Text.assemble(
+                ("Online ", THEME_TOKENS["success"]),
+                ("(Database)", THEME_TOKENS["muted"]),
+            )
+        except Exception:
+            db_label = Text("Offline / Standalone", style=THEME_TOKENS["danger"])
+
+        if self.active_case:
+            active_label = Text.assemble(
+                (self.active_case.number, THEME_TOKENS["accent"]),
+                (" · ", THEME_TOKENS["muted"]),
+                (self.active_case.title, THEME_TOKENS["value"]),
+            )
+        else:
+            active_label = Text("None (use 'case select' or 'case create')", style=THEME_TOKENS["muted"])
+
+        status_grid = create_key_value_grid(
+            [
+                ("Database", db_label),
+                ("Active Case", active_label),
+            ],
+            width=18,
+        )
+
+        console.print("")
+        console.print(logo_text)
+        console.print(sub_text)
+        console.print(Text(rule_line, style=THEME_TOKENS["border"]))
+        console.print(status_grid)
+        console.print(Text(rule_line, style=THEME_TOKENS["border"]))
+        console.print(Text("  Type help for commands · exit to quit\n", style=THEME_TOKENS["muted"]))
 
     def get_prompt_text(self) -> str:
         """Dynamic prompt reflecting active case context."""
@@ -118,343 +253,138 @@ class InteractiveShell:
                     continue
 
                 if raw_input.lower() in ("exit", "quit"):
-                    console.print("[dim]Exiting Trace. Stay secure.[/dim]")
+                    console.print("\n[dim italic]Exiting Trace console. Stay secure.[/dim italic]\n")
                     break
 
                 self.execute_line(raw_input)
             except KeyboardInterrupt:
-                console.print("\n[dim]Ctrl-C pressed. Type 'exit' to quit.[/dim]")
+                console.print("\n[dim]Ctrl-C pressed. Type 'exit' to quit Trace.[/dim]\n")
             except EOFError:
-                console.print("\n[dim]Exiting Trace.[/dim]")
+                console.print("\n[dim italic]Exiting Trace console.[/dim italic]\n")
                 break
             except Exception as e:
                 render_error_card("Execution Error", str(e))
 
+    def _handle_control_command(self, cmd: str) -> bool:
+        if cmd in ("help", "?"):
+            self.show_help()
+            return True
+        if cmd in ("clear", "cls"):
+            clear_cmd = "cls" if sys.platform == "win32" else "clear"
+            os.system(clear_cmd)
+            self.print_banner()
+            return True
+        if cmd == "status":
+            self.show_status()
+            return True
+        return False
+
+    def _handle_alias(self, line: str) -> bool:
+        alias_res = self.registry.resolve_alias(line)
+        if not alias_res:
+            return False
+        cmd, action, args = alias_res
+        handler = self.registry.get_handler(cmd)
+        if handler:
+            handler.execute(action, args, self.context)
+            return True
+        return False
+
+    def _handle_registered_command(self, tokens: list[str]) -> bool:
+        handler = self.registry.get_handler(tokens[0].lower())
+        if not handler:
+            return False
+        action = tokens[1].lower() if len(tokens) > 1 else ""
+        args = tokens[2:] if len(tokens) > 2 else []
+        if not action:
+            self.show_help()
+            return True
+        handler.execute(action, args, self.context)
+        return True
+
     def execute_line(self, line: str) -> None:
         """Parse and route an interactive command string."""
-        tokens = shlex.split(line)
+        clean_line = line.strip()
+        if not clean_line:
+            return
+
+        self._ensure_service()
+        tokens = shlex.split(clean_line)
         if not tokens:
             return
 
-        cmd = tokens[0].lower()
-        args = tokens[1:]
-
-        # Handle top-level utilities
-        if cmd in ("clear", "cls"):
-            console.clear()
-            self.print_banner()
+        if self._handle_control_command(tokens[0].lower()):
             return
-        if cmd in ("help", "?"):
-            self.show_help()
+        if self._handle_alias(clean_line):
             return
-        if cmd == "status":
-            self.show_status()
+        if self._handle_registered_command(tokens):
             return
 
-        # Canonicalize natural aliases
-        # e.g., 'create case' -> 'case create', 'list cases' -> 'case list'
-        if cmd in ("create", "list", "show", "edit", "close", "delete", "use") and args:
-            sub = args[0].lower()
-            if sub in ("case", "cases"):
-                cmd, tokens = "case", [cmd] + args[1:]
-                args = tokens
-
-        if cmd == "case":
-            self.handle_case_command(args)
-        else:
-            render_error_card(
-                "Unknown Command",
-                f"'{line}' is not a recognized command.",
-                "Type 'help' to see all available commands.",
-            )
+        render_error_card(
+            "Unknown Command",
+            f"Command '{clean_line}' is not recognized. Type 'help' for command list.",
+        )
 
     def show_help(self) -> None:
-        """Display clean command table."""
-        help_content = (
-            "[bold white]Available Commands:[/bold white]\n\n"
-            "  [bold cyan]case create[/bold cyan]            Launch interactive wizard to create a new case\n"
-            "  [bold cyan]case list[/bold cyan]              List cases (optional: --status OPEN|CLOSED|ALL, --search QUERY)\n"
-            "  [bold cyan]case show [ID|NUM][/bold cyan]       Display details of a case (defaults to active case)\n"
-            "  [bold cyan]case edit [ID|NUM][/bold cyan]       Update title, examiner, description, or notes\n"
-            "  [bold cyan]case close [ID|NUM][/bold cyan]      Close a case\n"
-            "  [bold cyan]case delete [ID|NUM][/bold cyan]     Soft-delete a case (or --purge for permanent removal)\n"
-            "  [bold cyan]case select <ID|NUM>[/bold cyan]   Set active case context\n"
-            "  [bold cyan]case deselect[/bold cyan]          Clear active case context\n"
-            "  [bold cyan]status[/bold cyan]                 Check database connection and session stats\n"
-            "  [bold cyan]clear[/bold cyan]                  Clear the screen and re-display header\n"
-            "  [bold cyan]exit[/bold cyan]                   Quit Trace shell\n\n"
-            "[dim]Note: Natural aliases are supported (e.g. 'create case', 'list cases', 'show case').[/dim]"
+        """Render clean 3-tier grouped command listing."""
+        console.print("")
+        console.print(Text("  Trace Command Manual\n", style=THEME_TOKENS["title"]))
+
+        # Registered feature commands
+        for handler in self.registry.all_handlers():
+            entries = handler.get_help_entries()
+            if entries:
+                console.print(Text(f"  {handler.command_name.capitalize()}", style=THEME_TOKENS["accent"]))
+                for syntax, alias, desc in entries:
+                    alias_str = f"({alias})" if alias else ""
+                    console.print(
+                        f"    [{THEME_TOKENS['value']}]{syntax:<36}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{alias_str:<16}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]{desc}[/{THEME_TOKENS['label']}]"
+                    )
+                console.print("")
+
+        # Global session commands
+        console.print(Text("  Console", style=THEME_TOKENS["accent"]))
+        console.print(
+            f"    [{THEME_TOKENS['value']}]{'status':<36}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{'':<16}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]Display system status and connection info[/{THEME_TOKENS['label']}]"
         )
         console.print(
-            Panel(
-                help_content,
-                title="[bold cyan]Trace Command Reference[/bold cyan]",
-                border_style="cyan",
-            )
+            f"    [{THEME_TOKENS['value']}]{'clear / cls':<36}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{'':<16}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]Clear console screen and re-render banner[/{THEME_TOKENS['label']}]"
         )
+        console.print(
+            f"    [{THEME_TOKENS['value']}]{'help / ?':<36}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{'':<16}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]Show this command manual[/{THEME_TOKENS['label']}]"
+        )
+        console.print(
+            f"    [{THEME_TOKENS['value']}]{'exit / quit':<36}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{'':<16}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]Exit the interactive shell[/{THEME_TOKENS['label']}]"
+        )
+        console.print("")
 
     def show_status(self) -> None:
-        """Display system and database connection status."""
+        """Display frameless system and connection diagnostics."""
         try:
             self._ensure_service()
-            db_status = "[bold green]Connected[/bold green]"
-        except Exception as e:
-            db_status = f"[bold red]Disconnected ({e})[/bold red]"
+            db_status = Text("Connected · Operational", style=THEME_TOKENS["success"])
+        except Exception:
+            db_status = Text("Disconnected", style=THEME_TOKENS["danger"])
 
-        active_case_str = self.active_case.number if self.active_case else "[dim]None[/dim]"
-        status_text = (
-            f"[bold cyan]Database:[/bold cyan]    {db_status}\n"
-            f"[bold cyan]Storage:[/bold cyan]     {settings.storage_root}\n"
-            f"[bold cyan]Active Case:[/bold cyan] {active_case_str}\n"
-            f"[bold cyan]Version:[/bold cyan]     {settings.version}"
-        )
-        console.print(Panel(status_text, title="[bold white]System Status[/bold white]", border_style="green"))
-
-    def handle_case_command(self, args: list[str]) -> None:
-        """Route subcommands for case management."""
-        if not args:
-            self.show_help()
-            return
-
-        action = args[0].lower()
-        sub_args = args[1:]
-
-        service = self._ensure_service()
-
-        if action == "create":
-            self._interactive_create_case(service)
-        elif action in ("list", "cases"):
-            self._interactive_list_cases(service, sub_args)
-        elif action == "show":
-            self._interactive_show_case(service, sub_args)
-        elif action == "edit":
-            self._interactive_edit_case(service, sub_args)
-        elif action == "close":
-            self._interactive_close_case(service, sub_args)
-        elif action == "delete":
-            self._interactive_delete_case(service, sub_args)
-        elif action in ("select", "use"):
-            self._select_case(service, sub_args)
-        elif action in ("deselect", "unuse"):
-            self.active_case = None
-            console.print("[dim]Active case context cleared.[/dim]")
-        else:
-            render_error_card(
-                "Unknown Case Action",
-                f"Action '{action}' is not valid. Type 'help' for command list.",
-            )
-
-    def _resolve_target_identifier(self, sub_args: list[str]) -> str | None:
-        """Determine target case identifier from args or active case context."""
-        for arg in sub_args:
-            if not arg.startswith("-"):
-                return arg
         if self.active_case:
-            return self.active_case.number
-        return None
-
-    def _interactive_create_case(self, service: CaseService) -> None:
-        """Guided wizard to create a new case."""
-        console.print("[bold cyan]─── Create New Case Wizard ───[/bold cyan]")
-        title = ""
-        while not title:
-            title = Prompt.ask("  [white]Case Title[/white]").strip()
-            if not title:
-                console.print("  [yellow]Case title cannot be empty.[/yellow]")
-
-        examiner = ""
-        while not examiner:
-            examiner = Prompt.ask("  [white]Lead Examiner[/white]").strip()
-            if not examiner:
-                console.print("  [yellow]Lead examiner cannot be empty.[/yellow]")
-
-        number = Prompt.ask("  [white]Case Number[/white] [dim](press Enter to auto-generate)[/dim]", default="")
-        description = Prompt.ask("  [white]Description[/white] [dim](optional)[/dim]", default="")
-        tags_raw = Prompt.ask("  [white]Tags (comma-separated)[/white] [dim](optional)[/dim]", default="")
-
-        tags = [t.strip() for t in tags_raw.split(",") if t.strip()] if tags_raw else []
-
-        dto = CaseCreateDto(
-            title=title,
-            lead_examiner=examiner,
-            number=number.strip() if number.strip() else None,
-            description=description.strip() if description.strip() else None,
-            tags=tags,
-        )
-
-        try:
-            created = service.create_case(dto)
-            self.active_case = created
-            console.print(f"\n[bold green][OK] Case '{created.number}' created and set as active context![/bold green]")
-            render_case_detail(created)
-        except DuplicateCaseNumberError as e:
-            render_error_card(
-                "Duplicate Case Number",
-                str(e),
-                "Choose a unique case number or leave empty to auto-generate.",
+            active_str = Text.assemble(
+                (self.active_case.number, THEME_TOKENS["accent"]),
+                (" · ", THEME_TOKENS["muted"]),
+                (self.active_case.title, THEME_TOKENS["value"]),
             )
-
-    def _interactive_list_cases(self, service: CaseService, sub_args: list[str]) -> None:
-        """List cases with optional filters."""
-        status_filter: CaseStatus | None = None
-        search_query: str | None = None
-        include_all = False
-        output_format = "table"
-
-        # Simple flag parser for interactive mode
-        idx = 0
-        while idx < len(sub_args):
-            arg = sub_args[idx]
-            if arg in ("--status", "-s") and idx + 1 < len(sub_args):
-                val = sub_args[idx + 1].upper()
-                if val != "ALL":
-                    try:
-                        status_filter = CaseStatus(val)
-                    except ValueError:
-                        pass
-                idx += 2
-            elif arg in ("--search", "-q") and idx + 1 < len(sub_args):
-                search_query = sub_args[idx + 1]
-                idx += 2
-            elif arg in ("--output", "-o") and idx + 1 < len(sub_args):
-                output_format = sub_args[idx + 1].lower()
-                idx += 2
-            elif arg in ("--all", "-a"):
-                include_all = True
-                idx += 1
-            else:
-                idx += 1
-
-        filter_dto = CaseFilterDto(
-            status=status_filter,
-            search=search_query,
-            include_deleted=include_all,
-        )
-        cases = service.list_cases(filter_dto)
-        if output_format == "json":
-            render_json(cases)
         else:
-            render_case_table(cases)
+            active_str = Text("None (No active case selected)", style=THEME_TOKENS["muted"])
 
-    def _interactive_show_case(self, service: CaseService, sub_args: list[str]) -> None:
-        """Display details of target case."""
-        output_format = "table"
-        idx = 0
-        while idx < len(sub_args):
-            if sub_args[idx] in ("--output", "-o") and idx + 1 < len(sub_args):
-                output_format = sub_args[idx + 1].lower()
-                idx += 2
-            else:
-                idx += 1
-
-        ident = self._resolve_target_identifier(sub_args)
-        if not ident:
-            ident = Prompt.ask("Enter Case Number or UUID")
-
-        try:
-            case = service.get_case(ident)
-            if output_format == "json":
-                render_json(case)
-            else:
-                render_case_detail(case)
-        except CaseNotFoundError as e:
-            render_error_card("Case Not Found", str(e), "Use 'case list' to see all cases.")
-
-    def _interactive_edit_case(self, service: CaseService, sub_args: list[str]) -> None:
-        """Edit mutable fields of target case."""
-        ident = self._resolve_target_identifier(sub_args)
-        if not ident:
-            ident = Prompt.ask("Enter Case Number or UUID to edit")
-
-        try:
-            case = service.get_case(ident)
-            console.print(f"[bold cyan]Editing Case '{case.number}' (leave blank to keep current value):[/bold cyan]")
-            new_title = Prompt.ask("  Title", default=case.title)
-            new_examiner = Prompt.ask("  Lead Examiner", default=case.lead_examiner)
-            new_desc = Prompt.ask("  Description", default=case.description or "")
-            new_notes = Prompt.ask("  Investigation Notes", default=case.notes or "")
-            new_tags = Prompt.ask(
-                "  Tags (comma-separated)",
-                default=", ".join(case.tags) if case.tags else "",
-            )
-
-            tag_list = [t.strip() for t in new_tags.split(",") if t.strip()] if new_tags else []
-
-            dto = CaseUpdateDto(
-                title=new_title,
-                lead_examiner=new_examiner,
-                description=new_desc if new_desc else None,
-                notes=new_notes if new_notes else None,
-                tags=tag_list,
-            )
-            updated = service.update_case(ident, dto)
-            if self.active_case and self.active_case.id == updated.id:
-                self.active_case = updated
-            console.print(f"[bold green][OK] Case '{updated.number}' updated successfully![/bold green]")
-            render_case_detail(updated)
-        except CaseNotFoundError as e:
-            render_error_card("Case Not Found", str(e))
-        except InvalidCaseStateError as e:
-            render_error_card("Invalid Operation", str(e))
-
-    def _interactive_close_case(self, service: CaseService, sub_args: list[str]) -> None:
-        """Close target case."""
-        ident = self._resolve_target_identifier(sub_args)
-        if not ident:
-            ident = Prompt.ask("Enter Case Number or UUID to close")
-
-        if not Confirm.ask(f"Are you sure you want to CLOSE case '{ident}'?"):
-            console.print("[dim]Action cancelled.[/dim]")
-            return
-
-        reason = Prompt.ask("Reason for closing (optional)", default="")
-        try:
-            closed = service.close_case(ident, reason=reason)
-            if self.active_case and self.active_case.id == closed.id:
-                self.active_case = closed
-            console.print(f"[bold green][OK] Case '{closed.number}' has been CLOSED.[/bold green]")
-        except CaseNotFoundError as e:
-            render_error_card("Case Not Found", str(e))
-        except InvalidCaseStateError as e:
-            render_error_card("Invalid State Transition", str(e))
-
-    def _interactive_delete_case(self, service: CaseService, sub_args: list[str]) -> None:
-        """Delete or archive target case."""
-        purge = "--purge" in sub_args
-        ident_args = [a for a in sub_args if a != "--purge"]
-        ident = self._resolve_target_identifier(ident_args)
-        if not ident:
-            ident = Prompt.ask("Enter Case Number or UUID to delete")
-
-        action_name = "PERMANENTLY PURGE" if purge else "archive (soft-delete)"
-        if not Confirm.ask(f"Are you sure you want to {action_name} case '{ident}'?"):
-            console.print("[dim]Action cancelled.[/dim]")
-            return
-
-        try:
-            target = service.get_case(ident)
-            service.delete_case(ident, purge=purge)
-            if self.active_case and self.active_case.id == target.id:
-                self.active_case = None
-            console.print(f"[bold green][OK] Case '{ident}' has been {action_name}d.[/bold green]")
-        except CaseNotFoundError as e:
-            render_error_card("Case Not Found", str(e))
-        except InvalidCaseStateError as e:
-            render_error_card("Invalid Operation", str(e))
-
-    def _select_case(self, service: CaseService, sub_args: list[str]) -> None:
-        """Select a case to become the active context."""
-        if not sub_args:
-            ident = Prompt.ask("Enter Case Number or UUID to select")
-        else:
-            ident = sub_args[0]
-
-        try:
-            case = service.get_case(ident)
-            self.active_case = case
-            console.print(f"[bold green][OK] Active case set to '{case.number}' ({case.title}).[/bold green]")
-        except CaseNotFoundError as e:
-            render_error_card("Case Not Found", str(e))
+        render_key_value_grid(
+            "System Status",
+            [
+                ("Database", db_status),
+                ("Storage", str(settings.storage_root)),
+                ("Active Case", active_str),
+                ("Version", settings.version),
+                ("Compliance", "UTC · Parameterized SQL · ISO 17025 Ready"),
+            ],
+        )
 
 
 def run_interactive_shell() -> None:

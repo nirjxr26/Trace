@@ -1,5 +1,5 @@
 # ==============================================================================
-# Trace (ForensiX) — Production .gitignore
+# Trace — Production .gitignore
 # ==============================================================================
 
 # --- Internal Documentation & Process Artifacts ---
@@ -19,6 +19,8 @@ process/
 credentials.json
 secrets.json
 auth.json
+*.local
+.python-version
 
 # --- Forensic Evidence, Disk Images & Acquisition Storage ---
 # Raw and bit-stream disk images
@@ -44,10 +46,13 @@ auth.json
 *.pcap
 *.pcapng
 *.cap
-# Local evidence storage directories
-storage/
-evidence/
-.trace/
+# Local evidence & case storage directories (root-only)
+/cases/
+/storage/
+/evidence/
+/.trace/
+/.test_storage/
+/test_storage/
 
 # --- Local Databases & Transitory State ---
 *.db
@@ -85,10 +90,18 @@ __pycache__/
 .ruff_cache/
 .hypothesis/
 .schemathesis/
+.tox/
+.nox/
+.benchmarks/
+.mutmut-cache/
 .coverage
 .coverage.*
 htmlcov/
 coverage.xml
+coverage.json
+junit/
+junit.xml
+reports/
 
 # --- Logs & Diagnostics ---
 *.log
@@ -110,9 +123,12 @@ $RECYCLE.BIN/
 ._*
 # Linux
 *~
-# IDEs & Editors
+# IDEs & AI Development Tools
 .idea/
 .vscode/
+.cursor/
+.windsurf/
+.aider*
 *.swp
 *.swo
 *.tmp

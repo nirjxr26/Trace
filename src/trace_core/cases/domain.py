@@ -1,0 +1,140 @@
+"""Case domain entity, status enum, and lifecycle state machine."""
+
+from datetime import UTC, datetime
+from enum import StrEnum
+
+from pydantic import ConfigDict, Field, field_validator, model_validator
+
+from trace_core.core.domain import BaseEntity, InvariantViolationError
+
+
+class CaseStatus(StrEnum):
+    """Lifecycle status of a forensic case."""
+
+    OPEN = "OPEN"
+    UNDER_REVIEW = "UNDER_REVIEW"
+    CLOSED = "CLOSED"
+    ARCHIVED = "ARCHIVED"
+
+
+class TransitionError(Exception):
+    """Raised when an illegal case lifecycle state transition is attempted."""
+
+    def __init__(self, current: CaseStatus, target: CaseStatus, reason: str = ""):
+        message = f"Illegal transition from {current.value} to {target.value}"
+        if reason:
+            message += f": {reason}"
+        super().__init__(message)
+        self.current = current
+        self.target = target
+        self.reason = reason
+
+
+_VALID_TRANSITIONS: dict[CaseStatus, set[CaseStatus]] = {
+    CaseStatus.OPEN: {CaseStatus.UNDER_REVIEW, CaseStatus.CLOSED, CaseStatus.ARCHIVED},
+    CaseStatus.UNDER_REVIEW: {CaseStatus.OPEN, CaseStatus.CLOSED, CaseStatus.ARCHIVED},
+    CaseStatus.CLOSED: {CaseStatus.OPEN, CaseStatus.ARCHIVED},
+    CaseStatus.ARCHIVED: {CaseStatus.OPEN},
+}
+
+
+def can_transition(current: CaseStatus, target: CaseStatus) -> bool:
+    """Check if transition between statuses is allowed."""
+    return target in _VALID_TRANSITIONS.get(current, set())
+
+
+def transition_case(case: "Case", target: CaseStatus, reason: str = "") -> "Case":
+    """
+    Transition a Case entity to a new status.
+    Mutates case status and timestamps, returns the mutated case.
+    Raises TransitionError if transition is disallowed.
+    """
+    if case.status == target:
+        return case
+
+    if not can_transition(case.status, target):
+        raise TransitionError(case.status, target, reason)
+
+    now = datetime.now(UTC)
+
+    if target == CaseStatus.CLOSED:
+        case.status = CaseStatus.CLOSED
+        case.closed_at = now
+    elif target == CaseStatus.OPEN:
+        case.closed_at = None
+        case.status = CaseStatus.OPEN
+    else:
+        case.status = target
+
+    case.updated_at = now
+    return case
+
+
+class Case(BaseEntity):
+    """Domain entity representing a forensic case."""
+
+    number: str = Field(..., min_length=1, max_length=100, description="Unique human-readable case identifier")
+    title: str = Field(..., min_length=1, max_length=255, description="Brief descriptive title")
+    lead_examiner: str = Field(..., min_length=1, max_length=255, description="Primary investigator identifier/name")
+    status: CaseStatus = Field(default=CaseStatus.OPEN)
+    closed_at: datetime | None = None
+    description: str | None = None
+    notes: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(
+        frozen=False,
+        validate_assignment=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_lifecycle_consistency(self) -> "Case":
+        """Enforce domain invariant: OPEN cases must not have closed_at set."""
+        if self.status == CaseStatus.OPEN and self.closed_at is not None:
+            raise InvariantViolationError("An OPEN case cannot have a closed_at timestamp.")
+        return self
+
+    @field_validator("closed_at")
+    @classmethod
+    def validate_closed_at_utc(cls, v: datetime | None) -> datetime | None:
+        """Validate that closed_at is UTC if present."""
+        if v is None:
+            return None
+        if v.tzinfo is None or v.tzinfo.utcoffset(v) is None:
+            raise InvariantViolationError("All timestamps must be timezone-aware UTC.")
+        return v
+
+    @field_validator("number")
+    @classmethod
+    def validate_number(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise InvariantViolationError("Case number cannot be empty.")
+        return stripped
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise InvariantViolationError("Case title cannot be empty.")
+        return stripped
+
+    @field_validator("lead_examiner")
+    @classmethod
+    def validate_examiner(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise InvariantViolationError("Lead examiner cannot be empty.")
+        return stripped
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: list[str]) -> list[str]:
+        """Strip whitespace, discard empty tags, and deduplicate."""
+        cleaned: list[str] = []
+        for tag in v:
+            stripped = tag.strip()
+            if stripped and stripped not in cleaned:
+                cleaned.append(stripped)
+        return cleaned

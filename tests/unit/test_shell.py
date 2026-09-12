@@ -1,16 +1,15 @@
 """Unit tests for interactive console shell dispatching."""
 
-from trace_core.adapters.db.session import DatabaseSessionManager
-from trace_core.application.cases import CaseService
-from trace_core.application.dto import CaseCreateDto
+import pytest
+
+from trace_core.cases.dto import CaseCreateDto
+from trace_core.cases.service import CaseService
 from trace_core.cli.shell import InteractiveShell
 
+pytestmark = pytest.mark.unit
 
-def test_shell_line_execution_and_aliases() -> None:
-    session_mgr = DatabaseSessionManager("sqlite:///:memory:")
-    session_mgr.init_schema()
-    service = CaseService(session_mgr)
 
+def test_shell_line_execution_and_aliases(service: CaseService) -> None:
     shell = InteractiveShell()
     shell.service = service
 
@@ -48,3 +47,63 @@ def test_shell_line_execution_and_aliases() -> None:
     shell.execute_line("case deselect")
     assert shell.active_case is None
     assert shell.get_prompt_text() == "trace> "
+
+
+def test_shell_autocompletion_and_suggestions(service: CaseService) -> None:
+    from prompt_toolkit.document import Document
+
+    shell = InteractiveShell(service=service)
+    service.create_case(
+        CaseCreateDto(
+            number="2026-SH-0002",
+            title="Auto Suggestion Test",
+            lead_examiner="Investigator Suggest",
+        )
+    )
+
+    # 1. Root command completion
+    doc_root = Document("c")
+    completions = [c.text for c in shell.completer.get_completions(doc_root, None)]
+    assert "case" in completions
+    assert "clear" in completions
+
+    # 2. Subcommand completion for "case "
+    doc_sub = Document("case ")
+    sub_completions = [c.text for c in shell.completer.get_completions(doc_sub, None)]
+    assert "create" in sub_completions
+    assert "list" in sub_completions
+    assert "show" in sub_completions
+
+    # 3. Specific prefix completion for "case l"
+    doc_prefix = Document("case l")
+    prefix_completions = [c.text for c in shell.completer.get_completions(doc_prefix, None)]
+    assert prefix_completions == ["list"]
+
+    # 4. Flag completion for "case list "
+    doc_flags = Document("case list ")
+    flag_completions = [c.text for c in shell.completer.get_completions(doc_flags, None)]
+    assert "--status" in flag_completions
+    assert "--search" in flag_completions
+
+    # 5. Status enum values
+    doc_status = Document("case list --status ")
+    status_completions = [c.text for c in shell.completer.get_completions(doc_status, None)]
+    assert "OPEN" in status_completions
+    assert "CLOSED" in status_completions
+
+    # 6. Candidate case number completion
+    doc_show = Document("case show ")
+    case_completions = [c.text for c in shell.completer.get_completions(doc_show, None)]
+    assert "2026-SH-0002" in case_completions
+
+    # 7. AutoSuggest
+    from trace_core.cli.shell import TraceAutoSuggest
+
+    suggester = TraceAutoSuggest(shell)
+    sug_c = suggester.get_suggestion(None, Document("c"))
+    assert sug_c is not None
+    assert sug_c.text == "ase list"
+
+    sug_case = suggester.get_suggestion(None, Document("case "))
+    assert sug_case is not None
+    assert sug_case.text == "list"

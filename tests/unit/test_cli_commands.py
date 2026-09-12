@@ -1,8 +1,10 @@
 import pytest
 from typer.testing import CliRunner
 
-from trace_core.adapters.db.session import DatabaseSessionManager
 from trace_core.cli.main import app
+from trace_core.core.database.session import DatabaseSessionManager
+
+pytestmark = pytest.mark.unit
 
 runner = CliRunner()
 
@@ -11,7 +13,7 @@ runner = CliRunner()
 def isolated_db(monkeypatch: pytest.MonkeyPatch) -> None:
     session_mgr = DatabaseSessionManager("sqlite:///:memory:")
     session_mgr.init_schema()
-    monkeypatch.setattr("trace_core.cli.commands.case.db_manager", session_mgr)
+    monkeypatch.setattr("trace_core.cases.commands.db_manager", session_mgr)
 
 
 def test_cli_version() -> None:
@@ -71,3 +73,17 @@ def test_cli_case_crud_flow() -> None:
     res_del = runner.invoke(app, ["case", "delete", "2026-CLI-0001", "--purge", "--yes"])
     assert res_del.exit_code == 0
     assert "PERMANENTLY PURGEd" in res_del.stdout
+
+    # 8. Querying non-existent case exits with NOT_FOUND
+    res_missing = runner.invoke(app, ["case", "show", "NON-EXISTENT-CASE"])
+    assert res_missing.exit_code != 0
+    assert "Case Not Found" in res_missing.stdout
+
+
+def test_capture_cli_errors_shell_mode() -> None:
+    from trace_core.core.cli.error_handler import capture_cli_errors
+    from trace_core.core.errors import NotFoundError
+
+    # In shell mode (exit_on_error=False), should NOT raise typer.Exit
+    with capture_cli_errors("Test Op", exit_on_error=False):
+        raise NotFoundError("Evidence", "EVID-001")

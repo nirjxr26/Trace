@@ -2,8 +2,9 @@
 
 import pytest
 
-from trace_core.domain.models.case import Case, CaseStatus
-from trace_core.domain.state_machines.case import TransitionError, can_transition, transition_case
+from trace_core.cases.domain import Case, CaseStatus, TransitionError, can_transition, transition_case
+
+pytestmark = pytest.mark.unit
 
 
 def test_valid_transitions() -> None:

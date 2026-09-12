@@ -4,7 +4,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from trace_core.domain.models.case import Case, CaseStatus
+from trace_core.cases.domain import Case, CaseStatus
+
+pytestmark = pytest.mark.unit
 
 
 def test_case_creation_valid() -> None:
