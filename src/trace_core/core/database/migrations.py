@@ -92,11 +92,119 @@ def _migration_003_case_sequences(bind: Engine | Connection) -> None:
         Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables["case_sequences"]])
 
 
+@register_migration(4, "004_add_archived_by_column")
+def _migration_004_archived_by(bind: Engine | Connection) -> None:
+    """Backfill archived_by for databases that applied 002 before it existed."""
+    inspector = inspect(bind)
+    if "cases" not in inspector.get_table_names():
+        return
+    ddl = "ALTER TABLE cases ADD COLUMN archived_by VARCHAR(255)"
+    if isinstance(bind, Connection):
+        _ensure_column(bind, "cases", "archived_by", ddl)
+    else:
+        with bind.begin() as conn:
+            _ensure_column(conn, "cases", "archived_by", ddl)
+
+
+@register_migration(5, "005_create_audit_ledger")
+def _migration_005_audit(bind: Engine | Connection) -> None:
+    """Create tamper-evident audit ledger and serialized chain head."""
+    import trace_core.audit.models  # noqa: F401
+
+    Base.metadata.create_all(
+        bind=bind,
+        tables=[
+            Base.metadata.tables["audit_chain_state"],
+            Base.metadata.tables["audit_events"],
+        ],
+    )
+
+    if isinstance(bind, Connection):
+        _seed_audit_chain_state(bind)
+        _install_sqlite_audit_triggers(bind)
+
+
+@register_migration(6, "006_add_case_checks")
+def _migration_006_case_checks(bind: Engine | Connection) -> None:
+    """Add forensic CHECKs for status/version. Idempotent, best-effort on SQLite."""
+
+    def _try(conn: Connection, ddl: str) -> None:
+        try:
+            conn.execute(text(ddl))
+        except Exception:
+            pass
+
+    if isinstance(bind, Connection):
+        _try(bind, "ALTER TABLE cases ADD CHECK (status IN ('OPEN','UNDER_REVIEW','CLOSED'))")
+        _try(bind, "ALTER TABLE cases ADD CHECK (version >= 1)")
+    else:
+        with bind.begin() as conn:
+            _try(conn, "ALTER TABLE cases ADD CHECK (status IN ('OPEN','UNDER_REVIEW','CLOSED'))")
+            _try(conn, "ALTER TABLE cases ADD CHECK (version >= 1)")
+
+
+@register_migration(7, "007_add_perf_indexes")
+def _migration_007_perf_indexes(bind: Engine | Connection) -> None:
+    """Add perf indexes for audit case+seq and cases examiner. Idempotent."""
+
+    def _try_idx(conn: Connection, ddl: str) -> None:
+        try:
+            conn.execute(text(ddl))
+        except Exception:
+            pass
+
+    idx_cases = "CREATE INDEX IF NOT EXISTS idx_cases_lead_examiner_is_deleted ON cases (lead_examiner, is_deleted)"
+    idx_audit = "CREATE INDEX IF NOT EXISTS idx_audit_case_seq ON audit_events (subject_case_number, seq DESC)"
+    if isinstance(bind, Connection):
+        if "cases" in inspect(bind).get_table_names():
+            _try_idx(bind, idx_cases)
+        if "audit_events" in inspect(bind).get_table_names():
+            _try_idx(bind, idx_audit)
+    else:
+        with bind.begin() as conn:
+            tables = inspect(conn).get_table_names()
+            if "cases" in tables:
+                _try_idx(conn, idx_cases)
+            if "audit_events" in tables:
+                _try_idx(conn, idx_audit)
+
+
+def _seed_audit_chain_state(conn: Connection) -> None:
+    """Seed the chain head when it does not already exist."""
+    row = conn.execute(text("SELECT id FROM audit_chain_state WHERE id=1")).fetchone()
+    if row:
+        return
+    conn.execute(
+        text("INSERT INTO audit_chain_state (id, last_seq, last_chain_hash) VALUES (1, 0, :h)"),
+        {"h": "0" * 64},
+    )
+
+
+def _install_sqlite_audit_triggers(conn: Connection) -> None:
+    """Install append-only audit triggers for SQLite connections."""
+    if conn.dialect.name != "sqlite":
+        return
+    for ddl in (
+        "DROP TRIGGER IF EXISTS audit_events_no_update",
+        "DROP TRIGGER IF EXISTS audit_events_no_delete",
+        "CREATE TRIGGER audit_events_no_update BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END",
+        "CREATE TRIGGER audit_events_no_delete BEFORE DELETE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END",
+    ):
+        try:
+            conn.execute(text(ddl))
+        except Exception:
+            pass
+
+
 def _migration_checksum(name: str) -> str:
     """Compute stable checksum for migration bookkeeping."""
     import hashlib
 
     return hashlib.sha256(name.encode("utf-8")).hexdigest()
+
+
+def _index_exists(conn: Connection, table: str, index: str) -> bool:
+    return any(idx["name"] == index for idx in inspect(conn).get_indexes(table))
 
 
 def _column_names(conn: Connection, table: str) -> set[str]:

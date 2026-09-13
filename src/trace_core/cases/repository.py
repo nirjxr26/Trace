@@ -29,12 +29,13 @@ class CaseRepository(Protocol):
         include_deleted: bool = False,
         limit: int | None = None,
         offset: int | None = None,
+        recent: bool = False,
     ) -> list[Case]: ...
     def update(self, entity: Case) -> Case: ...
     def delete(self, entity_id: uuid.UUID, purge: bool = False) -> bool: ...
-    def soft_delete(self, case_id: uuid.UUID, archived_by: str | None = None) -> bool: ...
-    def restore(self, case_id: uuid.UUID) -> bool: ...
-    def purge(self, case_id: uuid.UUID) -> bool: ...
+    def soft_delete(self, case_id: uuid.UUID, expected_version: int, archived_by: str | None = None) -> bool: ...
+    def restore(self, case_id: uuid.UUID, expected_version: int) -> bool: ...
+    def purge(self, case_id: uuid.UUID, expected_version: int) -> bool: ...
     def get_next_sequence_number(self, year: int | None = None) -> str: ...
     def exists(self, entity_id: uuid.UUID) -> bool: ...
     def count(self, include_deleted: bool = False) -> int: ...
@@ -128,6 +129,7 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         include_deleted: bool = False,
         limit: int | None = None,
         offset: int | None = None,
+        recent: bool = False,
     ) -> list[Case]:
         """List cases with search, status filters, deterministic sorting, and pagination."""
         stmt = select(CaseModel)
@@ -151,7 +153,10 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
                 )
             )
 
-        stmt = stmt.order_by(CaseModel.opened_at.desc(), CaseModel.id.asc())
+        if recent:
+            stmt = stmt.order_by(CaseModel.updated_at.desc(), CaseModel.id.asc())
+        else:
+            stmt = stmt.order_by(CaseModel.opened_at.desc(), CaseModel.id.asc())
 
         if offset is not None:
             stmt = stmt.offset(offset)
@@ -161,43 +166,78 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         models = self.session.scalars(stmt).all()
         return [self._to_domain(m) for m in models]
 
-    def soft_delete(self, case_id: uuid.UUID, archived_by: str | None = None) -> bool:
+    def soft_delete(self, case_id: uuid.UUID, expected_version: int, archived_by: str | None = None) -> bool:
         """Mark a case as archived/deleted without corrupting investigation status."""
         stmt = select(CaseModel).where(CaseModel.id == case_id)
         model = self.session.scalar(stmt)
         if not model:
             return False
 
+        if model.version != expected_version:
+            raise ConcurrencyConflictError(
+                resource_type="Case",
+                identifier=str(model.number),
+                expected_version=expected_version,
+                actual_version=model.version,
+            )
+
         model.is_deleted = True
         model.archived_at = now_utc()
         model.archived_by = archived_by
+        model.version += 1
         model.updated_at = now_utc()
         self.session.flush()
         return True
 
-    def restore(self, case_id: uuid.UUID) -> bool:
+    def restore(self, case_id: uuid.UUID, expected_version: int) -> bool:
         """Restore an archived case back to active retention."""
         stmt = select(CaseModel).where(CaseModel.id == case_id)
         model = self.session.scalar(stmt)
         if not model:
             return False
 
+        if model.version != expected_version:
+            raise ConcurrencyConflictError(
+                resource_type="Case",
+                identifier=str(model.number),
+                expected_version=expected_version,
+                actual_version=model.version,
+            )
+
         model.is_deleted = False
         model.archived_at = None
         model.archived_by = None
+        model.version += 1
         model.updated_at = now_utc()
         self.session.flush()
         return True
 
-    def purge(self, case_id: uuid.UUID) -> bool:
+    def purge(self, case_id: uuid.UUID, expected_version: int) -> bool:
         """Permanently delete a case record."""
-        return super().delete(case_id, purge=True)
+        stmt = select(CaseModel).where(CaseModel.id == case_id)
+        model = self.session.scalar(stmt)
+        if not model:
+            return False
 
-    def delete(self, entity_id: uuid.UUID, purge: bool = False) -> bool:
-        """Delete case entity. If not purge, delegate to soft_delete."""
+        if model.version != expected_version:
+            raise ConcurrencyConflictError(
+                resource_type="Case",
+                identifier=str(model.number),
+                expected_version=expected_version,
+                actual_version=model.version,
+            )
+
+        self.session.delete(model)
+        self.session.flush()
+        return True
+
+    def delete(self, entity_id: uuid.UUID, purge: bool = False, expected_version: int | None = None) -> bool:  # type: ignore[override]
+        """Delete case entity. Forensic path requires OCC version."""
+        if expected_version is None:
+            raise ValueError("expected_version is required for forensic delete")
         if purge:
-            return self.purge(entity_id)
-        return self.soft_delete(entity_id)
+            return self.purge(entity_id, expected_version=expected_version)
+        return self.soft_delete(entity_id, expected_version=expected_version)
 
     def update(self, entity: Case) -> Case:
         """Update case entity with optimistic concurrency checking."""

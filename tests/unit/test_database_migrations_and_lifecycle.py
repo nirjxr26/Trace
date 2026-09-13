@@ -4,6 +4,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+import sqlalchemy
 from typer.testing import CliRunner
 
 from trace_core.cli.main import app
@@ -73,6 +74,30 @@ def test_migrations_tracking_and_idempotency() -> None:
     # Applying again should be a no-op
     applied_second = apply_migrations(mgr.engine)
     assert len(applied_second) == 0
+
+
+def test_migration_004_backfills_archived_by_on_old_database() -> None:
+    """Reproduce stale-schema failure: DB migrated before archived_by existed must self-heal."""
+
+    from trace_core.cases.service import CaseService
+
+    mgr = DatabaseSessionManager("sqlite:///:memory:")
+    apply_migrations(mgr.engine)
+
+    # Simulate a database migrated before archived_by existed.
+    with mgr.engine.begin() as conn:
+        conn.execute(sqlalchemy.text("ALTER TABLE cases DROP COLUMN archived_by"))
+        conn.execute(sqlalchemy.text("DELETE FROM schema_migrations WHERE version = 4"))
+
+    # Stale schema breaks reads touching the new column (the reported `case list` failure).
+    service = CaseService(mgr)
+    with pytest.raises(sqlalchemy.exc.OperationalError):
+        service.list_cases()
+
+    # Pending migration heals the schema; reads work again.
+    assert (4, "004_add_archived_by_column") in get_pending_migrations(mgr.engine)
+    assert apply_migrations(mgr.engine) == ["004_add_archived_by_column"]
+    assert service.list_cases() == []
 
 
 def test_unit_of_work_transaction_and_hooks() -> None:

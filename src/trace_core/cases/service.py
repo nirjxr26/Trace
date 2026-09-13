@@ -1,6 +1,7 @@
 """Case application service managing Case lifecycle, numbering, and transactions."""
 
 import uuid
+from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 
@@ -64,6 +65,13 @@ def _require_case(repo: SqlAlchemyCaseRepository, identifier: str) -> Case:
     return case
 
 
+def _record_audit(session: Any, builder_tuple: tuple[Any, Any, dict[str, Any], Any], actor: str) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.audit.service import AuditService
+
+    action, subject, details, ctx = builder_tuple
+    AuditService().record(session, action, subject, actor, details, ctx)
+
+
 class CaseService(BaseService):
     """Application service for managing Case lifecycle and queries."""
 
@@ -72,7 +80,7 @@ class CaseService(BaseService):
 
     def create_case(self, dto: CaseCreateDto, actor: str | None = None) -> CaseResponseDto:
         """Create and persist a new forensic case."""
-        _ = _resolve_actor(actor, dto.lead_examiner)
+        resolved_actor = _resolve_actor(actor, dto.lead_examiner)
         with self.transaction() as uow:
             repo = SqlAlchemyCaseRepository(uow.session)
 
@@ -96,6 +104,17 @@ class CaseService(BaseService):
 
             try:
                 created = repo.create(case_entity)
+
+                def _audit(s: Any) -> None:
+                    from trace_core.audit.builder import for_case_created
+
+                    _record_audit(
+                        s,
+                        for_case_created(created.number, created.id, created.title, created.lead_examiner),
+                        resolved_actor,
+                    )
+
+                uow.before_commit(_audit)
                 return CaseResponseDto.from_domain(created)
             except IntegrityError as e:
                 err_msg = str(e).lower()
@@ -120,15 +139,18 @@ class CaseService(BaseService):
                 include_deleted=query_filter.include_deleted,
                 limit=query_filter.limit,
                 offset=query_filter.offset,
+                recent=query_filter.recent,
             )
             return [CaseResponseDto.from_domain(c) for c in cases]
 
-    def update_case(self, identifier: str, dto: CaseUpdateDto, actor: str | None = None) -> CaseResponseDto:
+    def update_case(
+        self, identifier: str, dto: CaseUpdateDto, actor: str | None = None, reason: str = ""
+    ) -> CaseResponseDto:
         """Update mutable fields of an existing case."""
-        _ = _resolve_actor(actor, "system")
         with self.transaction() as uow:
             repo = SqlAlchemyCaseRepository(uow.session)
             case = _require_case(repo, identifier)
+            resolved_actor = _resolve_actor(actor, case.lead_examiner)
 
             if case.is_deleted:
                 raise InvalidCaseStateError(f"Cannot update soft-deleted or archived case '{identifier}'.")
@@ -138,19 +160,54 @@ class CaseService(BaseService):
                     f"Cannot update closed case '{identifier}'. Reopen the case before making changes."
                 )
 
-            # Update mutable fields
-            if dto.title is not None:
+            # snapshot before for 5W1H diff
+            before: dict[str, Any] = {
+                "title": case.title,
+                "lead_examiner": case.lead_examiner,
+                "description": case.description,
+                "notes": case.notes,
+                "tags": list(case.tags),
+            }
+            changed: list[str] = []
+            if dto.title is not None and dto.title != case.title:
+                changed.append("title")
                 case.title = dto.title
-            if dto.lead_examiner is not None:
+            if dto.lead_examiner is not None and dto.lead_examiner != case.lead_examiner:
+                changed.append("lead_examiner")
                 case.lead_examiner = dto.lead_examiner
-            if dto.description is not None:
+            if dto.description is not None and dto.description != case.description:
+                changed.append("description")
                 case.description = dto.description
-            if dto.notes is not None:
+            if dto.notes is not None and dto.notes != case.notes:
+                changed.append("notes")
                 case.notes = dto.notes
-            if dto.tags is not None:
+            if dto.tags is not None and dto.tags != case.tags:
+                changed.append("tags")
                 case.tags = dto.tags
 
+            if not changed:
+                return CaseResponseDto.from_domain(case)
+
+            after: dict[str, Any] = {
+                "title": case.title,
+                "lead_examiner": case.lead_examiner,
+                "description": case.description,
+                "notes": case.notes,
+                "tags": list(case.tags),
+            }
+            # keep minimal 5W1H reason — V1 edit has no explicit reason flag, store empty
             updated = repo.update(case)
+
+            def _audit(s: Any) -> None:
+                from trace_core.audit.builder import for_case_updated
+
+                _record_audit(
+                    s,
+                    for_case_updated(updated.number, updated.id, changed, before, after, reason=reason),
+                    resolved_actor,
+                )
+
+            uow.before_commit(_audit)
             return CaseResponseDto.from_domain(updated)
 
     def close_case(
@@ -174,6 +231,40 @@ class CaseService(BaseService):
                 raise InvalidCaseStateError(str(e)) from e
 
             updated = repo.update(case)
+
+            def _audit(s: Any) -> None:
+                from trace_core.audit.builder import for_case_closed
+
+                _record_audit(s, for_case_closed(updated.number, updated.id, reason, examiner), examiner)
+
+            def _anchor() -> None:
+                try:
+                    import json
+                    from pathlib import Path
+
+                    from trace_core.audit.service import AuditService
+                    from trace_core.core.clock import now_utc
+                    from trace_core.core.settings import settings
+
+                    audit_svc = AuditService(self.session_manager)
+                    events = audit_svc.list_events()
+                    if events:
+                        last = events[0]
+                        anchor = {
+                            "case": updated.number,
+                            "last_seq": last.seq,
+                            "last_chain": last.chain_hash,
+                            "anchored_at": now_utc().isoformat().replace("+00:00", "Z"),
+                            "spec": "trace-audit-v1",
+                        }
+                        path = Path(settings.storage_root) / "anchors" / f"anchor-{updated.number}-{last.seq}.json"
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text(json.dumps(anchor, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+
+            uow.before_commit(_audit)
+            uow.on_commit(_anchor)
             return CaseResponseDto.from_domain(updated)
 
     def delete_case(self, identifier: str, purge: bool = False, actor: str | None = None) -> bool:
@@ -195,21 +286,46 @@ class CaseService(BaseService):
                     raise InvalidCaseStateError(
                         f"Forensic safety violation: Case '{identifier}' must be archived before it can be purged."
                     )
-                return repo.purge(case.id)
-            return repo.soft_delete(case.id, archived_by=resolved_actor)
+                purged_number = case.number
+                purged_id = case.id
+                result = repo.purge(case.id, expected_version=case.version)
+
+                def _audit(s: Any) -> None:
+                    from trace_core.audit.builder import for_case_purged
+
+                    _record_audit(s, for_case_purged(purged_number, purged_id), resolved_actor)
+
+                uow.before_commit(_audit)
+                return result
+            result = repo.soft_delete(case.id, expected_version=case.version, archived_by=resolved_actor)
+
+            def _audit2(s: Any) -> None:
+                from trace_core.audit.builder import for_case_archived
+
+                _record_audit(s, for_case_archived(case.number, case.id), resolved_actor)
+
+            uow.before_commit(_audit2)
+            return result
 
     def restore_case(self, identifier: str, actor: str | None = None) -> CaseResponseDto:
         """Restore an archived case back to active retention."""
-        _ = _resolve_actor(actor, "system")
         with self.transaction() as uow:
             repo = SqlAlchemyCaseRepository(uow.session)
             case = _require_case(repo, identifier)
+            resolved_actor = _resolve_actor(actor, case.lead_examiner)
 
             if not case.is_deleted:
                 raise InvalidCaseStateError(f"Case '{identifier}' is not archived.")
 
-            repo.restore(case.id)
+            repo.restore(case.id, expected_version=case.version)
             restored = repo.resolve(identifier)
             if not restored:
                 raise CaseNotFoundError(identifier)
+
+            def _audit(s: Any) -> None:
+                from trace_core.audit.builder import for_case_restored
+
+                _record_audit(s, for_case_restored(restored.number, restored.id), resolved_actor)
+
+            uow.before_commit(_audit)
             return CaseResponseDto.from_domain(restored)

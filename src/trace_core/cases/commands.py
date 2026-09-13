@@ -83,6 +83,7 @@ def list_cases(
     ),
     output: str = typer.Option("table", "--output", "-o", help="Output format: table or json"),
     all_cases: bool = typer.Option(False, "--all", "-a", help="Include soft-deleted / archived cases"),
+    recent: bool = typer.Option(False, "--recent", help="Show 5 most recently updated cases"),
 ) -> None:
     """List forensic cases matching search and status criteria."""
     with capture_cli_errors(
@@ -99,11 +100,14 @@ def list_cases(
             )
             raise typer.Exit(EXIT_ERROR)
 
-        filter_dto = CaseFilterDto(
-            status=case_status,
-            search=search,
-            include_deleted=include_deleted,
-        )
+        if recent:
+            filter_dto = CaseFilterDto(include_deleted=include_deleted, limit=5, offset=0, recent=True)
+        else:
+            filter_dto = CaseFilterDto(
+                status=case_status,
+                search=search,
+                include_deleted=include_deleted,
+            )
 
         cases = service.list_cases(filter_dto)
         render_cases(cases, output)
@@ -129,6 +133,7 @@ def edit_case(
     description: str = typer.Option(None, "--desc", "-d", help="Updated description"),
     notes: str = typer.Option(None, "--notes", help="Updated investigation notes"),
     tags: str = typer.Option(None, "--tags", help="Comma-separated tags to overwrite"),
+    reason: str = typer.Option("", "--reason", "-r", help="Reason for the edit (why)"),
 ) -> None:
     """Update mutable metadata of a case."""
     with capture_cli_errors("Case Update Failed"):
@@ -146,7 +151,7 @@ def edit_case(
             notes=notes,
             tags=tag_list,
         )
-        updated = service.update_case(identifier, dto)
+        updated = service.update_case(identifier, dto, reason=reason)
         console.print(f"[bold green][OK] Case '{updated.number}' updated successfully![/bold green]")
         render_case_detail(updated)
 
@@ -163,7 +168,10 @@ def close_case(
     """Close and permanently seal a forensic case."""
     with capture_cli_errors("Case Closure Failed"):
         if not force:
-            _confirm_or_exit(f"Are you sure you want to seal & close case '{identifier}'?")
+            typed = Prompt.ask(f"Type case number '{identifier}' to confirm close")
+            if typed.strip() != identifier.strip():
+                console.print("[dim]Close cancelled (mismatch).[/dim]")
+                raise typer.Exit(EXIT_SUCCESS)
 
         service = _get_service()
         closed = service.close_case(identifier, reason=reason, closed_by=closed_by, actor=closed_by)
@@ -181,7 +189,13 @@ def delete_case(
     with capture_cli_errors("Case Deletion Failed"):
         action_name = "PERMANENTLY PURGE" if purge else "archive/soft-delete"
         if not force:
-            _confirm_or_exit(f"Are you sure you want to {action_name} case '{identifier}'?")
+            if purge:
+                typed = Prompt.ask(f"Type case number '{identifier}' to confirm purge")
+                if typed.strip() != identifier.strip():
+                    console.print("[dim]Purge cancelled (mismatch).[/dim]")
+                    raise typer.Exit(EXIT_SUCCESS)
+            else:
+                _confirm_or_exit(f"Are you sure you want to {action_name} case '{identifier}'?")
 
         service = _get_service()
         success = service.delete_case(identifier, purge=purge)

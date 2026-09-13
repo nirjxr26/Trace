@@ -59,7 +59,19 @@ class TraceAutoSuggest(AutoSuggest):
         return None
 
     def _suggest_from_defaults(self, text: str) -> Suggestion | None:
-        for cmd in self.default_suggestions:
+        # context-aware: active case → most logical next is case show / audit show
+        if self.shell.active_case and not text:
+            return Suggestion("case show")
+        # rank: active-aware defaults first
+        ranked = []
+        if self.shell.active_case:
+            ranked = [
+                "case show",
+                f"audit show --case {self.shell.active_case.number}",
+                "case edit",
+                "case list",
+            ]
+        for cmd in ranked + self.default_suggestions:
             if cmd.startswith(text) and len(cmd) > len(text):
                 return Suggestion(cmd[len(text) :])
         return None
@@ -77,6 +89,10 @@ class TraceAutoSuggest(AutoSuggest):
             )
             if any(text == p for p in case_prefixes):
                 return Suggestion(active_num)
+        if text.startswith("audit show") and self.shell.active_case and "--case" not in text:
+            # ghost: audit show → audit show --case <active>
+            if text.strip() == "audit show":
+                return Suggestion(f" --case {self.shell.active_case.number}")
         return None
 
     def get_suggestion(self, buffer: Any, document: Any) -> Suggestion | None:
@@ -85,7 +101,8 @@ class TraceAutoSuggest(AutoSuggest):
 
         text = document.text.lstrip()
         if not text:
-            return None
+            # ghost most logical next based on context
+            return self._suggest_from_defaults(text)
 
         return self._suggest_from_defaults(text) or self._suggest_from_active_case(text)
 
@@ -101,8 +118,11 @@ class TraceShellCompleter(Completer):
         word = document.get_word_before_cursor()
 
         if " " not in text:
+            from trace_core.core.cli.completion import filter_completions
+
             root_options = [
                 ("case", "Forensic case management commands"),
+                ("audit", "Audit ledger commands"),
                 ("status", "Display system & database status"),
                 ("clear", "Clear screen & re-render banner"),
                 ("cls", "Clear screen & re-render banner"),
@@ -121,10 +141,25 @@ class TraceShellCompleter(Completer):
                 ("close", "Close case"),
                 ("delete", "Delete / purge case"),
                 ("restore", "Restore archived case"),
+                ("ls", "List cases (short)"),
+                ("sh", "Show case (short)"),
+                ("ed", "Edit case (short)"),
+                ("recent", "Recent cases"),
+                ("back", "Back to general"),
             ]
-            for cmd, meta in root_options:
-                if cmd.startswith(text.lower()):
-                    yield Completion(cmd, start_position=-len(word), display_meta=meta)
+            # hide irrelevant globals when inside case context (prompt shows active)
+            if self.shell.active_case and not text:
+                # prioritize case/audit when active
+                root_options = [
+                    ("case", "Forensic case management commands"),
+                    ("audit", "Audit ledger commands"),
+                    ("status", "Display system & database status"),
+                    ("recent", "Recent cases"),
+                    ("back", "Back to general"),
+                    ("help", "Display command manual"),
+                ]
+            for cmd, meta in filter_completions(root_options, text.lower(), limit=8):
+                yield Completion(cmd, start_position=-len(word), display_meta=meta)
             return
 
         ctx = self.shell.context
@@ -134,7 +169,14 @@ class TraceShellCompleter(Completer):
                     val, meta = completion
                 else:
                     val, meta = completion, ""
-                yield Completion(val, start_position=-len(word), display_meta=meta)
+                # case/audit previews already contain number · status · title -> show as main display, not duplicate left
+                if meta and "·" in meta:
+                    yield Completion(val, start_position=-len(word), display=meta)
+                elif not val and meta:
+                    # header separator like "── CR ──"
+                    yield Completion(val, start_position=-len(word), display=meta)
+                else:
+                    yield Completion(val, start_position=-len(word), display_meta=meta)
 
 
 def _format_active_case(active_case: Any, empty_hint: str) -> Text:
@@ -185,6 +227,12 @@ class InteractiveShell:
     def _register_default_handlers(self) -> None:
         """Register built-in feature handlers."""
         self.registry.register(CaseShellCommandHandler())
+        try:
+            from trace_core.audit.shell_handler import AuditShellCommandHandler
+
+            self.registry.register(AuditShellCommandHandler())
+        except Exception:
+            pass
 
     def register_handler(self, handler: ShellCommandHandler) -> None:
         """Allow other AI agents and feature modules to plug in commands."""
@@ -309,6 +357,41 @@ class InteractiveShell:
         if cmd == "status":
             self.show_status()
             return True
+        if cmd in ("recent", "recents"):
+            self._show_recent()
+            return True
+        if cmd in ("back", "b"):
+            self.context.active_case = None
+            console.print("[dim]Back to general. Active case cleared.[/dim]")
+            return True
+        return False
+
+    def _show_recent(self) -> None:
+        from trace_core.cases.dto import CaseFilterDto
+        from trace_core.cases.renderers import render_cases
+
+        try:
+            self._ensure_service()
+            cases = self.service.list_cases(CaseFilterDto(limit=5, offset=0, recent=True))  # type: ignore[union-attr]
+            render_cases(cases, "table", active_number=self.active_case.number if self.active_case else None)
+        except Exception:
+            console.print("[dim]No recent cases.[/dim]")
+
+    def _handle_short_alias(self, line: str) -> bool:
+        # ls/sh/ed -> case list/show/edit (comfort aliases)
+        low = line.strip().lower()
+        mapping = {
+            "ls": ("case", "list"),
+            "sh": ("case", "show"),
+            "ed": ("case", "edit"),
+        }
+        for short, (cmd, act) in mapping.items():
+            if low == short or low.startswith(short + " "):
+                rest = line.strip()[len(short) :].strip()
+                handler = self.registry.get_handler(cmd)
+                if handler:
+                    handler.execute(act, rest.split() if rest else [], self.context)
+                    return True
         return False
 
     def _handle_alias(self, line: str) -> bool:
@@ -345,6 +428,8 @@ class InteractiveShell:
         if not tokens:
             return
 
+        if self._handle_short_alias(clean_line):
+            return
         if self._handle_control_command(tokens[0].lower()):
             return
         if self._handle_alias(clean_line):

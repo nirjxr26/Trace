@@ -1,12 +1,15 @@
 """Canonical JSON serialization for forensic hashing and audit payloads."""
 
 import json
+import math
 from datetime import UTC, datetime
 from typing import Any
 
 
 def _normalize_value(value: Any) -> Any:
     """Recursively normalize values for deterministic serialization."""
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        raise ValueError("Non-finite float not allowed in canonical JSON")
     if isinstance(value, datetime):
         dt = value
         if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
@@ -22,4 +25,6 @@ def _normalize_value(value: Any) -> Any:
 def canonical_json(obj: dict[str, Any]) -> bytes:
     """Serialize dict to canonical JSON bytes for hashing."""
     normalized = _normalize_value(obj)
-    return json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode(
+        "utf-8"
+    )

@@ -33,6 +33,16 @@ jobs:
           pip install --require-hashes --only-binary :all: -r requirements.txt
           pip install --no-deps -e .
 
+      - name: Security Audit (pip-audit)
+        run: |
+          pip install pip-audit --quiet
+          pip-audit --desc --require-hashes -r requirements.txt || true
+
+      - name: SBOM (CycloneDX)
+        run: |
+          pip install cyclonedx-bom --quiet || true
+          cyclonedx-py -o sbom.json . || true
+
       - name: Verify Code Formatting (Ruff)
         run: ruff format --check .
 

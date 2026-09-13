@@ -24,16 +24,29 @@ def _create_case_status_badge(case: CaseResponseDto) -> Text:
 
 
 def _format_closed_timestamp(case: CaseResponseDto, rule_char: str) -> str:
-    """Format closed timestamp or active status indicator in IST."""
+    """Format closed timestamp with IST + UTC for forensic clarity."""
     if case.closed_at:
-        return format_india_datetime(case.closed_at)
+        try:
+            from datetime import UTC
+
+            utc = case.closed_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            return f"{format_india_datetime(case.closed_at)} ({utc})"
+        except Exception:
+            return format_india_datetime(case.closed_at)
     if rule_char == "-":
         return "-  (case is active)"
     return "—  (case is active)"
 
 
-def render_case_table(cases: list[CaseResponseDto]) -> None:
-    """Render streamlined table of cases with a single clean header rule and spacious layout."""
+def _case_prefix(number: str) -> str:
+    try:
+        return number.split("-")[1] if "-" in number else "OTHER"
+    except Exception:
+        return "OTHER"
+
+
+def render_case_table(cases: list[CaseResponseDto], active_number: str | None = None) -> None:
+    """Render streamlined table grouped by middle code CR/NR/CLI with space between groups."""
     columns: list[tuple[str, dict[str, Any]]] = [
         ("  Case #", {"style": THEME_TOKENS["accent"], "no_wrap": True}),
         ("Title", {"style": THEME_TOKENS["value"]}),
@@ -42,24 +55,44 @@ def render_case_table(cases: list[CaseResponseDto]) -> None:
         ("Opened", {"style": THEME_TOKENS["muted"]}),
     ]
 
-    rows = []
+    # group by middle code like CR/NR/CLI, keep original order inside group, groups sorted alphabetically but CR first
+    grouped: dict[str, list[CaseResponseDto]] = {}
+    order: list[str] = []
     for c in cases:
-        label, style, _ = get_status_style_and_label(c.status, c.is_deleted)
-        rows.append(
-            [
-                f"  {c.number}",
-                c.title or "Untitled",
-                c.lead_examiner or "-",
-                Text(label, style=style),
-                format_india_table_time(c.opened_at),
-            ]
-        )
+        pref = _case_prefix(c.number)
+        if pref not in grouped:
+            grouped[pref] = []
+            order.append(pref)
+        grouped[pref].append(c)
+    # prefer CR first, then others alphabetically
+    order.sort(key=lambda p: (0 if p == "CR" else 1, p))
+    rows: list[list[Any]] = []
+    for idx, pref in enumerate(order):
+        if idx > 0:
+            rows.append(["", "", "", "", ""])  # type: ignore[list-item]  # blank separator between groups
+        for c in grouped[pref]:
+            label, style, _ = get_status_style_and_label(c.status, c.is_deleted)
+            prefix = "● " if active_number and c.number == active_number else "  "
+            case_cell = Text(
+                f"{prefix}{c.number}", style=THEME_TOKENS["accent"] if prefix == "● " else THEME_TOKENS["accent"]
+            )
+            if prefix == "● ":
+                case_cell.stylize("bold")
+            rows.append(
+                [
+                    case_cell,
+                    c.title or "Untitled",
+                    c.lead_examiner or "-",
+                    Text(label, style=style),
+                    format_india_table_time(c.opened_at),
+                ]
+            )
 
     render_minimalist_table(
         title="Forensic Cases",
         columns=columns,
         rows=rows,
-        empty_message="No cases found matching criteria.",
+        empty_message="No cases found. Run 'case create' to add one.",
     )
 
 
@@ -102,6 +135,9 @@ def render_case_detail(case: CaseResponseDto) -> None:
         fields=fields,
         sections=sections,
     )
+    from trace_core.core.ui.renderers import console
+
+    console.print("[dim]Tip: double-click number/UUID to copy · [c] Copy[/dim]\n")
 
 
 def render_case(case: CaseResponseDto, output: str = "table") -> None:
@@ -112,9 +148,9 @@ def render_case(case: CaseResponseDto, output: str = "table") -> None:
         render_case_detail(case)
 
 
-def render_cases(cases: list[CaseResponseDto], output: str = "table") -> None:
+def render_cases(cases: list[CaseResponseDto], output: str = "table", active_number: str | None = None) -> None:
     """Render a case collection in minimalist table or raw JSON form."""
     if output.lower() == "json":
         render_json(cases)
     else:
-        render_case_table(cases)
+        render_case_table(cases, active_number=active_number)

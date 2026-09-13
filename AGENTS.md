@@ -17,6 +17,7 @@ silently picking a side.
 - Check related models, APIs, and data flows, plus what else imports or calls this code.
 - Read existing tests covering the area before changing behavior they assert on.
 - Form a clear plan before making changes.
+- Always write reusable code — assume someone else (or future you) will need to reuse these components later.
 
 Never code from assumptions. If a file or behavior can't be verified by inspection, say so
 instead of guessing.
@@ -98,7 +99,7 @@ change closest to existing patterns.
 
 ## 12. Codebase Location & Per-Person Changelog
 
-The codebase should always follow the guidenlines of the `/ponytail` skills, if it isnt downloaded, download it from the github and start to use it, code should be written using that skill . All new code must match the conventions of what's already
+The codebase should always follow the guidenlines of the `/ponytail` skills, if it isnt downloaded, download it from the github and start to use it, code should be written using that skill. All new code must match the conventions of what's already
 there (per Sections 1–4) — nothing about this location relaxes those rules.
 
 At the end of any task that changes code, record what changed under that person's own folder:

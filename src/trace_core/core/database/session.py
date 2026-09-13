@@ -94,5 +94,16 @@ class DatabaseSessionManager:
             session.close()
 
 
+def get_db(ctx: Any | None) -> DatabaseSessionManager:  # type: ignore[no-untyped-def]
+    """Single source for DB manager from shell context or global. Reusable."""
+    try:
+        mgr = getattr(getattr(ctx, "service", None), "session_manager", None)
+        if mgr is not None:
+            return mgr  # type: ignore[no-any-return]
+    except Exception:
+        pass
+    return db_manager
+
+
 # Default global instance configured with application settings
 db_manager = DatabaseSessionManager()

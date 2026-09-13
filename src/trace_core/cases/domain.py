@@ -174,10 +174,29 @@ class Case(BaseEntity):
     @field_validator("tags")
     @classmethod
     def validate_tags(cls, v: list[str]) -> list[str]:
-        """Strip whitespace, lowercase, discard empty tags, and deduplicate."""
+        """Strip whitespace, lowercase, discard empty tags, deduplicate, cap 50 tags ×50 chars."""
         cleaned: list[str] = []
         for tag in v:
             stripped = tag.strip().lower()
-            if stripped and stripped not in cleaned:
-                cleaned.append(stripped)
+            if not stripped or stripped in cleaned:
+                continue
+            if len(stripped) > 50:
+                raise InvariantViolationError("tag exceeds maximum length of 50 characters.")
+            cleaned.append(stripped)
+            if len(cleaned) > 50:
+                raise InvariantViolationError("too many tags (max 50).")
         return cleaned
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 10000:
+            raise InvariantViolationError("description exceeds maximum length of 10000 characters.")
+        return v
+
+    @field_validator("notes")
+    @classmethod
+    def validate_notes(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 50000:
+            raise InvariantViolationError("notes exceeds maximum length of 50000 characters.")
+        return v

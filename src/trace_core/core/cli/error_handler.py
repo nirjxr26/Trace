@@ -36,29 +36,30 @@ def _resolve_unexpected_error(
     )
 
 
-def _resolve_error_details(
-    e: Exception, operation_title: str | None, default_remediation: str | None
-) -> tuple[str, str, str | None, int]:
+def _typed_error(e: Exception, operation_title: str | None, default_remediation: str | None):  # type: ignore[no-untyped-def]
     if isinstance(e, NotFoundError):
-        title = f"{e.resource_type} Not Found"
-        remediation = default_remediation or f"Run 'list' to inspect available {e.resource_type.lower()} records."
-        return title, str(e), remediation, EXIT_NOT_FOUND
-
-    if isinstance(e, ConcurrencyConflictError):
-        title = "Concurrency Conflict"
-        remediation = (
-            default_remediation or "Another process modified this record. Reload the latest state before modifying."
+        return (
+            f"{e.resource_type} Not Found",
+            str(e),
+            default_remediation or f"Run 'list' to inspect available {e.resource_type.lower()} records.",
+            EXIT_NOT_FOUND,
         )
-        return title, str(e), remediation, EXIT_ERROR
-
+    if isinstance(e, ConcurrencyConflictError):
+        return (
+            "Concurrency Conflict",
+            str(e),
+            default_remediation or "Another process modified this record. Reload the latest state before modifying.",
+            EXIT_ERROR,
+        )
     if isinstance(e, ConflictError):
-        title = operation_title or "Duplicate Record"
-        remediation = default_remediation or "Ensure the record number or unique field is unique."
-        return title, str(e), remediation, EXIT_ERROR
-
+        return (
+            operation_title or "Duplicate Record",
+            str(e),
+            default_remediation or "Ensure the record number or unique field is unique.",
+            EXIT_ERROR,
+        )
     if isinstance(e, StateTransitionError):
         return operation_title or "Invalid State Transition", str(e), default_remediation, EXIT_ERROR
-
     if isinstance(e, AuditTamperError):
         return (
             operation_title or "Audit Verification Failed",
@@ -66,10 +67,16 @@ def _resolve_error_details(
             default_remediation or "Inspect audit chain for tampered sequence and restore from backup.",
             EXIT_VERIFY_FAILED,
         )
+    return None
 
+
+def _resolve_error_details(
+    e: Exception, operation_title: str | None, default_remediation: str | None
+) -> tuple[str, str, str | None, int]:
+    if (res := _typed_error(e, operation_title, default_remediation)) is not None:
+        return res
     if isinstance(e, ApplicationError):
         return operation_title or "Application Error", str(e), default_remediation, EXIT_ERROR
-
     return _resolve_unexpected_error(e, operation_title, default_remediation)
 
 
