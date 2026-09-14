@@ -15,22 +15,6 @@ def _get_service(mgr: DatabaseSessionManager | None = None) -> AuditService:
     return AuditService(mgr or db_manager)
 
 
-def _show_seq(svc: AuditService, seq: int, output: str) -> bool:
-    if seq is None:  # type: ignore[truthy-bool]
-        return False
-    if seq < 1:
-        from trace_core.core.ui.renderers import render_error_card
-
-        render_error_card("Invalid seq", "seq must be >= 1.")
-        raise typer.Exit(1)
-    from trace_core.audit.helpers import show_seq_view
-
-    ok = show_seq_view(svc, seq, output)
-    if not ok:
-        raise typer.Exit(1)
-    return True
-
-
 def _parse_action(action: str | None):  # type: ignore[no-untyped-def]
     if not action:
         return None
@@ -43,26 +27,6 @@ def _parse_action(action: str | None):  # type: ignore[no-untyped-def]
         raise typer.Exit(1)
 
 
-def _render_case_timeline(svc: AuditService, case_number: str | None, events, output: str) -> bool:  # type: ignore[no-untyped-def]
-    if not case_number or output.lower() == "json":
-        return False
-    try:
-        from trace_core.audit.renderers import render_audit_timeline, render_case_audit_header
-        from trace_core.cases.service import CaseService
-
-        case = CaseService(svc.session_manager).get_case(case_number)
-        render_case_audit_header(case.number, case.title, case.status.value, events)
-        if not events:
-            from trace_core.core.ui.renderers import console
-
-            console.print(f"[dim]No events for {case_number}. Try --action CASE_CREATED.[/dim]\n")
-            return True
-        render_audit_timeline(events)
-        return True
-    except Exception:
-        return False
-
-
 def _show_list(
     svc: AuditService,
     case_number: str | None,
@@ -73,8 +37,6 @@ def _show_list(
     offset: int,
     output: str,
 ) -> None:
-    from trace_core.audit.renderers import render_audit_table
-    from trace_core.core.ui.renderers import render_json
 
     act = _parse_action(action)
     f = AuditFilterDto(
@@ -85,18 +47,18 @@ def _show_list(
         limit=limit,
         offset=offset,
     )
+    from trace_core.audit.helpers import render_case_timeline_view
+    from trace_core.audit.renderers import render_events
+
     events = svc.list_events(f)
-    if output.lower() == "json":
-        render_json(events)
+    if render_case_timeline_view(svc, case_number, events, output):
         return
-    if _render_case_timeline(svc, case_number, events, output):
-        return
-    if not events and case_number:
+    if not events and case_number and output.lower() != "json":
         from trace_core.core.ui.renderers import console
 
         console.print(f"[dim]No events for {case_number}. Try --action CASE_CREATED.[/dim]\n")
         return
-    render_audit_table(events)
+    render_events(events, output)
 
 
 @audit_app.command("show")
@@ -111,39 +73,14 @@ def audit_show(
     seq: int = typer.Option(None, "--seq", help="Show single event by seq (detailed 5W1H)"),
 ) -> None:
     with capture_cli_errors("Audit Show"):
+        from trace_core.audit.helpers import show_seq_view
+
         svc = _get_service()
-        if seq is not None and _show_seq(svc, seq, output):
+        if seq is not None:
+            if not show_seq_view(svc, seq, output):
+                raise typer.Exit(1)
             return
         _show_list(svc, case_number, action, actor, search, limit, offset, output)
-
-
-def _check_anchor(svc: AuditService, res, anchor: str | None) -> None:  # type: ignore[no-untyped-def]
-    if not anchor:
-        return
-    import json
-    from pathlib import Path
-
-    try:
-        data = json.loads(Path(anchor).read_text(encoding="utf-8"))
-        exp_seq = data.get("last_seq")
-        exp_chain = data.get("last_chain")
-        if res.is_valid and res.last_seq != exp_seq:
-            from trace_core.core.ui.renderers import console
-
-            console.print(f"[red]Anchor mismatch: DB last_seq {res.last_seq} != anchor {exp_seq}[/red]")
-            raise AuditTamperError(f"Anchor tail mismatch at seq {exp_seq}")
-        if res.is_valid and exp_chain:
-            events = svc.list_events()
-            if events and events[0].chain_hash != exp_chain:
-                from trace_core.core.ui.renderers import console
-
-                console.print(f"[red]Anchor chain mismatch: {events[0].chain_hash} != {exp_chain}[/red]")
-                raise AuditTamperError("Anchor chain mismatch")
-    except AuditTamperError:
-        raise
-    except Exception as e:
-        typer.echo(f"Anchor read failed: {e}", err=True)
-        raise typer.Exit(1)
 
 
 @audit_app.command("verify")
@@ -151,17 +88,15 @@ def audit_verify(
     output: str = typer.Option("table", "--output", "-o", help="table|json"),
     anchor: str = typer.Option(None, "--anchor", help="Anchor JSON file to verify tail against"),
 ) -> None:
-    from trace_core.audit.renderers import render_verify_result
-    from trace_core.core.ui.renderers import render_json
+    from trace_core.audit.renderers import render_verify
 
     with capture_cli_errors("Audit Verify"):
+        from trace_core.audit.anchor import verify_against_anchor
+
         svc = _get_service()
         res = svc.verify()
-        _check_anchor(svc, res, anchor)
-        if output.lower() == "json":
-            render_json(res)
-        else:
-            render_verify_result(res)
+        verify_against_anchor(svc, res, anchor)
+        render_verify(res, output, anchor)
         if not res.is_valid:
             raise AuditTamperError(f"Tamper detected at seq {res.first_mismatch_seq} ({res.mismatch_type})")
 

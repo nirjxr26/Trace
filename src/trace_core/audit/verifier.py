@@ -48,7 +48,22 @@ def _mismatch(
     )
 
 
+def verify_event(payload_json: str, payload_hash: str, prev_chain: str, chain_hash_str: str, seq: int) -> bool:
+    """Row self-check: recompute both hashes for one stored event.
+
+    True means this row is intact. Cannot detect deletion — that needs a full
+    verify or an external anchor.
+    """
+    if _expected_payload_hash(payload_json) != payload_hash:
+        return False
+    return chain_hash(prev_chain, payload_hash, seq) == chain_hash_str
+
+
 def verify_rows(rows: Iterable[AuditEventModel]) -> VerifyResultDto:
+    """Recompute every link from stored payloads. Policy: hash/prev_chain mismatch =
+    tamper (fail fast at first seq); missing seqs = gaps (warning — a middle delete
+    already fails as prev_chain mismatch at the next row, while a pure tail delete
+    is invisible here and needs an external anchor)."""
     first_seq: int | None = None
     last_seq: int | None = None
     gaps: list[int] = []

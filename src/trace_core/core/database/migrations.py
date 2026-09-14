@@ -1,6 +1,7 @@
 """Lightweight schema migration management and version tracking."""
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
@@ -22,17 +23,26 @@ schema_migrations = Table(
 )
 
 MigrationAction = Callable[[Engine | Connection], None]
+MigrationVerifier = Callable[[Connection], bool]
 
 # Migration registry: (version, name, action)
 MIGRATIONS: list[tuple[int, str, MigrationAction]] = []
 
+# Post-action verifiers: run inside the same transaction; False aborts without recording.
+# Production rule: run migration → verify resulting schema → record on success, abort on failure.
+MIGRATION_VERIFIERS: dict[int, MigrationVerifier] = {}
 
-def register_migration(version: int, name: str) -> Callable[[MigrationAction], MigrationAction]:
-    """Decorator to register a schema migration."""
+
+def register_migration(
+    version: int, name: str, verify: MigrationVerifier | None = None
+) -> Callable[[MigrationAction], MigrationAction]:
+    """Decorator to register a schema migration with an optional post-action verifier."""
 
     def decorator(fn: MigrationAction) -> MigrationAction:
         MIGRATIONS.append((version, name, fn))
         MIGRATIONS.sort(key=lambda m: m[0])
+        if verify is not None:
+            MIGRATION_VERIFIERS[version] = verify
         return fn
 
     return decorator
@@ -124,23 +134,38 @@ def _migration_005_audit(bind: Engine | Connection) -> None:
         _install_sqlite_audit_triggers(bind)
 
 
-@register_migration(6, "006_add_case_checks")
+@register_migration(6, "006_add_case_checks", verify=lambda conn: _verify_006_case_checks(conn))
 def _migration_006_case_checks(bind: Engine | Connection) -> None:
-    """Add forensic CHECKs for status/version. Idempotent, best-effort on SQLite."""
+    """Add forensic CHECKs for status/version. PostgreSQL-only; SQLite enforces the same
+    rules in the domain layer (SQLite has no ALTER TABLE ADD CHECK)."""
 
-    def _try(conn: Connection, ddl: str) -> None:
-        try:
-            conn.execute(text(ddl))
-        except Exception:
-            pass
+    def _run(conn: Connection) -> None:
+        if conn.dialect.name != "postgresql":
+            return
+        for ddl in (
+            "ALTER TABLE cases ADD CHECK (status IN ('OPEN','UNDER_REVIEW','CLOSED'))",
+            "ALTER TABLE cases ADD CHECK (version >= 1)",
+        ):
+            try:
+                conn.execute(text(ddl))
+            except Exception:
+                pass  # idempotent re-run; the verifier below is the honesty gate
 
     if isinstance(bind, Connection):
-        _try(bind, "ALTER TABLE cases ADD CHECK (status IN ('OPEN','UNDER_REVIEW','CLOSED'))")
-        _try(bind, "ALTER TABLE cases ADD CHECK (version >= 1)")
+        _run(bind)
     else:
         with bind.begin() as conn:
-            _try(conn, "ALTER TABLE cases ADD CHECK (status IN ('OPEN','UNDER_REVIEW','CLOSED'))")
-            _try(conn, "ALTER TABLE cases ADD CHECK (version >= 1)")
+            _run(conn)
+
+
+def _verify_006_case_checks(conn: Connection) -> bool:
+    """Confirm both CHECKs exist on PostgreSQL; vacuously true on SQLite (see parity table)."""
+    if conn.dialect.name != "postgresql":
+        return True
+    count = conn.execute(
+        text("SELECT count(*) FROM pg_constraint WHERE conrelid = 'cases'::regclass AND contype = 'c'")
+    ).scalar()
+    return (count or 0) >= 2
 
 
 @register_migration(7, "007_add_perf_indexes")
@@ -167,6 +192,52 @@ def _migration_007_perf_indexes(bind: Engine | Connection) -> None:
                 _try_idx(conn, idx_cases)
             if "audit_events" in tables:
                 _try_idx(conn, idx_audit)
+
+
+@register_migration(8, "008_audit_append_only_protection", verify=lambda conn: _verify_008_audit_protection(conn))
+def _migration_008_audit_protection(bind: Engine | Connection) -> None:
+    """Enforce the append-only ledger per backend: PostgreSQL trigger plus SQLite
+    trigger self-heal (005 installed them; this guarantees them on every database)."""
+    if isinstance(bind, Connection):
+        _install_pg_audit_trigger(bind)
+        _install_sqlite_audit_triggers(bind)
+    else:
+        with bind.begin() as conn:
+            _install_pg_audit_trigger(conn)
+            _install_sqlite_audit_triggers(conn)
+
+
+def _install_pg_audit_trigger(conn: Connection) -> None:
+    """Install append-only audit trigger for PostgreSQL connections."""
+    if conn.dialect.name != "postgresql":
+        return
+    conn.execute(
+        text(
+            "CREATE OR REPLACE FUNCTION audit_events_block_write() RETURNS trigger AS $$ "
+            "BEGIN RAISE EXCEPTION 'audit_events is append-only'; END; $$ LANGUAGE plpgsql"
+        )
+    )
+    conn.execute(text("DROP TRIGGER IF EXISTS audit_events_no_update_delete ON audit_events"))
+    conn.execute(
+        text(
+            "CREATE TRIGGER audit_events_no_update_delete "
+            "BEFORE UPDATE OR DELETE ON audit_events "
+            "FOR EACH ROW EXECUTE FUNCTION audit_events_block_write()"
+        )
+    )
+
+
+def _verify_008_audit_protection(conn: Connection) -> bool:
+    """Confirm append-only protection exists on the current backend."""
+    if conn.dialect.name == "postgresql":
+        count = conn.execute(
+            text("SELECT count(*) FROM pg_trigger WHERE tgrelid = 'audit_events'::regclass AND NOT tgisinternal")
+        ).scalar()
+        return (count or 0) >= 1
+    rows = conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'audit_events'")
+    ).fetchall()
+    return {"audit_events_no_update", "audit_events_no_delete"} <= {r[0] for r in rows}
 
 
 def _seed_audit_chain_state(conn: Connection) -> None:
@@ -257,28 +328,94 @@ def get_pending_migrations(engine: Engine) -> list[tuple[int, str]]:
     return [(v, name) for v, name, _ in MIGRATIONS if v not in applied_versions]
 
 
+@contextmanager
+def _migration_lock(engine: Engine):  # type: ignore[no-untyped-def]
+    """Serialize concurrent bootstraps: PG advisory lock, SQLite lockfile, else no-op."""
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as conn:
+            conn.execute(text("SELECT pg_advisory_xact_lock(hashtext('trace_schema_migrations'))"))
+            yield
+        return
+    lock_path = _sqlite_lock_path(str(engine.url))
+    if lock_path is None:
+        yield
+        return
+    with _file_lock(lock_path):
+        yield
+
+
+def _sqlite_lock_path(url: str) -> str | None:
+    """Lockfile beside a file-backed SQLite database; None for :memory:."""
+    import os
+
+    if ":memory:" in url:
+        return None
+    path = url.split("sqlite:///", 1)[1] if "sqlite:///" in url else url
+    path = path.split("?", 1)[0]
+    if not os.path.isabs(path):
+        path = os.path.abspath(path)
+    return path + ".migratelock"
+
+
+@contextmanager
+def _file_lock(path: str):  # type: ignore[no-untyped-def]
+    """Blocking exclusive lockfile. Windows msvcrt, POSIX fcntl."""
+    import os
+    from pathlib import Path as _Path
+
+    _Path(path).parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+b")  # noqa: PTH123
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl  # type: ignore[import-not-found]
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)  # type: ignore[attr-defined]
+        yield
+    finally:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl  # type: ignore[import-not-found]
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        handle.close()
+
+
 def apply_migrations(engine: Engine) -> list[str]:
     """Apply all pending migrations sequentially within transaction boundaries."""
-    ensure_migration_table(engine)
-    applied_versions = {m["version"] for m in get_applied_migrations(engine)}
-    applied_names: list[str] = []
+    with _migration_lock(engine):
+        ensure_migration_table(engine)
+        applied_versions = {m["version"] for m in get_applied_migrations(engine)}
+        applied_names: list[str] = []
 
-    for version, name, action in MIGRATIONS:
-        if version not in applied_versions:
-            with engine.begin() as conn:
-                action(conn)
-                cols = _column_names(conn, "schema_migrations")
-                values: dict[str, Any] = {
-                    "version": version,
-                    "name": name,
-                    "applied_at": now_utc(),
-                }
-                if "checksum" in cols:
-                    values["checksum"] = _migration_checksum(name)
-                conn.execute(schema_migrations.insert().values(**values))
-            applied_names.append(name)
+        for version, name, action in MIGRATIONS:
+            if version not in applied_versions:
+                with engine.begin() as conn:
+                    action(conn)
+                    verifier = MIGRATION_VERIFIERS.get(version)
+                    if verifier is not None and not verifier(conn):
+                        raise RuntimeError(f"Migration {name} failed verification; rolled back, not recorded.")
+                    cols = _column_names(conn, "schema_migrations")
+                    values: dict[str, Any] = {
+                        "version": version,
+                        "name": name,
+                        "applied_at": now_utc(),
+                    }
+                    if "checksum" in cols:
+                        values["checksum"] = _migration_checksum(name)
+                    conn.execute(schema_migrations.insert().values(**values))
+                applied_names.append(name)
 
-    return applied_names
+        return applied_names
 
 
 def get_table_names(engine: Engine) -> list[str]:

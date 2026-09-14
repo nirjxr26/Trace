@@ -22,6 +22,20 @@ AUDIT_ACTIONS = [
     ("export", "Export JSONL bundle"),
 ]
 
+_AUDIT_VALUE_FLAGS = (
+    "--case",
+    "--action",
+    "--actor",
+    "--search",
+    "-q",
+    "--output",
+    "-o",
+    "--limit",
+    "--offset",
+    "--seq",
+    "--anchor",
+)
+
 
 class AuditShellCommandHandler(ShellCommandHandler):
     @property
@@ -139,100 +153,82 @@ class AuditShellCommandHandler(ShellCommandHandler):
         return False
 
     def _show(self, svc: AuditService, args: list[str], ctx: ShellContext | None = None) -> None:
+        from trace_core.core.cli.args import extract_positional
+
         seq_raw = extract_flag_value(args, "--seq")
         if seq_raw is not None:
             self._show_seq(svc, args, seq_raw)
             return
-        # auto-use active case if no --case given
-        if ctx and ctx.active_case and "--case" not in args and "-q" not in args and "--search" not in args:
-            # don't auto if user is searching, just for plain show
-            if not any(a.startswith("-") for a in args):
-                args = args + ["--case", ctx.active_case.number]  # type: ignore[assignment]
+        positional = extract_positional(args, *_AUDIT_VALUE_FLAGS)
+        if "--case" not in args:
+            if positional:
+                args = args + ["--case", positional[0]]
+            elif ctx and ctx.active_case and not any(a.startswith("-") for a in args):
+                args = args + ["--case", ctx.active_case.number]
+                console.print(f"[dim]Scoped to active case {ctx.active_case.number}[/dim]")
         self._show_list(svc, args)
 
     def _show_seq(self, svc: AuditService, args: list[str], seq_raw: str) -> bool:
+        from trace_core.audit.helpers import show_seq_view
+
         try:
             seq = int(seq_raw)
         except ValueError:
-            console.print(f"[red]Invalid --seq '{seq_raw}'[/red]")
-            return True
-        if seq < 1:
-            console.print("[red]seq must be >= 1[/red]")
+            render_error_card("Invalid seq", f"--seq '{seq_raw}' is not a number.")
             return True
         with capture_cli_errors("Audit Show", exit_on_error=False):
-            from trace_core.audit.renderers import render_audit_detail
-            from trace_core.core.ui.renderers import render_json
-
-            e = svc.get_by_seq(seq)
-            if not e:
-                console.print(f"[red]Audit event seq {seq} does not exist.[/red]")
-                return True
-            output = parse_output_format(args)
-            if output == "json":
-                render_json(e)
-            else:
-                render_audit_detail(e)
+            show_seq_view(svc, seq, parse_output_format(args))
         return True
 
     def _show_list(self, svc: AuditService, args: list[str]) -> None:
         from trace_core.audit.domain import AuditAction
-        from trace_core.audit.renderers import render_audit_table
-        from trace_core.core.ui.renderers import render_json
+        from trace_core.audit.renderers import render_events
+        from trace_core.core.cli.args import extract_int_flag
 
         case_number = extract_flag_value(args, "--case")
         action_raw = extract_flag_value(args, "--action")
         actor = extract_flag_value(args, "--actor")
         search = extract_flag_value(args, "--search", "-q")
         output = parse_output_format(args)
+        limit = extract_int_flag(args, 50, "--limit")
+        offset = extract_int_flag(args, 0, "--offset")
         act = None
         if action_raw:
             try:
                 act = AuditAction(action_raw.upper())
             except ValueError:
-                console.print(f"[red]Unknown action '{action_raw}'[/red]")
+                render_error_card("Unknown Action", f"Unknown action '{action_raw}'.")
                 return
-        f = AuditFilterDto(case_number=case_number, action=act, actor=actor, search=search)
+        f = AuditFilterDto(case_number=case_number, action=act, actor=actor, search=search, limit=limit, offset=offset)
         with capture_cli_errors("Audit Show", exit_on_error=False):
-            events = svc.list_events(f)
-            if output == "json":
-                render_json(events)
-                return
-            if case_number:
-                try:
-                    from trace_core.audit.renderers import render_audit_timeline, render_case_audit_header
-                    from trace_core.cases.service import CaseService
+            from trace_core.audit.helpers import render_case_timeline_view
 
-                    case = CaseService(svc.session_manager).get_case(case_number)
-                    render_case_audit_header(case.number, case.title, case.status.value, events)
-                    if not events:
-                        console.print(f"[dim]No events for {case_number}. Try --action CASE_CREATED.[/dim]\n")
-                        return
-                    render_audit_timeline(events)
-                    return
-                except Exception:
-                    pass
-            if not events and case_number:
+            events = svc.list_events(f)
+            if render_case_timeline_view(svc, case_number, events, output):
+                return
+            if not events and case_number and output != "json":
                 console.print(f"[dim]No events for {case_number}. Try --action CASE_CREATED.[/dim]\n")
                 return
-            render_audit_table(events)
+            render_events(events, output)
 
     def _verify(self, svc: AuditService, args: list[str]) -> None:
-        from trace_core.audit.renderers import render_verify_result
-        from trace_core.core.ui.renderers import render_json
+        from trace_core.audit.anchor import verify_against_anchor
+        from trace_core.audit.renderers import render_verify
 
         output = parse_output_format(args)
+        anchor = extract_flag_value(args, "--anchor")
         with capture_cli_errors("Audit Verify", exit_on_error=False):
             res = svc.verify()
-            if output == "json":
-                render_json(res)
-            else:
-                render_verify_result(res)
+            verify_against_anchor(svc, res, anchor)
+            render_verify(res, output, anchor)
 
     def _export(self, svc: AuditService, args: list[str]) -> None:
         out = extract_flag_value(args, "--out")
         if not out:
-            console.print("[red]Missing --out FILE[/red]")
+            render_error_card("Missing Output", "Pass --out FILE for the export bundle.")
             return
         with capture_cli_errors("Audit Export", exit_on_error=False):
+            from trace_core.core.ui.renderers import render_success
+
             path = svc.export(out)
-            console.print(f"[green]Exported to {path}[/green]")
+            render_success(f"Exported to {path}")

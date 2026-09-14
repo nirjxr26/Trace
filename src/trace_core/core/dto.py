@@ -34,5 +34,6 @@ class BaseFilterDto(BaseDto):
 
     search: str | None = None
     include_deleted: bool = False
+    deleted_only: bool = False
     limit: int = Field(default=50, ge=1, le=500)
     offset: int = Field(default=0, ge=0)

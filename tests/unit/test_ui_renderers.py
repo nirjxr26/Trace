@@ -37,7 +37,7 @@ def test_format_status_badge() -> None:
     assert "OPEN" in badge_open.plain
 
     badge_review = format_status_badge(CaseStatus.UNDER_REVIEW)
-    assert "UNDER REVIEW" in badge_review.plain
+    assert "REVIEW" in badge_review.plain
 
     badge_closed = format_status_badge(CaseStatus.CLOSED)
     assert "CLOSED" in badge_closed.plain
@@ -115,12 +115,47 @@ def test_render_case_detail_open_and_closed(sample_case: CaseResponseDto) -> Non
     render_case_detail(deleted_case)
 
 
+def test_render_case_detail_history_block(sample_case: CaseResponseDto, capsys: pytest.CaptureFixture[str]) -> None:
+    """Verify the dossier HISTORY block renders newest-first with a count heading."""
+    from types import SimpleNamespace
+
+    from trace_core.cases.renderers import render_case_detail
+
+    events = [
+        SimpleNamespace(action=SimpleNamespace(value="CASE_UPDATED"), ts=sample_case.updated_at, actor="Ex"),
+        SimpleNamespace(action=SimpleNamespace(value="CASE_CREATED"), ts=sample_case.opened_at, actor="Ex"),
+    ]
+    for e in events:
+        e.subject_case_number = sample_case.number
+    render_case_detail(sample_case, events)  # type: ignore[arg-type]
+    out = capsys.readouterr().out
+    assert "HISTORY · 2 events" in out
+    assert "Lead Examiner" in out
+    assert "DESCRIPTION" in out
+
+
 def test_render_entity_panel() -> None:
     render_entity_panel(
         title="Evidence Metadata",
         fields=[("Item", "Disk Image"), ("Size", "500 GB")],
         sections=[("Investigation Notes", "Disk imaged using write-blocker.")],
     )
+
+
+def test_error_card_escapes_markup(capsys: pytest.CaptureFixture[str]) -> None:
+    """Verify reflected input cannot inject Rich markup into error cards."""
+    render_error_card("Title", "Unknown action '[red]X[/red]'.")
+    out = capsys.readouterr().out
+    assert "[red]X[/red]" in out
+
+
+def test_verify_warns_without_anchor(capsys: pytest.CaptureFixture[str]) -> None:
+    """Verify VALID output names the tail blind spot when no anchor was checked."""
+    from trace_core.audit.dto import VerifyResultDto
+    from trace_core.audit.renderers import render_verify_result
+
+    render_verify_result(VerifyResultDto(is_valid=True, events_verified=3, first_seq=1, last_seq=3))
+    assert "No anchor checked" in capsys.readouterr().out
 
 
 def test_error_handlers() -> None:
@@ -245,3 +280,82 @@ def test_prompts_and_wizard(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Confirm, "ask", lambda *args, **kwargs: True)
     assert prompt_confirm("Proceed with disk write-block?") is True
     assert prompt_confirm("Permanent wipe?", is_danger=True) is True
+
+
+def test_responsive_breakpoints(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trace_core.core.ui.renderers import (
+        breakpoint_width,
+        create_dual_key_value_grid,
+        get_breakpoint,
+        is_compact_height,
+    )
+
+    assert get_breakpoint(60) == "XS"
+    assert get_breakpoint(80) == "MD"
+    assert get_breakpoint(120) == "LG"
+    assert get_breakpoint(160) == "XL"
+
+    assert breakpoint_width(60) == ("XS", 60)
+    assert breakpoint_width(120) == ("LG", 120)
+
+    assert is_compact_height(24) is True
+    assert is_compact_height(20) is True
+    assert is_compact_height(40) is False
+
+    # Test create_dual_key_value_grid
+    rows = [("Key1", "Val1"), ("Key2", "Val2"), ("Key3", "Val3")]
+    dual_grid = create_dual_key_value_grid(rows)
+    assert dual_grid is not None
+    assert len(dual_grid.columns) == 4
+
+
+def test_responsive_rendering_across_terminal_sizes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trace_core.audit.domain import AuditAction
+    from trace_core.audit.dto import AuditEventDto
+    from trace_core.audit.renderers import render_audit_table, render_audit_timeline, render_case_audit_header
+    from trace_core.cases.dto import CaseResponseDto
+    from trace_core.cases.renderers import render_case_detail, render_case_table
+    from trace_core.cli.shell import InteractiveShell
+    from trace_core.core.ui.renderers import console
+
+    case = CaseResponseDto(
+        id=uuid4(),
+        number="2026-CR-0001",
+        title="Forensic Workstation Disk Inspection with Very Long Title For Testing",
+        lead_examiner="Nirjar",
+        status=CaseStatus.OPEN,
+        tags=["laptop", "ssd", "forensic"],
+        opened_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        is_deleted=False,
+    )
+
+    event = AuditEventDto(
+        seq=1,
+        action=AuditAction.CASE_CREATED,
+        actor="nirjar",
+        ts=datetime.now(UTC),
+        subject_case_number="2026-CR-0001",
+        payload_json='{"command": "case create", "title": "Inspection"}',
+        payload_hash="a" * 64,
+        prev_chain="GENESIS",
+        chain_hash="b" * 64,
+    )
+
+    for width in (60, 80, 120, 160):
+        monkeypatch.setattr(console, "width", width)
+        for height in (20, 30):
+            monkeypatch.setattr(console, "height", height)
+
+            # Render case table and detail
+            render_case_table([case])
+            render_case_detail(case)
+
+            # Render audit table, header, timeline
+            render_audit_table([event])
+            render_case_audit_header(case.number, case.title, "OPEN", [event])
+            render_audit_timeline([event])
+
+            # Shell banner
+            shell = InteractiveShell()
+            shell.print_banner()

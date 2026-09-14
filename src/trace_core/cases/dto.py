@@ -86,6 +86,10 @@ class CaseFilterDto(BaseFilterDto):
     status: CaseStatus | None = None
     recent: bool = False
 
+    def with_recent(self) -> "CaseFilterDto":
+        """Recent ordering keeps all filters; only order + page change. Single source."""
+        return self.model_copy(update={"recent": True, "limit": 5, "offset": 0})
+
 
 def parse_tags(value: str | None) -> list[str] | None:
     """Parse comma-separated tag string into stripped non-empty list. None stays None."""

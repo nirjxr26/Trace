@@ -34,7 +34,11 @@ def payload_hash(payload: dict[str, Any]) -> str:
 
 
 def chain_hash(prev_chain: str, p_hash: str, seq: int) -> str:
-    """Chain hash = SHA256(prev_chain ‖ payload_hash ‖ seq)."""
+    """Chain hash = SHA256(prev_chain ‖ payload_hash ‖ seq).
+
+    Binding the previous head AND the sequence number means an attacker cannot
+    reorder events or splice two valid chains together without breaking the link.
+    """
     return hashlib.sha256(f"{prev_chain}{p_hash}{seq}".encode()).hexdigest()
 
 

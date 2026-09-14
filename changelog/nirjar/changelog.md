@@ -597,6 +597,495 @@
 - **9. Tag ghost (`cases/shell_handler.py`)**: `case create/edit` wizard now prints `Existing tags: usb, ssd …` (first 10) before `Tags` prompt, from `service.list_cases()`.
 - **Verification**: 78 passed, 0 Ruff, 0 Mypy (68 files).
 
+---
+
+## 2026-09-13 — Dropdown & Case List Grouping (Only Preview, CR/NR/CLI)
+
+> `case edit` dropdown showed duplicate `2026-CR-0031 | 2026-CR-0031 · OPEN` and mixed `CR/NR/CLI` order; `case list` table showed `CR/NR/CR/CLI` scattered.
+
+- **Dropdown (`core/cli/completion.py`, `cli/shell.py`)**: `complete_from_cases` now groups by middle code `split("-")[1]` (`CR/NR/CLI/OTHER`), `order` `CR` first then alphabetically, inserts header `── CR ──` (`val=""` non-insertable) + `preview_case` per group, `limit 20` + `filter_completions(..., limit=15)` so every format appears (was `8` → `NR` truncated). `TraceShellCompleter` now `Completion(val, display=meta)` for `·` previews (left shows `2026-CR-0031 · OPEN · title` only, right empty, inserted text still just number) — removes left duplicate.
+- **Case list table (`cases/renderers.py`)**: `render_case_table` now groups by `_case_prefix(number)` same `CR` first, blank separator row `["","","","",""]` between groups, `● active` highlight preserved, `newest-first` inside each group.
+- **UX kept**: `case list --recent` + `recent` shell still `updated_at DESC LIMIT 5`, `audit --case` header + `audit --seq` 5W1H unchanged, `ls/sh/ed` aliases, `back`, ghost `case show → active`, `8` limit + fuzzy + `2s` cache all preserved.
+- **Verification**: 85 passed, 0 Ruff, 0 Mypy (70 files).
+
+---
+
+## 2026-09-13 — Docs: Subpart-2 Detailed (like Subpart-1)
+
+> Previous `docs/subparts/subpart-2.md` was 28-line stub. Rewrote to 130-line `subpart-1.md` style.
+
+- **New `docs/subparts/subpart-2.md`** (13 sections, mirrors `subpart-1.md`): Mission, Stack, Actual layout (`audit/` 10 files), Domain (`AuditAction` 6, `Subject/Context`, `GENESIS`, `payload_hash/chain_hash`, `build_payload`), Persistence (`audit_chain_state` + `audit_events` + `005/006/007`), Builder (`_case_event`), Service (`record` central gate, `verify` streaming `Iterable`, `export` header+JSONL `tmp→fsync→rename`), DTO (`AUDIT_*_FLAGS`), Transactions (`before_commit` atomic), Interfaces (Typer `audit show/verify/export` with `--seq/--case/--anchor`, shell `show/verify/export` with completions `Seq→preview`, TUI `render_audit_table` 5-col + `render_case_audit_header` + `render_audit_timeline` + `render_audit_detail` 5W1H + hashes), Config/Security, Quality (85 passed, tribunal 13 + `completion` + `property`), Limits (tail blind → `anchor`, single global head).
+---
+
+## 2026-09-13 — Responsive TUI Engine (XS, MD, LG, XL & Height-Aware UX)
+
+- **Responsive Breakpoint Engine (`core/ui/renderers.py`)**:
+  - Defined 4 formal viewports: `XS` (< 80 cols), `MD` (80–119 cols), `LG` (120–159 cols), `XL` (160+ cols).
+  - Added `get_breakpoint()`, `breakpoint_width()`, and `is_compact_height()` (<= 24 rows).
+  - Added `create_dual_key_value_grid()` pairing metadata in 4-column balanced layouts for wide terminals (`LG`/`XL`).
+  - Made `render_dossier()` width-aware: responsive horizontal rules (`min(term_w - 4, 66)`), single/dual column switching, and clean 32-char line-wrapping for 64-char SHA-256 hashes on narrow screens.
+  - Made `render_minimalist_table()` responsive: padding `(0, 1)` on `XS` vs `(0, 2)` on standard, concise record counters.
+  - Made `render_key_value_grid()` responsive: dynamic label width (14 on `XS` vs 19 on standard).
+- **Responsive Forensic Cases Table (`cases/renderers.py`)**:
+  - `render_case_table()` dynamically selects columns: 3 columns on `XS` (`Case #`, `Title`, `Status`), 5 columns on `MD`/`LG` (`Case #`, `Title`, `Examiner`, `Status`, `Opened`), 6 columns on `XL` (`Tags` included).
+  - Forensic invariant preserved: Case numbers (`2026-CR-0001`) have `no_wrap: True` and are NEVER truncated.
+  - Dynamic `overflow: ellipsis` on secondary titles based on actual terminal width.
+- **Responsive Audit Ledger Table & Timelines (`audit/renderers.py`)**:
+  - `render_audit_table()` adapts columns: 4 columns on `XS` (`Seq`, `Action`, `Case #`, `Time`), 5 columns on `MD` (`Actor` added), 6 columns on `LG`/`XL` (`Command` added).
+  - Dynamic rule width for timeline headers and separators.
+- **Compact Shell Banner for 80×24 Displays (`cli/shell.py`)**:
+  - When running in compact height (<= 24 rows) or narrow width (`XS`), renders a sleek 2-line header, saving 10+ vertical lines for investigative prompt work.
+  - Full ASCII banner rendered on spacious terminals.
+- **Width-Aware Dropdown Autocomplete (`core/cli/completion.py`)**:
+  - `preview_case()` dynamically calculates title preview length to prevent completion menus from wrapping or overflowing terminal boundaries.
+- **Verification & Test Suite**:
+  - Added `test_responsive_breakpoints` and `test_responsive_rendering_across_terminal_sizes` in `tests/unit/test_ui_renderers.py` validating 60, 80, 120, 160 widths and 20, 24, 30, 40 heights.
+  - All 87 unit tests passing (100% pass rate).
+  - 0 Ruff lint errors, 0 format issues, 0 Mypy static typing errors across 70 source files.
+
+---
+
+## 2026-09-13 — Responsive Reuse Pass (minimal, no textual)
+
+> No new deps. Stdlib `textwrap` only. Single-source helpers, XS keeps forensic Who.
+
+- **Core (`core/ui/renderers.py`)**: added `fit_text`, `rule_line`, `table_padding`, `kv_width`, `is_compact_view`, `title_max_width`, `page_rows`. `render_minimalist_table` now pages to 10 rows on `height<=24` with `… N more` hint; `render_dossier/key_value_grid` reuse same widths/padding/rule.
+- **Cases (`cases/renderers.py`)**: `_case_table_columns` single source, merged `MD/LG` duplicate, `Examiner max_width 16`, `Title` via `title_max_width`.
+- **Audit (`audit/renderers.py`)**: `_audit_table_columns` single source, `XS` now `Seq/Action/Case/Actor` (was `Time`, keeps Who), `Actor fit 14`, header/timeline use `rule_line` + `fit_text`.
+- **Completion (`core/cli/completion.py`)**: `preview_case` reuses `fit_text+title_max_width`.
+- **Shell (`cli/shell.py`)**: `print_banner` reuses `is_compact_view/rule_line/kv_width/table_padding`.
+- **Verification**: 87 passed, 0 Ruff, 0 Mypy (70 files).
+- **Files**: `src/trace_core/core/ui/renderers.py`, `src/trace_core/cases/renderers.py`, `src/trace_core/audit/renderers.py`, `src/trace_core/core/cli/completion.py`, `src/trace_core/cli/shell.py`
+
+---
+
+## 2026-09-13 — Fix wrapping in case list (width budget)
+
+> `case list` wrapped to 2 lines: 5 cols + `(0,2)` padding needed ~126 cols for 110-col terminal.
+
+- **Core**: `table_padding` tight `(0,1)` except `XL`, `render_minimalist_table` caps `width=term_w-2` to force fit.
+- **Cases**: headers `Case #` (no leading spaces), `max_width 16/14/10/14`, narrow `MD/LG term_w<100` drops to 4-col (no `Opened`), `Tags :3→:2`.
+- **Audit**: headers `Seq` (no leading spaces), `max_width 6/14/16/14`, rows `str(seq)` no indent.
+- **Verification**: 87 passed, 0 Ruff, 0 Mypy.
+
+---
+
+## 2026-09-13 — Whole-app responsive (every screen)
+
+> Terminals differ, content must not. Same 7 helpers everywhere, no new deps.
+
+- **Core**: `render_dossier` fits title/subtitle on `XS`, `render_wizard_header` stacks note on `XS`, `render_entity_panel` responsive width/padding + `width=term_w-2`, `render_table` same cap + paging, `render_error_card` tight indent + fit title on `XS`.
+- **Help (`cli/shell.py`)**: `_print_help_row` stacks `syntax/alias/desc` on 3 lines for `XS`, single line otherwise.
+- **Cases**: `case show` subtitle short `UUID 8…` on `XS`.
+- **Audit**: `--seq` `Before/After` compact single-line JSON on `XS` via `_dump_json`.
+- **DB (`core/cli/db_commands.py`)**: `status` grid responsive, URL/tables fit on `XS`, migrations `Ver/Name` 2-col on `XS` else 4-col with `table time`.
+- **Verification**: 87 passed, 0 Ruff, 0 Mypy (70 files).
+
+---
+
+## 2026-09-13 — Live resize redraw (no retype)
+
+> Scrollback can't reflow. New output can. Auto re-render last read-only view on breakpoint change.
+
+- **New (`core/cli/resize.py`)**: `term_size()` via `shutil` (Windows-safe), `is_rerunnable_line()` allow `list/show/verify/status/help/recent/ls/sh`, block `create/edit/close/delete/restore/select`, `should_redraw()` only on breakpoint/compact change (ignores pixel jitter).
+- **Shell (`cli/shell.py`)**: `RLock + _last_size/_last_view`, `run()` uses `patch_stdout` + 0.5s daemon watcher, empty-Enter fast path `_redraw_if_resized()`, `execute_line(_from_redraw)` remembers views. Mutations never auto-rerun.
+- **Tests (`tests/unit/test_resize.py`)**: readonly vs mutating, breakpoint change, shell memory.
+- **Verification**: 90 passed, 0 Ruff, 0 Mypy (72 files).
+
+---
+
+## 2026-09-13 — Fix ANSI leak on legacy cmd (`?[2J` garble)
+
+> `cls` + background redraw emitted `ESC[2J/38;2` raw on Command Prompt. VT off + concurrent print.
+
+- **Core (`core/ui/renderers.py`)**: `_enable_windows_vt()` via `SetConsoleMode`, `clear_screen()` uses `os.system(cls)` on legacy cmd, single source.
+- **Shell**: `clear/cls/redraw` use `clear_screen()`, watcher only when `can_live_redraw()` (WT or non-Windows). Legacy cmd uses Enter-to-refresh, no `patch_stdout` thread corruption.
+- **Resize (`core/cli/resize.py`)**: added `can_live_redraw()` gate.
+- **Verification**: 92 passed, 0 Ruff, 0 Mypy.
+
+---
+
+## 2026-09-13 — Proper polling + invalidation (no thread, no clear-as-primary)
+
+> Scrollback is immutable. Live parts (toolbar, completions, prompt) poll + invalidate.
+
+- **Resize (`core/cli/resize.py`)**: `term_size()` reads `console.size` fresh first, `current_breakpoint()/size_label()` fresh each call, no width globals. Kept `is_rerunnable/should_redraw`.
+- **Shell (`cli/shell.py`)**: removed daemon thread + `patch_stdout` + `console.clear()` redraw. `PromptSession(refresh_interval=0.5)` uses prompt_toolkit's `terminal_size_polling_interval` (0.5s default) for Windows. Live `bottom_toolbar` shows `cols x rows · BP` + `resized — Enter to re-render` stale hint. `Enter`/`redraw` re-renders last read-only view in place (append, no clear). Mutations never re-run.
+- **Renderers**: every layout reads `breakpoint_width()` → `console.size` live each render. Verified 80/120/160/200.
+- **Verification**: 93 passed, 0 Ruff, 0 Mypy.
+
+---
+
+## 2026-09-13 — Remove toolbar, true live re-render (no Enter, no retype)
+
+> Toolbar removed. Resize now auto prints the fresh table below within 0.5s.
+
+- **Shell (`cli/shell.py`)**: deleted `bottom_toolbar` + `refresh_interval`. Watcher back but append-only (no `clear`, no banner): `resized 113x39 — re-rendering case list` + fresh table. Gated by `can_live_redraw()` (WT/non-Windows); legacy cmd keeps Enter/`redraw` path. `redraw` preserves `_last_view`.
+- **Resize (`core/cli/resize.py`)**: restored `can_live_redraw()`, fresh `console.size` first.
+- **Verification**: 94 passed, 0 Ruff, 0 Mypy.
+
+---
+
+## 2026-09-13 — Cap tables at laptop width, drop live-watch dead code
+
+> Yes, understood: tables must never stretch past a comfortable laptop threshold even on 200-col terminals. Live watcher dropped.
+
+- **Core (`core/ui/renderers.py`)**: `MAX_TABLE_WIDTH=116`, `render_minimalist_table` + `render_table` cap `width=min(term_w-2, 116)`.
+- **Removed dead code**: `core/cli/resize.py`, `tests/unit/test_resize.py`, shell watcher (`_snapshot/_remember/_redraw/_watcher`, `_last_size/_last_view`, `RLock`, `redraw` command + help entry). `execute_line` back to `(line)`. Each command already reads `console.size` fresh, so breakpoints stay live per render.
+- **Verification**: 87 passed, 0 Ruff, 0 Mypy (70 files).
+
+---
+
+## 2026-09-13 — DB refresh: wipe junk, reseed live demo set
+
+> Postgres `trace` held 9 junk cases + 6 stale audit events + 3 orphan anchors. Full reset per approval.
+
+- **Backup**: 9 cases dumped to temp `trace-backup-cases.json` before wipe (no `pg_dump` on host).
+- **Reset**: `DROP SCHEMA public CASCADE` + `CREATE SCHEMA` + `init_schema()` re-applied migrations 001–007 clean (`drop_all` skipped — ledger lives in separate `MetaData`). Cleared stale `anchors/`.
+- **Reseed live via `CaseService` only (no SQL)**: 5 auto-numbered cases (`2026-CR-0001`–`0005`), 1 documented edit with reason (5W1H diff), 1 sealed closure with fresh anchor. Numbering, UTC, audit hashes all produced by live paths.
+- **Result**: 5 cases (4 OPEN, 1 CLOSED), audit VALID 7 events seq 1→7, anchor `anchor-2026-CR-0003-7.json`.
+- **Verification**: 87 passed, 0 Ruff, 0 Mypy. No source files changed (data-only task).
+
+---
+
+## 2026-09-13 — Phase A trust fixes (production-readiness register)
+
+> Full problem list frozen in `docs/audits/production_readiness_subpart_1_2.md`. Phase A = 10 trust fixes, no UX change.
+
+- **Honest counts (A1)**: `render_minimalist_table(..., total=)`, case table passes `len(cases)` — separators no longer inflate.
+- **ARCHIVED filter (A2)**: `deleted_only` on `BaseFilterDto` → repository → service → Typer + shell. `--status ARCHIVED` now lists only archived.
+- **Edit guard (A3)**: reason-only edit reports "not modified" instead of false success.
+- **Delete actor (A4)**: fallback to lead examiner (was `"system"`); new `case delete --by` mirroring `--closed-by`.
+- **Mask parser (A5)**: `urllib.parse` split — special-char passwords can't leak fragments.
+- **Markup escape (A6)**: `escape()` inside `render_error_card` (single source); 5 raw `[red]` shell prints routed through it.
+- **DB errors (A7)**: `check_connection` returns generic message, detail to structlog.
+- **Anchor (A8)**: failure now structlog-warns with case context instead of `pass`.
+- **Narrow excepts (A9)**: timeline/header paths catch `NotFoundError` only; outages reach the boundary.
+- **Hash single-pass (A10)**: `append` hashes serialized bytes once.
+- **Tests**: archived-only filter, delete-actor attribution, special-char mask, markup escape.
+- **Verification**: 91 passed, 0 Ruff, 0 Mypy (70 files). B/C/D phases queued in the register.
+
+---
+
+## 2026-09-13 — Phase B reuse pass (delete + unify)
+
+> Nine dead helpers deleted, four new single sources. No behavior change except advertised-but-ignored shell flags now working.
+
+- **Deleted**: `strip_flags`, `list_all`, `stream_all`, `maybe_show_case_header`, `build_audit_filter`, `_dto_from_row`, `_parse_status`, `_create_case_status_badge`, `_check_anchor`, `_render_case_timeline` (callers go straight to the single source).
+- **New single sources**: `render_success` (13 scattered `[OK]` prints), `extract_int_flag` (int parsing + `ValidationError`), `recent_filter` (5-recent rule for Typer + shell), `audit/anchor.py` (schema + write + read + verify), `helpers.render_case_timeline_view` (header + timeline + empty hint for both CLIs; shell `_show_seq` folds into `show_seq_view`).
+- **Shell parity**: `case list` honors `--limit/--offset/--recent`, `audit show` honors `--limit/--offset` (flags were advertised, silently ignored).
+- **`record()` typed**: `(Session, AuditAction, Subject, str, details, Context|None) → AuditEventDto`; dead `str`-ctx branch deleted (sole caller always passed `Context`).
+- **Tests**: shell parity, anchor write→verify→tamper roundtrip.
+- **Verification**: 93 passed, 0 Ruff, 0 Mypy (71 files). C/D phases queued in the register.
+
+---
+
+## 2026-09-13 — Phase C UX honesty (say what it does)
+
+> Every message now matches behavior. Flag-value/positional parser fixed as a class via `extract_positional`.
+
+- **Sealed truth (B1)**: closed-edit error no longer promises a reopen that doesn't exist.
+- **Copy tip (U2)**: cut the `[c] Copy` half (no such binding) in both dossiers.
+- **Identifier honesty (U4)**: `case show --output json` no longer 404s on `"json"`; `audit show <number>` scopes without `--case` — via new `extract_positional` (flags + their values excluded).
+- **Status parity (U5)**: shell rejects bad `--status` with the same card as Typer.
+- **Scope note (U6)**: auto-scope prints `Scoped to active case …`.
+- **Confirm docs (U9)**: close/delete help names the confirm style in both interfaces.
+- **Anchor surfaced (U7/U8)**: VALID grid carries an Anchor row (warning when unchecked); shell `verify` gains `--anchor`; close prints the anchor path via `latest_anchor_for`.
+- **Clear rules (U10)**: blank required keeps, blank optional clears to `""` (`None` = absent to the service — test caught it).
+- **DB styling (U11)**: `_require_db` via error card; migrations table via `render_minimalist_table`.
+- **Tests**: invalid status, flag-value identifiers, positional audit case, edit clear rules, anchor warning row.
+- **Verification**: 98 passed, 0 Ruff, 0 Mypy (71 files). Leftovers queued as register §F.
+
+---
+
+## 2026-09-13 — Leftover sweep (register §F cleared)
+
+> Everything remaining except process decisions. One rule kept: tested surface stays (`count()`, panel/table primitives).
+
+- **Correctness**: sequence self-heal loop (B2); ledger boundary catches `DBAPIError` so fresh-PG shows migrate guidance (R10); `--recent` composes via `with_recent()` (R11).
+- **Reuse**: badge/pill one source + `border_*` tokens; `number_group`, single completion cap, enum-safe rank; `_show_seq` folded; `ls/sh/ed` help row; filter contract + purge note; version-sync test.
+- **Deleted**: audit `count()`, `build/` dir, `recent_filter` (superseded).
+- **Verification**: 104 passed, 0 Ruff, 0 Mypy (71 files). Register §F closed save process items.
+
+---
+
+## 2026-09-13 — Max-reuse + writing-quality sweep (UX deferred)
+
+> Output dispatch, time, diffs, URLs unified; completion core typed; prompt split; P-1 head query.
+
+- **Dispatch**: `render_event/render_events/render_verify` mirror `render_case(s)` — six json/table branches gone.
+- **Time/snapshot/URL**: `format_ledger_time` + `format_utc_zulu` in core (`_time_compact`/`_utc_display` deleted); `CASE_TRACKED_FIELDS` + `tracked_snapshot` + `changed_fields` shared by service + shell; `sanitized_db_url` single source (`_mask_db_url` deleted); dead base `ensure_utc` removed.
+- **Writing**: completion core fully typed (mypy notes gone); prompt classes extracted to `cli/suggest.py` (shell.py −150 lines, re-exported); crypto-path `why` docstrings on `record`/`chain_hash`/`verify_rows`.
+- **Performance (P-1)**: `head()` one-row tip query; close anchor + tail check use it (was full-table read).
+- **Flake killed**: Windows clock ties made ordering random — parity test now uses a ticking clock.
+- **Verification**: 106 passed (3 consecutive green runs), 0 Ruff, 0 Mypy (72 files).
+
+---
+
+## 2026-09-13 — Max-reuse sweep (one source per behavior)
+
+> Audit found six remaining duplications; all unified. No behavior change.
+
+- **Output dispatch**: `render_event/render_events/render_verify` mirror `render_case(s)` — six json/table branches gone from audit commands/shell/helpers.
+- **Time**: `format_ledger_time` + `format_utc_zulu` in core; `_time_compact`/`_utc_display` deleted.
+- **Diffs**: `CASE_TRACKED_FIELDS` + `tracked_snapshot` + `changed_fields` in domain; service and shell preview share them.
+- **URLs**: `sanitized_db_url` in session; `_mask_db_url` deleted.
+- **Dead static**: base `ensure_utc` removed (zero callers).
+- **Tests**: snapshot/diff, `number_group`.
+- **Verification**: 106 passed, 0 Ruff, 0 Mypy (71 files).
+
+---
+
+## 2026-09-14 — Audit detail to professional dossier (no icons, CHANGES, INTEGRITY)
+
+> `audit show --seq N` rebuilt to the approved mockup. Before/After kept as evidence, presented as a table.
+
+- **Labels**: Who/When/Where/Why/What/How → Actor/Timestamp/Target/Reason/Event/Method (same values).
+- **CHANGES table**: one row per changed field, old red-tinted → new green-tinted, `null`/`""` literal. Only on update events.
+- **INTEGRITY section**: Payload/Prev/Chain hashes as labeled rows (real Chain Hash included), split on narrow screens.
+- **Cleanup**: `_detail_sections`/`_dump_json` deleted (superseded); `show_count=False` added for titled tables.
+- **Verification**: 106 passed, 0 Ruff, 0 Mypy (72 files). Rendered against live seq 11 at full + 60-col widths.
+
+---
+
+## 2026-09-14 — Audit detail hierarchy pass (20-point review applied)
+
+> Single identity-block header, human action titles, grouped metadata, tight CHANGES table, categorized INTEGRITY with row self-check.
+
+- **Header**: one block, no blank split; `CASE_UPDATED` → `Case details updated` (all six actions mapped, enum kept in Event row + `--output json`).
+- **Metadata**: Actor → Target → When, blank, Event → Reason → Method; UUID muted inline; labels professional throughout.
+- **CHANGES**: `CHANGES · N records` single heading; content-capped Before/After columns; text-only red/green (no blocks); `Not set`/`Empty` empties.
+- **INTEGRITY**: grid kept per direction; `Previous Chain` label; `✓ VERIFIED`/`✗ MISMATCH` via new pure `verify_event` (row self-check, chain truth stays with `audit verify`); 16-floor label width so nothing wraps at XS.
+- **Ending**: raw-payload tip with the exact command.
+- **Verification**: 107 passed, 0 Ruff, 0 Mypy (72 files). Live-rendered seq 11 attached above.
+
+---
+
+## 2026-09-14 — Case dossier in audit-detail language
+
+> `case show` rebuilt to mirror `audit show --seq`: identity block, grouped metadata, sections, proof block.
+
+- **Identity**: `CASE number / title / STATUS · Opened IST` one block; UUID subtitle dropped.
+- **Metadata**: Lead Examiner/Tags, blank, Opened/Updated/Closed with UTC in brackets; closure/archival rows only when set; 16-floor label width (same XS fix as integrity).
+- **Sections**: `DESCRIPTION`/`NOTES` uppercase, skipped silently when empty (no more `None` rows).
+- **HISTORY proof block**: newest-first compact event lines (max 5 + pointer), fed by live ledger read in both CLIs (degrades to no block if unreadable so the dossier always renders).
+- **Shared**: `_history_lines`, `action_title` promoted public, `_format_closed_timestamp` deleted (superseded by `_closed_value`).
+- **Verification**: 108 passed, 0 Ruff, 0 Mypy (72 files). Live-rendered CR-0006 attached above.
+
+---
+
+## 2026-09-14 — Detail-view max-reuse (one dossier language)
+
+> Both dossiers now share primitives; no view owns its own header/section/tip code.
+
+- **Core**: `render_detail_header` (Text-aware meta line), `render_section_title` (styled), `render_raw_tip`.
+- **Shared**: `short_action_label` (timeline + HISTORY), `_history_lines` deleted.
+- **Verification**: 108 passed, 0 Ruff, 0 Mypy (72 files). Both live renders byte-identical to approved look.
+
+---
+
+## 2026-09-14 — Alignment fixes (CHANGES indent + tight columns, case status indent)
+
+> From screenshots: Field column flush-left, Before/After dead zones, case `OPEN` line unindented.
+
+- **CHANGES table**: `  Field` header + indented cells (matches case-table pattern); content-measured column budgets (indent-aware) instead of terminal-derived; new `tight=True` on `render_minimalist_table` so small tables hug content instead of stretching.
+- **Case identity**: status line carries its `  ` indent inside the assembled meta Text.
+- **Verification**: 108 passed, 0 Ruff, 0 Mypy (72 files). Live renders confirmed above.
+
+---
+
+## 2026-09-14 — CHANGES divider breathing room
+
+> After column carries `min_width + 4` so the header rule extends slightly past content.
+> Verification: 108 passed, 0 Ruff, 0 Mypy (72 files).
+
+---
+
+## 2026-09-14 — Case dossier section dividers
+
+> One shared `rule_line` divider closes identity, metadata, each text section, and HISTORY.
+> Verification: 108 passed, 0 Ruff, 0 Mypy (72 files). Live-rendered CR-0006 attached above.
+
+---
+
+## 2026-09-14 — Dossier rhythm pass (equal padding everywhere)
+
+> One blank line on each side of every divider; one blank between every title and its content; HISTORY left open at the bottom (no closing divider).
+> Verification: 108 passed, 0 Ruff, 0 Mypy (72 files). Live-rendered CR-0006 attached above.
+
+---
+
+## 2026-09-14 — Tighter dossier rhythm
+
+> Dividers hug the content above; exactly one blank below every divider and title.
+> Verification: 108 passed, 0 Ruff, 0 Mypy (72 files). Live-rendered CR-0006 attached above.
+
+---
+
+## 2026-09-14 — CHANGES header indent
+
+> First column header is now `  Field`, matching its indented cells (same convention as `  Case #`).
+> Verification: 108 passed, 0 Ruff, 0 Mypy (72 files).
+
+---
+
+## 2026-09-14 — Textual fullscreen console (pilot built, all four screens)
+
+> `trace tui`. Third adapter; Typer + REPL untouched. Calm UX: tabs, live panes, palette, toasts.
+
+- **Dep chain**: `textual==8.2.8` via `uv add` → `pyproject` + `uv.lock` + hash-pinned `requirements.txt` (both envs verified).
+- **Shell (`tui/app.py`)**: tabbed Cases/Audit/Verify/DB, contextual hint bar, `Ctrl+P` fuzzy palette (reuses core matcher), `?` key map, `1-4` tabs. Views refresh on tab switch; focus follows the active pane.
+- **Cases**: searchable table + live dossier + HISTORY + raw drawer; create/edit/close/archive/purge/restore via modals with CLI-identical confirms. Mutations toast + refresh.
+- **Audit**: live stream + detail (human titles, CHANGES, row self-check) + scope/search + export. Shared `format_change_value`, `short_action_label`, `action_title`.
+- **Verify**: big verdict, anchor picker, export; **DB**: health, tables, migrations, one-button migrate. All service errors toast, never crash.
+- **Blueprint** `docs/blueprints/textual_tui.md` marked built.
+- **Verification**: 110 passed (headless pilot: mount → navigate → dossier → audit → verify → db), 0 Ruff, 0 Mypy (83 files).
+
+---
+
+## 2026-09-14 — TUI escape + scroll (unstick every modal)
+
+> Every modal backs out on Esc with cancel semantics; the case form scrolls so Save/Cancel stay reachable on short terminals.
+
+- **Shared `ESCAPES` binding** in forms (reused by palette modals): `Esc` → cancel-safe dismiss on CaseForm/Raw/TextInput/TypedConfirm/YesNo/Palette/Keys.
+- **Case form body scrolls** (`VerticalScroll` + max-height); Cancel button renamed `Cancel (Esc)`.
+- **Verification**: 111 passed (escape test pushes every modal, Esc, asserts it popped), 0 Ruff, 0 Mypy.
+
+---
+
+## 2026-09-14 — Case form focus + Enter flow (typing actually works)
+
+> Root cause: focus landed on the scroll container, so keystrokes went nowhere.
+
+- **Focus**: `on_mount` puts the cursor in Title; compact inputs kept (form fits, no scroll needed).
+- **Easy apply**: `Enter` advances field-to-field, last `Enter` saves (validated); `Esc` still cancels.
+- **Verification**: 112 passed (keyboard-flow test types/advances/saves headlessly), 0 Ruff, 0 Mypy.
+
+---
+
+## 2026-09-14 — Full-size form inputs (compact was untypeable-feeling)
+
+> Compact single-row inputs felt too small to write in. Back to bordered inputs with tight margins; form fits without scrolling, `max-height: 32` keeps short terminals scrolling.
+> Verification: 112 passed (headless: focus, typing, zero scrollbars at 100x40), 0 Ruff, 0 Mypy.
+
+---
+
+## 2026-09-14 — Prettier case form (round inputs, centered header + buttons)
+
+> Round input borders (accent on focus), centered bold-accent heading, centered round buttons.
+> Verification: TUI tests green, 0 Ruff, 0 Mypy, zero CSS errors on mount.
+
+---
+
+## 2026-09-14 — Integrity & Database as structured cards
+
+> Both tabs were flat dumps with huge empty gaps. Now each is three cards on a scroll.
+
+- **Integrity** (`tui/screens/verify.py`): `Chain status` (verdict + counts + gaps), `Anchor check` (input + Verify, helper text), `Export bundle` (input + Export). Each card `round $panel` with title, `input-row` with round inputs.
+- **Database** (`tui/screens/db.py`): `Connection` (pill + URL), `Tables` (dim list), `Migrations` (DataTable + button) — same card chrome, `max-height 12` for the table.
+- **Shell** (`tui/app.py`): shared `.card` + `.input-row` CSS, scroll containers `1fr`.
+- **Verification**: 112 passed, 0 Ruff, 0 Mypy.
+
+---
+
+## 2026-09-14 — 2-per-row form + dossier section breathing room
+
+> Form shows Title+Examiner and Number/Tags (or Tags+Reason) side-by-side; Description/Notes stay full-width.
+
+- **Form** (`tui/forms.py`): wider `80` card, grid `2` cols + `field-full` span, `CREATE CASE` big centered header (`height 3` + underline), `72→80` wider inputs, `4`-high rows with minimal `1` gutter; same `CaseForm` for create/edit via `for_create`.
+
+- **Audit list** (`tui/screens/audit.py`): scoped hint hidden when empty (`display` toggle) — upper gap above `Seq/Event` header gone.
+
+- **Dossier line-height** (`tui/screens/cases.py` + `audit.py`): added blank line between Tag→Opened groups and extra breathing before section dividers; titles (`Create Case`, `DESCRIPTION` etc.) no longer collide with dividers.
+- **Verification**: 112 passed, 0 Ruff, 0 Mypy.
+
+---
+
+## 2026-09-14 — Audit + form + confirm polish (4-image sweep)
+
+> One reusable form, no scroller unless needed, dim labels, centered red/blue modals.
+
+- **Audit dim** (`tui/screens/audit.py`): Actor/When/Event/Reason labels `dim`, values bright — same hierarchy as case dossier.
+- **Form** (`tui/forms.py`): `84` wide, grid `2` + `field-full` span, `CREATE CASE` centered `height 3` underline, `max-height 90%` + `22` fields cap → no scrollbar at 100×40, `scrollbar-gutter stable`; same `CaseForm` for create/edit.
+- **Confirms** (`tui/forms.py`): `TypedConfirmModal` `round $error 60%` + `YesNoModal` `round $panel 50%`, both `height auto` + centered `Horizontal` buttons (`min-width 18`, `round`), `Esc` shared.
+- **Verification**: 112 passed, 0 Ruff, 0 Mypy.
+
+---
+
+## 2026-09-14 — Fix clipped form buttons + soften outer border (create/edit reuse)
+
+> Buttons were half-cut by the form's clipping; New/Edit already shared the same `CaseForm`.
+
+- **Buttons**: `dock: bottom` + fixed height + wider min-width — fully visible at 40 rows, still docked + scrollable at 24 rows.
+- **Borders**: outer `round $panel 50%` (subtle), inputs stay `round $panel` with no focus-color flash; create/edit remain one class via `for_create`.
+- **Verification**: headless: both buttons visible, focus/typing/Enter intact, 0 Ruff, 0 Mypy.
+
+---
+
+## 2026-09-14 — TUI declutter (slim table, cards, dossier hierarchy)
+
+> Table shows only Case # + Status (dossier carries the rest); panes are rounded bordered cards with a gap; Footer removed (hint bar was duplicating it).
+
+- **Layout**: 1fr/2fr split, `#cases-*/#audit-*` round `$panel` cards on darker ground, search placeholder trimmed.
+- **Dossier**: bold-bright title, status dot + word, dim labels over bright values, history action word emphasized, UTC moved to raw drawer, live-width dividers between sections.
+- **Verification**: 111 passed, 0 Ruff, 0 Mypy (83 files).
+
+---
+
+## 2026-09-14 — Audit tab declutter (mirrors Cases)
+
+> Stream slimmed to Seq + human Event; search + scope live inside the left card; both cards full-height; shared `DossierScroll` divider engine for both dossiers.
+> Verification: 111 passed, 0 Ruff, 0 Mypy (84 files).
+
+---
+
+## 2026-09-14 — TUI pure-black background
+
+> Theme background + surface are `#000000` (true transparency isn't renderable — every cell needs a color). Card separation now comes from borders alone.
+> Verification: TUI tests green, 0 Ruff, 0 Mypy.
+
+---
+
+## 2026-09-14 — Dossier breathing room
+
+> Right-hand cards (`#cases-right`, `#audit-right`) get `padding: 1 2` — content floats inside the border, structure untouched.
+> Verification: TUI tests green, 0 Ruff, 0 Mypy.
+
+---
+
+## 2026-09-14 — Textual TUI blueprint (plan only, no code)
+
+> `docs/blueprints/textual_tui.md`: full implementation contract for the building agent — architecture (third adapter, headless core), design language, all four screens, command mapping, subpart fit, testing, build order with pilot gate.
+> Verification: docs only, suite untouched.
+
+---
+
+## 2026-09-14 — Process decisions recorded (no code change)
+
+> Human calls, per AGENTS.md §3 — verified current state first, then recorded.
+
+- **Lockfiles**: canonical chain is `pyproject → uv.lock → requirements.txt → CI/installers` (header already states the export command). Rule: never hand-edit `requirements.txt`.
+- **Version**: test-guard stays (`test_version_single_sourced` green); derivation rejected.
+- **Docs**: `/docs` stays ignored — private working set; public docs authored separately later.
+- **Verification**: no code touched, suite untouched (108 green from prior run).
+
+---
+
+## 2026-09-13 — Phase D production hardening (database honest at last)
+
+> Runbook: `docs/specs/production_operations.md` (three roles, parity table, checklist, close habit).
+
+- **R1 ledger protection**: migration `008_audit_append_only_protection` — PG trigger + SQLite self-heal, verified per backend. Roles: app (INSERT/SELECT), migration owner, DB owner (never used by Trace).
+- **R5 verify-then-record**: `MIGRATION_VERIFIERS` run inside the migration transaction — failure rolls back unrecorded. 006 verifier included (006 is PG-only now; SQLite enforces in domain).
+- **R7 cache keys**: `db_identity()` (sha of credential-free URL) + 64-entry bound. No `id()`, no raw URLs.
+- **R8 bootstrap lock**: PG advisory lock, SQLite lockfile, `:memory:` no-op. Two-process race test asserts exactly-once ledger.
+- **R9 parity**: 5-row guarantee table, one test per row (incl. new PG append-only integration test).
+- **S4 knobs split**: `TRACE_SQL_ECHO` separate from `TRACE_DEBUG`, off by default + documented warning.
+- **S5 habit**: close prints "copy off-host"; runbook defines export-per-close.
+- **Tests**: trigger enforcement, bootstrap race, threaded chain contiguity, case-insensitive search, knob decoupling.
+- **Verification**: 103 passed, 0 Ruff, 0 Mypy (71 files). Register Section E complete.
+
+
 
 
 

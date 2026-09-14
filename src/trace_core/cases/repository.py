@@ -30,6 +30,7 @@ class CaseRepository(Protocol):
         limit: int | None = None,
         offset: int | None = None,
         recent: bool = False,
+        deleted_only: bool = False,
     ) -> list[Case]: ...
     def update(self, entity: Case) -> Case: ...
     def delete(self, entity_id: uuid.UUID, purge: bool = False) -> bool: ...
@@ -130,11 +131,14 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         limit: int | None = None,
         offset: int | None = None,
         recent: bool = False,
+        deleted_only: bool = False,
     ) -> list[Case]:
         """List cases with search, status filters, deterministic sorting, and pagination."""
         stmt = select(CaseModel)
 
-        if not include_deleted:
+        if deleted_only:
+            stmt = stmt.where(CaseModel.is_deleted.is_(True))
+        elif not include_deleted:
             stmt = stmt.where(CaseModel.is_deleted.is_(False))
 
         if status is not None:
@@ -290,6 +294,10 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
                 if seq_record is None:
                     raise
 
-        seq_record.last_sequence += 1
-        self.session.flush()
-        return f"{prefix}{seq_record.last_sequence:04d}"
+        for _ in range(100):
+            seq_record.last_sequence += 1
+            self.session.flush()
+            candidate = f"{prefix}{seq_record.last_sequence:04d}"
+            if self.get_by_number(candidate) is None:
+                return candidate
+        raise ValueError(f"Case sequence exhausted for year {current_year}.")

@@ -39,3 +39,40 @@ def test_audit_cli_show_verify_export(tmp_path, session_manager: DatabaseSession
     res_j = runner.invoke(app, ["audit", "show", "--output", "json"])
     assert res_j.exit_code == 0
     assert "seq" in res_j.stdout
+
+
+def test_anchor_write_verify_roundtrip(
+    tmp_path, session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """Verify anchor single-source: write on close, verify against it, catch tampering."""
+    from trace_core.audit.anchor import read_anchor, verify_against_anchor
+    from trace_core.audit.service import AuditService
+    from trace_core.core.errors import AuditTamperError
+    from trace_core.core.settings import settings
+
+    monkeypatch.setattr(settings, "storage_root", tmp_path)
+    svc = CaseService(session_manager)
+    created = svc.create_case(CaseCreateDto(title="Anchor", lead_examiner="Ex"))
+    closed = svc.close_case(created.number, reason="done", closed_by="Ex")
+
+    anchors = list((tmp_path / "anchors").glob("*.json"))
+    assert len(anchors) == 1
+    data = read_anchor(anchors[0])
+    assert data["case"] == closed.number
+
+    from trace_core.audit.anchor import latest_anchor_for
+
+    assert latest_anchor_for(closed.number) == anchors[0]
+
+    audit_svc = AuditService(session_manager)
+    res = audit_svc.verify()
+    assert res.is_valid
+    verify_against_anchor(audit_svc, res, str(anchors[0]))
+
+    # tampered anchor must convict
+    import json
+
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({**data, "last_seq": 999}), encoding="utf-8")
+    with pytest.raises(AuditTamperError):
+        verify_against_anchor(audit_svc, res, str(bad))

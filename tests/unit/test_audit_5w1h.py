@@ -34,6 +34,28 @@ def test_5w1h_enrichment(session_manager: DatabaseSessionManager) -> None:
     assert payload["details"]["after"]["title"] == "W2"
 
 
+def test_action_titles_and_row_self_check(session_manager: DatabaseSessionManager) -> None:
+    from trace_core.audit.renderers import action_title
+    from trace_core.audit.verifier import verify_event
+
+    assert action_title("CASE_CREATED") == "Case created"
+    assert action_title("CASE_UPDATED") == "Case details updated"
+    assert action_title("CASE_CLOSED") == "Case closed"
+    assert action_title("CASE_ARCHIVED") == "Case archived"
+    assert action_title("CASE_RESTORED") == "Case restored"
+    assert action_title("CASE_PURGED") == "Case purged"
+
+    svc = CaseService(session_manager)
+    c = svc.create_case(CaseCreateDto(title="W1", lead_examiner="Alice"))
+    svc.update_case(c.number, CaseUpdateDto(title="W2"))
+    audit = AuditService(session_manager)
+    e = audit.get_by_seq(2)
+    assert e is not None
+    assert verify_event(e.payload_json, e.payload_hash, e.prev_chain, e.chain_hash, e.seq) is True
+    assert verify_event(e.payload_json, "0" * 64, e.prev_chain, e.chain_hash, e.seq) is False
+    assert verify_event(e.payload_json, e.payload_hash, e.prev_chain, "0" * 64, e.seq) is False
+
+
 def test_audit_show_seq_detail(session_manager: DatabaseSessionManager) -> None:
     from typer.testing import CliRunner
 
@@ -59,7 +81,7 @@ def test_audit_show_seq_detail(session_manager: DatabaseSessionManager) -> None:
         res = runner.invoke(app, ["audit", "show", "--seq", "1"])
         assert res.exit_code == 0
         assert "AUDIT #1" in res.stdout
-        assert "Who" in res.stdout
+        assert "Actor" in res.stdout
         res2 = runner.invoke(app, ["audit", "show", "--seq", "999"])
         assert res2.exit_code != 0
     finally:

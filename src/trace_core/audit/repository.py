@@ -1,5 +1,6 @@
 """Audit repository: serialized global chain append, list, and streaming helpers."""
 
+import hashlib
 from typing import Any
 from uuid import UUID
 
@@ -35,13 +36,9 @@ def _model_to_dto(m: AuditEventModel) -> AuditEventDto:
     return AuditEventDto(**_base_fields(m))  # type: ignore[arg-type]
 
 
-def _dto_from_row(row: AuditEventModel) -> AuditEventDto:
-    return _model_to_dto(row)
-
-
 def get_by_seq(session: Session, seq: int) -> AuditEventDto | None:
     row = session.get(AuditEventModel, seq)
-    return _dto_from_row(row) if row else None
+    return _model_to_dto(row) if row else None
 
 
 class SqlAlchemyAuditRepository:
@@ -74,7 +71,6 @@ class SqlAlchemyAuditRepository:
         payload_details: dict[str, Any] | None = None,
         ts: Any | None = None,
     ) -> AuditEventDto:
-        from trace_core.audit.domain import payload_hash as domain_payload_hash
         from trace_core.core.clock import now_utc
 
         ts_val = ts or now_utc()
@@ -84,7 +80,7 @@ class SqlAlchemyAuditRepository:
 
         payload_bytes = canonical_json(payload)
         payload_json_str = payload_bytes.decode("utf-8")
-        p_hash = domain_payload_hash(payload)
+        p_hash = hashlib.sha256(payload_bytes).hexdigest()
 
         head = self._ensure_head_locked()
         prev = head.last_chain_hash
@@ -109,7 +105,15 @@ class SqlAlchemyAuditRepository:
         self.session.flush()
         return _model_to_dto(model)
 
+    def head(self) -> tuple[int, str]:
+        """Ledger tip (seq, chain) in one indexed row. Single source for anchors + tail checks."""
+        head = self.session.scalar(select(AuditChainStateModel).where(AuditChainStateModel.id == 1))
+        if head is None:
+            return 0, GENESIS_CHAIN
+        return head.last_seq, head.last_chain_hash
+
     def list_events(self, f: AuditFilterDto | None = None) -> list[AuditEventDto]:
+        """Newest-first. Contract: case_number exact, actor/action/search substring."""
         filt = f or AuditFilterDto()
         stmt = select(AuditEventModel)
         if filt.case_number:
@@ -132,12 +136,3 @@ class SqlAlchemyAuditRepository:
             stmt = stmt.limit(filt.limit)
         rows = self.session.scalars(stmt).all()
         return [_model_to_dto(m) for m in rows]
-
-    def stream_all(self):  # type: ignore[no-untyped-def]
-        stmt = select(AuditEventModel).order_by(AuditEventModel.seq.asc())
-        return self.session.scalars(stmt).yield_per(500)
-
-    def count(self) -> int:
-        from sqlalchemy import func
-
-        return self.session.scalar(select(func.count()).select_from(AuditEventModel)) or 0

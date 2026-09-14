@@ -1,12 +1,12 @@
 """Generic reusable SQLAlchemy repository implementation."""
 
 from abc import ABC, abstractmethod
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from trace_core.core.domain import ensure_utc, now_utc
+from trace_core.core.domain import now_utc
 
 ModelT = TypeVar("ModelT")
 EntityT = TypeVar("EntityT")
@@ -50,18 +50,6 @@ class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):
         stmt = select(self.model_cls).where(getattr(self.model_cls, "id") == entity_id)
         model = self.session.scalar(stmt)
         return self._to_domain(model) if model else None
-
-    def list_all(self, include_deleted: bool = False) -> list[EntityT]:
-        """Fetch all entities with soft-delete filter."""
-        stmt = select(self.model_cls)
-        if hasattr(self.model_cls, "is_deleted") and not include_deleted:
-            stmt = stmt.where(getattr(self.model_cls, "is_deleted").is_(False))
-
-        if hasattr(self.model_cls, "opened_at"):
-            stmt = stmt.order_by(getattr(self.model_cls, "opened_at").desc())
-
-        models = self.session.scalars(stmt).all()
-        return [self._to_domain(m) for m in models]
 
     def update(self, entity: EntityT) -> EntityT:
         """Update an existing entity."""
@@ -110,8 +98,3 @@ class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):
         if hasattr(self.model_cls, "is_deleted") and not include_deleted:
             stmt = stmt.where(getattr(self.model_cls, "is_deleted").is_(False))
         return self.session.scalar(stmt) or 0
-
-    @staticmethod
-    def ensure_utc(dt: Any) -> Any:
-        """Helper for subclass timestamp handling."""
-        return ensure_utc(dt)

@@ -32,6 +32,16 @@ def test_preview_case() -> None:
     assert "Laptop SSD" in preview
 
 
+def test_number_group() -> None:
+    """Verify the shared middle-code grouping used by tables and completions."""
+    from trace_core.core.cli.completion import number_group
+
+    assert number_group("2026-CR-0001") == "CR"
+    assert number_group("2026-NR-0001") == "NR"
+    assert number_group("no-dashes-here") == "dashes"
+    assert number_group("nodashes") == "OTHER"
+
+
 def test_rank_active_first(service: CaseService) -> None:
     c1 = service.create_case(CaseCreateDto(title="Old", lead_examiner="Ex"))
     c2 = service.create_case(CaseCreateDto(title="New", lead_examiner="Ex"))

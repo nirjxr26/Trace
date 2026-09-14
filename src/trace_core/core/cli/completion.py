@@ -1,19 +1,47 @@
 """Reusable completion core: ranking, preview, fuzzy, cache, limit 8, no SQLAlchemy."""
 
 import time
+from collections.abc import Callable, Iterable
 from typing import Any
 
 _CACHE: dict[str, tuple[float, Any]] = {}
 _TTL = 2.0  # seconds
+_MAX_CACHE = 64
 
 
-def _cached(key: str, loader):  # type: ignore[no-untyped-def]
+def _cached(key: str, loader: Callable[[], list[tuple[str, str]]]) -> list[tuple[str, str]]:
     now = time.time()
     if key in _CACHE and now - _CACHE[key][0] < _TTL:
         return _CACHE[key][1]
     val = loader()
     _CACHE[key] = (now, val)
+    while len(_CACHE) > _MAX_CACHE:
+        _CACHE.pop(next(iter(_CACHE)))
     return val
+
+
+def _service_key(service: Any, kind: str, extra: str = "") -> str:
+    """Stable cache key from sanitized DB identity. Never id() or raw URLs."""
+    from trace_core.core.database.session import db_identity
+
+    try:
+        ident = db_identity(getattr(service, "session_manager", None))
+    except Exception:
+        ident = "unknown"
+    return f"{kind}:{ident}:{extra}"
+
+
+def _fetch_cases(case_service: Any, include_deleted: bool = False) -> list[Any]:
+    """Single source for completion case reads. Raises on DB failure (callers coerce to [])."""
+    from trace_core.cases.dto import CaseFilterDto
+
+    return case_service.list_cases(CaseFilterDto(include_deleted=include_deleted, limit=50))
+
+
+def _distinct_terms(values: Iterable[Any], label: str, limit: int) -> list[tuple[str, str]]:
+    """Sorted unique non-empty terms with preview labels. Single source for tag/search/actor lists."""
+    terms = sorted({t for t in values if t})
+    return [(t, f"{label} · {t}") for t in terms][:limit]
 
 
 def filter_completions(candidates: list[tuple[str, str]], query: str, limit: int = 8) -> list[tuple[str, str]]:
@@ -38,16 +66,17 @@ def filter_completions(candidates: list[tuple[str, str]], query: str, limit: int
     return (merged + fuzzy)[:limit]
 
 
-def rank_cases(cases: list[Any], active_number: str | None = None) -> list[Any]:  # type: ignore[no-untyped-def]
+def rank_cases(cases: list[Any], active_number: str | None = None) -> list[Any]:
     """Active first, then recent (updated_at desc), then OPEN before others."""
 
-    def _key(c):  # type: ignore[no-untyped-def]
+    def _key(c: Any) -> tuple[int, float, int, int]:
         is_active = 0 if active_number and c.number == active_number else 1
         try:
             ts = c.updated_at.timestamp() if hasattr(c.updated_at, "timestamp") else 0
         except Exception:
             ts = 0
-        is_open = 0 if str(getattr(c, "status", "")) == "OPEN" else 1
+        raw_status = getattr(c, "status", "")
+        is_open = 0 if getattr(raw_status, "value", raw_status) == "OPEN" else 1
         # tie-breaker: larger case number (more recent) first when ts equal
         try:
             seq = int(str(c.number).split("-")[-1])
@@ -58,18 +87,26 @@ def rank_cases(cases: list[Any], active_number: str | None = None) -> list[Any]:
     return sorted(cases, key=_key)
 
 
-def preview_case(c: Any) -> tuple[str, str]:  # type: ignore[no-untyped-def]
-    """Human preview: 2026-CR-0029 · CLOSED · Laptop SSD"""
+def preview_case(c: Any) -> tuple[str, str]:
+    """Human preview: 2026-CR-0029 · CLOSED · Laptop SSD (width-aware)."""
+    from trace_core.core.ui.renderers import breakpoint_width, fit_text, title_max_width
+
+    bp, term_w = breakpoint_width()
+    max_title = min(title_max_width(bp, term_w) or 36, 36)
+    if bp == "XS":
+        max_title = min(max_title, 14)
+
     status = getattr(c, "status", "")
     status_str = getattr(status, "value", str(status)) if status else ""
-    title = (getattr(c, "title", "") or "")[:20]
+    raw_title = getattr(c, "title", "") or ""
+    title = fit_text(raw_title, max_title)
     return (c.number, f"{c.number} · {status_str} · {title}".strip(" ·"))
 
 
-def complete_from_audit(audit_service: Any, limit: int = 8) -> list[tuple[str, str]]:  # type: ignore[no-untyped-def]
+def complete_from_audit(audit_service: Any, limit: int = 8) -> list[tuple[str, str]]:
     """Seq completions with preview, cached 2s, limit 8."""
 
-    def _load():  # type: ignore[no-untyped-def]
+    def _load() -> list[tuple[str, str]]:
         try:
             evts = audit_service.list_events()[:20]
             out = []
@@ -80,26 +117,29 @@ def complete_from_audit(audit_service: Any, limit: int = 8) -> list[tuple[str, s
         except Exception:
             return []
 
-    return _cached(f"audit:{id(audit_service)}", _load)[:limit]
+    return _cached(_service_key(audit_service, "audit"), _load)[:limit]
 
 
-def complete_from_cases(case_service: Any, active_number: str | None = None, limit: int = 8) -> list[tuple[str, str]]:  # type: ignore[no-untyped-def]
+def number_group(number: str) -> str:
+    """Middle-code group (CR/NR/CLI/…) for case numbers. Single source."""
+    try:
+        return number.split("-")[1] if "-" in number else "OTHER"
+    except Exception:
+        return "OTHER"
+
+
+def complete_from_cases(case_service: Any, active_number: str | None = None, limit: int = 8) -> list[tuple[str, str]]:
     """Case-number completions ranked active→recent→open, grouped by prefix CR/NR/CLI, cached 2s, limit 8."""
+    cap = limit + 4  # room for group headers
 
-    def _load():  # type: ignore[no-untyped-def]
+    def _load() -> list[tuple[str, str]]:
         try:
-            from trace_core.cases.dto import CaseFilterDto
-
-            cases = case_service.list_cases(CaseFilterDto(include_deleted=True, limit=50))
-            ranked = rank_cases(cases, active_number)
+            ranked = rank_cases(_fetch_cases(case_service, include_deleted=True), active_number)
             # group by prefix like CR/NR/CLI for together + space
             grouped: dict[str, list[Any]] = {}
             order: list[str] = []
             for c in ranked:
-                try:
-                    prefix = c.number.split("-")[1] if "-" in c.number else "OTHER"
-                except Exception:
-                    prefix = "OTHER"
+                prefix = number_group(c.number)
                 if prefix not in grouped:
                     grouped[prefix] = []
                     order.append(prefix)
@@ -111,56 +151,50 @@ def complete_from_cases(case_service: Any, active_number: str | None = None, lim
                     out.append(("", f"── {pref} ──"))
                 for c in grouped[pref]:
                     out.append(preview_case(c))
-                    if len(out) >= 20:
+                    if len(out) >= cap:
                         break
+                if len(out) >= cap:
+                    break
             return out
         except Exception:
             return []
 
-    key = f"cases:{id(case_service)}:{active_number}"
-    # filter after grouping, but keep header logic inside _load already; just cap
-    return _cached(key, _load)[: limit + 4]  # +4 for headers
+    return _cached(_service_key(case_service, "cases", active_number or ""), _load)[:cap]
 
 
-def complete_tags(case_service: Any, limit: int = 8) -> list[tuple[str, str]]:  # type: ignore[no-untyped-def]
-    def _load():  # type: ignore[no-untyped-def]
+def complete_tags(case_service: Any, limit: int = 8) -> list[tuple[str, str]]:
+    """Tag completions from live case taxonomy."""
+
+    def _load() -> list[tuple[str, str]]:
         try:
-            from trace_core.cases.dto import CaseFilterDto
-
-            cases = case_service.list_cases(CaseFilterDto(limit=50))
-            tags = sorted({t for c in cases for t in c.tags})
-            return [(t, f"Tag · {t}") for t in tags]
+            return _distinct_terms([t for c in _fetch_cases(case_service) for t in c.tags], "Tag", limit)
         except Exception:
             return []
 
-    return _cached(f"tags:{id(case_service)}", _load)[:limit]
+    return _cached(_service_key(case_service, "tags"), _load)[:limit]
 
 
-def complete_search_terms(case_service: Any, limit: int = 8) -> list[tuple[str, str]]:  # type: ignore[no-untyped-def]
-    def _load():  # type: ignore[no-untyped-def]
+def complete_search_terms(case_service: Any, limit: int = 8) -> list[tuple[str, str]]:
+    """Title/examiner completions for search boxes."""
+
+    def _load() -> list[tuple[str, str]]:
         try:
-            from trace_core.cases.dto import CaseFilterDto
-
-            cases = case_service.list_cases(CaseFilterDto(limit=50))
-            terms = set()
-            for c in cases:
-                terms.add(c.title)
-                terms.add(c.lead_examiner)
-            # also audit actors
-            return [(t, f"Search · {t}") for t in sorted(terms) if t][:limit]
+            cases = _fetch_cases(case_service)
+            return _distinct_terms([c.title for c in cases] + [c.lead_examiner for c in cases], "Search", limit)
         except Exception:
             return []
 
-    return _cached(f"search:{id(case_service)}", _load)[:limit]
+    return _cached(_service_key(case_service, "search"), _load)[:limit]
 
 
-def complete_actors(audit_service: Any, limit: int = 8) -> list[tuple[str, str]]:  # type: ignore[no-untyped-def]
-    def _load():  # type: ignore[no-untyped-def]
+def complete_actors(audit_service: Any, limit: int = 8) -> list[tuple[str, str]]:
+    """Actor completions from live ledger."""
+
+    def _load() -> list[tuple[str, str]]:
         try:
             evts = audit_service.list_events()[:50]
-            actors = sorted({e.actor for e in evts})
-            return [(a, f"Actor · {a}") for a in actors]
+            return _distinct_terms([e.actor for e in evts], "Actor", limit)
         except Exception:
             return []
 
-    return _cached(f"actors:{id(audit_service)}", _load)[:limit]
+    return _cached(_service_key(audit_service, "actors"), _load)[:limit]

@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     app_name: str = "Trace"
     version: str = "0.1.0"
     debug: bool = False
+    # SQL statement echo. Deliberately separate from debug: SQL logs carry case
+    # content (titles, notes), so production keeps TRACE_SQL_ECHO=0.
+    sql_echo: bool = Field(default=False, alias="TRACE_SQL_ECHO")
 
     # Primary database URL. Defaults to local PostgreSQL, can be overridden via TRACE_DATABASE_URL or .env
     # Example PostgreSQL: postgresql+psycopg://postgres:postgres@localhost:5432/trace

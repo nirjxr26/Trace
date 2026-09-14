@@ -93,6 +93,29 @@ def test_postgres_integration_lifecycle(pg_session_manager: DatabaseSessionManag
     assert service.delete_case(created.number, purge=True) is True
 
 
+def test_postgres_audit_append_only(pg_session_manager: DatabaseSessionManager) -> None:
+    """Verify the 008 trigger rejects ledger UPDATE/DELETE on PostgreSQL (parity row 1)."""
+    from trace_core.core.database.migrations import get_applied_migrations
+
+    assert any(
+        m["name"] == "008_audit_append_only_protection" for m in get_applied_migrations(pg_session_manager.engine)
+    )
+
+    service = CaseService(pg_session_manager)
+    uid = uuid.uuid4().hex[:6]
+    created = service.create_case(CaseCreateDto(title=f"AppendOnly {uid}", lead_examiner="Agent Mulder"))
+    try:
+        with pg_session_manager.session() as session:
+            for stmt in ("UPDATE audit_events SET actor = 'mallory'", "DELETE FROM audit_events"):
+                with pytest.raises(Exception):
+                    session.execute(text(stmt))
+                    session.flush()
+                session.rollback()
+    finally:
+        service.delete_case(created.number, purge=False)
+        service.delete_case(created.number, purge=True)
+
+
 def test_postgres_concurrent_sequence_allocation(pg_session_manager: DatabaseSessionManager) -> None:
     """Verify concurrent case creation from cold sequence on PostgreSQL generates unique numbers."""
     service = CaseService(pg_session_manager)

@@ -4,179 +4,32 @@ import shlex
 from typing import Any
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.auto_suggest import AutoSuggest, AutoSuggestFromHistory, Suggestion
-from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import InMemoryHistory
 from rich.text import Text
 
 from trace_core.cases.domain import Case
 from trace_core.cases.service import CaseService
 from trace_core.cases.shell_handler import CaseShellCommandHandler
+from trace_core.cli.suggest import TraceAutoSuggest, TraceShellCompleter
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.registry import ShellCommandHandler, ShellCommandRegistry, ShellContext
+
+__all__ = ["InteractiveShell", "TraceAutoSuggest", "TraceShellCompleter", "run_interactive_shell"]
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.settings import settings
 from trace_core.core.ui.renderers import (
+    breakpoint_width,
+    clear_screen,
     console,
     create_key_value_grid,
-    get_rule_char,
+    is_compact_view,
+    kv_width,
     render_error_card,
     render_key_value_grid,
+    rule_line,
+    table_padding,
 )
 from trace_core.core.ui.theme import THEME_TOKENS
-
-
-class TraceAutoSuggest(AutoSuggest):
-    """Context-aware inline ghost command suggestion generator."""
-
-    def __init__(self, shell: "InteractiveShell") -> None:
-        self.shell = shell
-        self.history_suggest = AutoSuggestFromHistory()
-        self.default_suggestions = [
-            "case list",
-            "case create",
-            "case show",
-            "case select",
-            "case deselect",
-            "case edit",
-            "case close",
-            "case delete",
-            "case restore",
-            "list cases",
-            "create case",
-            "show case",
-            "select case",
-            "deselect case",
-            "status",
-            "clear",
-            "help",
-            "exit",
-        ]
-
-    def _suggest_from_history(self, buffer: Any, document: Any) -> Suggestion | None:
-        if buffer is not None and hasattr(buffer, "history"):
-            return self.history_suggest.get_suggestion(buffer, document)
-        return None
-
-    def _suggest_from_defaults(self, text: str) -> Suggestion | None:
-        # context-aware: active case → most logical next is case show / audit show
-        if self.shell.active_case and not text:
-            return Suggestion("case show")
-        # rank: active-aware defaults first
-        ranked = []
-        if self.shell.active_case:
-            ranked = [
-                "case show",
-                f"audit show --case {self.shell.active_case.number}",
-                "case edit",
-                "case list",
-            ]
-        for cmd in ranked + self.default_suggestions:
-            if cmd.startswith(text) and len(cmd) > len(text):
-                return Suggestion(cmd[len(text) :])
-        return None
-
-    def _suggest_from_active_case(self, text: str) -> Suggestion | None:
-        if text.startswith("case ") and self.shell.active_case:
-            active_num = self.shell.active_case.number
-            case_prefixes = (
-                "case show ",
-                "case select ",
-                "case edit ",
-                "case close ",
-                "case delete ",
-                "case restore ",
-            )
-            if any(text == p for p in case_prefixes):
-                return Suggestion(active_num)
-        if text.startswith("audit show") and self.shell.active_case and "--case" not in text:
-            # ghost: audit show → audit show --case <active>
-            if text.strip() == "audit show":
-                return Suggestion(f" --case {self.shell.active_case.number}")
-        return None
-
-    def get_suggestion(self, buffer: Any, document: Any) -> Suggestion | None:
-        if (hist := self._suggest_from_history(buffer, document)) is not None:
-            return hist
-
-        text = document.text.lstrip()
-        if not text:
-            # ghost most logical next based on context
-            return self._suggest_from_defaults(text)
-
-        return self._suggest_from_defaults(text) or self._suggest_from_active_case(text)
-
-
-class TraceShellCompleter(Completer):
-    """Context-aware command autocompleter for the interactive shell."""
-
-    def __init__(self, shell: "InteractiveShell") -> None:
-        self.shell = shell
-
-    def get_completions(self, document: Any, complete_event: Any) -> Any:
-        text = document.text_before_cursor.lstrip()
-        word = document.get_word_before_cursor()
-
-        if " " not in text:
-            from trace_core.core.cli.completion import filter_completions
-
-            root_options = [
-                ("case", "Forensic case management commands"),
-                ("audit", "Audit ledger commands"),
-                ("status", "Display system & database status"),
-                ("clear", "Clear screen & re-render banner"),
-                ("cls", "Clear screen & re-render banner"),
-                ("help", "Display command manual"),
-                ("?", "Display command manual"),
-                ("exit", "Exit interactive console"),
-                ("quit", "Exit interactive console"),
-                ("list", "List cases (alias: list cases)"),
-                ("create", "Create case (alias: create case)"),
-                ("show", "Show case (alias: show case)"),
-                ("select", "Set active case context"),
-                ("use", "Set active case context"),
-                ("deselect", "Clear active case context"),
-                ("unuse", "Clear active case context"),
-                ("edit", "Edit case metadata"),
-                ("close", "Close case"),
-                ("delete", "Delete / purge case"),
-                ("restore", "Restore archived case"),
-                ("ls", "List cases (short)"),
-                ("sh", "Show case (short)"),
-                ("ed", "Edit case (short)"),
-                ("recent", "Recent cases"),
-                ("back", "Back to general"),
-            ]
-            # hide irrelevant globals when inside case context (prompt shows active)
-            if self.shell.active_case and not text:
-                # prioritize case/audit when active
-                root_options = [
-                    ("case", "Forensic case management commands"),
-                    ("audit", "Audit ledger commands"),
-                    ("status", "Display system & database status"),
-                    ("recent", "Recent cases"),
-                    ("back", "Back to general"),
-                    ("help", "Display command manual"),
-                ]
-            for cmd, meta in filter_completions(root_options, text.lower(), limit=8):
-                yield Completion(cmd, start_position=-len(word), display_meta=meta)
-            return
-
-        ctx = self.shell.context
-        for handler in self.shell.registry.all_handlers():
-            for completion in handler.get_completions(text, ctx):
-                if isinstance(completion, tuple):
-                    val, meta = completion
-                else:
-                    val, meta = completion, ""
-                # case/audit previews already contain number · status · title -> show as main display, not duplicate left
-                if meta and "·" in meta:
-                    yield Completion(val, start_position=-len(word), display=meta)
-                elif not val and meta:
-                    # header separator like "── CR ──"
-                    yield Completion(val, start_position=-len(word), display=meta)
-                else:
-                    yield Completion(val, start_position=-len(word), display_meta=meta)
 
 
 def _format_active_case(active_case: Any, empty_hint: str) -> Text:
@@ -191,8 +44,17 @@ def _format_active_case(active_case: Any, empty_hint: str) -> Text:
 
 
 def _print_help_row(syntax: str, alias: str, desc: str) -> None:
-    """Print one manual row shared by feature and console command listings."""
+    """Print one manual row shared by feature and console listings. Stacked on XS."""
+    from trace_core.core.ui.renderers import breakpoint_width, fit_text
+
+    bp, term_w = breakpoint_width()
     alias_str = f"({alias})" if alias else ""
+    if bp == "XS":
+        console.print(f"    [{THEME_TOKENS['value']}]{fit_text(syntax, max(20, term_w - 6))}[/{THEME_TOKENS['value']}]")
+        if alias_str:
+            console.print(f"    [{THEME_TOKENS['muted']}]{alias_str}[/{THEME_TOKENS['muted']}]")
+        console.print(f"    [{THEME_TOKENS['label']}]{fit_text(desc, max(20, term_w - 6))}[/{THEME_TOKENS['label']}]")
+        return
     console.print(
         f"    [{THEME_TOKENS['value']}]{syntax:<36}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{alias_str:<16}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]{desc}[/{THEME_TOKENS['label']}]"
     )
@@ -272,22 +134,11 @@ class InteractiveShell:
         return self.service
 
     def print_banner(self) -> None:
-        """Display simplified startup banner with breathing room and clean status rules."""
-        logo = r"""
-   _____ ____      _    ____ _____ 
-  |_   _|  _ \    / \  / ___| ____|
-    | | | |_) |  / _ \| |   |  _|  
-    | | |  _ <  / ___ \ |___| |___ 
-    |_| |_| \_\/_/   \_\____|_____|"""
+        """Display responsive startup banner adapted to terminal height and width."""
+        bp, term_w = breakpoint_width()
+        compact = is_compact_view(bp)
 
-        rule_char = get_rule_char()
-        rule_line = "  " + (rule_char * 50)
-
-        logo_text = Text(logo, style=THEME_TOKENS["accent"])
-        sub_text = Text(
-            f"  Forensic Data Imaging & Retrieval Tool · v{settings.version}\n",
-            style=THEME_TOKENS["muted"],
-        )
+        rule_str = rule_line(term_w, max_len=50)
 
         try:
             self._ensure_service()
@@ -305,15 +156,37 @@ class InteractiveShell:
                 ("Database", db_label),
                 ("Active Case", active_label),
             ],
-            width=18,
+            width=kv_width(bp, narrow=14, default=18),
+            padding=table_padding(bp),
         )
 
         console.print("")
-        console.print(logo_text)
-        console.print(sub_text)
-        console.print(Text(rule_line, style=THEME_TOKENS["border"]))
+        if compact:
+            # Sleek 2-line header for 80x24 / compact panes — saves 10+ rows for forensic work
+            header_text = Text.assemble(
+                ("  TRACE ", f"bold {THEME_TOKENS['accent']}"),
+                (f"v{settings.version} ", THEME_TOKENS["muted"]),
+                ("· Forensic Console\n", THEME_TOKENS["value"]),
+            )
+            console.print(header_text)
+        else:
+            logo = r"""
+   _____ ____      _    ____ _____ 
+  |_   _|  _ \    / \  / ___| ____|
+    | | | |_) |  / _ \| |   |  _|  
+    | | |  _ <  / ___ \ |___| |___ 
+    |_| |_| \_\/_/   \_\____|_____|"""
+            logo_text = Text(logo, style=THEME_TOKENS["accent"])
+            sub_text = Text(
+                f"  Forensic Data Imaging & Retrieval Tool · v{settings.version}\n",
+                style=THEME_TOKENS["muted"],
+            )
+            console.print(logo_text)
+            console.print(sub_text)
+
+        console.print(Text(rule_str, style=THEME_TOKENS["border"]))
         console.print(status_grid)
-        console.print(Text(rule_line, style=THEME_TOKENS["border"]))
+        console.print(Text(rule_str, style=THEME_TOKENS["border"]))
         console.print(Text("  Type help for commands · exit to quit\n", style=THEME_TOKENS["muted"]))
 
     def get_prompt_text(self) -> str:
@@ -323,7 +196,7 @@ class InteractiveShell:
         return "trace> "
 
     def run(self) -> None:
-        """Run main REPL loop."""
+        """Run main REPL loop. Each command reads terminal size fresh during render."""
         self.print_banner()
 
         while True:
@@ -351,7 +224,7 @@ class InteractiveShell:
             self.show_help()
             return True
         if cmd in ("clear", "cls"):
-            console.clear()
+            clear_screen()
             self.print_banner()
             return True
         if cmd == "status":

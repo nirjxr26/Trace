@@ -200,3 +200,20 @@ class Case(BaseEntity):
         if v is not None and len(v) > 50000:
             raise InvariantViolationError("notes exceeds maximum length of 50000 characters.")
         return v
+
+
+CASE_TRACKED_FIELDS = ("title", "lead_examiner", "description", "notes", "tags")
+
+
+def tracked_snapshot(case: Any) -> dict[str, Any]:
+    """5W1H field snapshot shared by service diffs and shell previews. Single source.
+
+    Accepts the domain entity or its response DTO (same field names, duck-typed) so the
+    domain layer never imports DTOs.
+    """
+    return {k: (list(getattr(case, k)) if k == "tags" else getattr(case, k)) for k in CASE_TRACKED_FIELDS}
+
+
+def changed_fields(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    """Field names whose snapshot values differ. Single source for diff detection."""
+    return [k for k in before if before[k] != after.get(k)]

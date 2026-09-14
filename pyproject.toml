@@ -19,6 +19,7 @@ dependencies = [
     "sqlalchemy>=2.0.28",
     "psycopg[binary]>=3.1.18",
     "structlog>=24.1.0",
+    "textual>=8.2.8",
 ]
 
 [project.optional-dependencies]

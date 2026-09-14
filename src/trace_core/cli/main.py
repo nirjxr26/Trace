@@ -24,6 +24,14 @@ app.add_typer(audit_app, name="audit")
 app.add_typer(db_app, name="db")
 
 
+@app.command("tui")
+def launch_tui() -> None:
+    """Launch the fullscreen live console."""
+    from trace_core.tui.app import run_tui
+
+    run_tui()
+
+
 def version_callback(value: bool) -> None:
     if value:
         typer.echo(f"Trace v{settings.version}")

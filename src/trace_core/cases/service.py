@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 
-from trace_core.cases.domain import Case, CaseStatus, TransitionError, transition_case
+from trace_core.cases.domain import Case, CaseStatus, TransitionError, tracked_snapshot, transition_case
 from trace_core.cases.dto import (
     CaseCreateDto,
     CaseFilterDto,
@@ -140,6 +140,7 @@ class CaseService(BaseService):
                 limit=query_filter.limit,
                 offset=query_filter.offset,
                 recent=query_filter.recent,
+                deleted_only=query_filter.deleted_only,
             )
             return [CaseResponseDto.from_domain(c) for c in cases]
 
@@ -157,17 +158,11 @@ class CaseService(BaseService):
 
             if case.status == CaseStatus.CLOSED:
                 raise InvalidCaseStateError(
-                    f"Cannot update closed case '{identifier}'. Reopen the case before making changes."
+                    f"Cannot update closed case '{identifier}'. Closed cases are permanently sealed."
                 )
 
             # snapshot before for 5W1H diff
-            before: dict[str, Any] = {
-                "title": case.title,
-                "lead_examiner": case.lead_examiner,
-                "description": case.description,
-                "notes": case.notes,
-                "tags": list(case.tags),
-            }
+            before = tracked_snapshot(case)
             changed: list[str] = []
             if dto.title is not None and dto.title != case.title:
                 changed.append("title")
@@ -188,14 +183,7 @@ class CaseService(BaseService):
             if not changed:
                 return CaseResponseDto.from_domain(case)
 
-            after: dict[str, Any] = {
-                "title": case.title,
-                "lead_examiner": case.lead_examiner,
-                "description": case.description,
-                "notes": case.notes,
-                "tags": list(case.tags),
-            }
-            # keep minimal 5W1H reason — V1 edit has no explicit reason flag, store empty
+            after = tracked_snapshot(case)
             updated = repo.update(case)
 
             def _audit(s: Any) -> None:
@@ -239,29 +227,17 @@ class CaseService(BaseService):
 
             def _anchor() -> None:
                 try:
-                    import json
-                    from pathlib import Path
-
+                    from trace_core.audit.anchor import write_anchor
                     from trace_core.audit.service import AuditService
-                    from trace_core.core.clock import now_utc
-                    from trace_core.core.settings import settings
 
                     audit_svc = AuditService(self.session_manager)
-                    events = audit_svc.list_events()
-                    if events:
-                        last = events[0]
-                        anchor = {
-                            "case": updated.number,
-                            "last_seq": last.seq,
-                            "last_chain": last.chain_hash,
-                            "anchored_at": now_utc().isoformat().replace("+00:00", "Z"),
-                            "spec": "trace-audit-v1",
-                        }
-                        path = Path(settings.storage_root) / "anchors" / f"anchor-{updated.number}-{last.seq}.json"
-                        path.parent.mkdir(parents=True, exist_ok=True)
-                        path.write_text(json.dumps(anchor, indent=2), encoding="utf-8")
-                except Exception:
-                    pass
+                    seq, chain = audit_svc.head()
+                    if seq:
+                        write_anchor(updated.number, seq, chain)
+                except Exception as exc:
+                    import structlog
+
+                    structlog.get_logger().warning("Audit anchor write failed", case=updated.number, error=str(exc))
 
             uow.before_commit(_audit)
             uow.on_commit(_anchor)
@@ -273,10 +249,10 @@ class CaseService(BaseService):
         Default: soft-delete (archive).
         purge=True: permanently remove row from database.
         """
-        resolved_actor = _resolve_actor(actor, "system")
         with self.transaction() as uow:
             repo = SqlAlchemyCaseRepository(uow.session)
             case = _require_case(repo, identifier)
+            resolved_actor = _resolve_actor(actor, case.lead_examiner)
 
             if not purge and case.is_deleted:
                 raise InvalidCaseStateError(f"Case '{identifier}' is already archived/deleted.")

@@ -42,7 +42,7 @@ AUDIT_SHOW_FLAGS = [
     ("--limit", "Max rows"),
     ("--offset", "Offset"),
 ]
-AUDIT_VERIFY_FLAGS = [("--output", _OUTPUT_DESC), ("-o", _OUTPUT_DESC)]
+AUDIT_VERIFY_FLAGS = [("--output", _OUTPUT_DESC), ("-o", _OUTPUT_DESC), ("--anchor", "Anchor JSON to check tail")]
 AUDIT_EXPORT_FLAGS = [("--out", "Output file"), ("--format", "jsonl only")]
 ACTION_CHOICES = [
     ("CASE_CREATED", "Case created"),
@@ -52,18 +52,6 @@ ACTION_CHOICES = [
     ("CASE_RESTORED", "Case restored"),
     ("CASE_PURGED", "Case purged"),
 ]
-
-
-def build_audit_filter(
-    case_number: str | None, action_raw: str | None, actor: str | None, search: str | None
-) -> AuditFilterDto:
-    act = None
-    if action_raw:
-        try:
-            act = AuditAction(action_raw.upper())
-        except ValueError:
-            act = None
-    return AuditFilterDto(case_number=case_number, action=act, actor=actor, search=search)
 
 
 class VerifyResultDto(BaseDto):
