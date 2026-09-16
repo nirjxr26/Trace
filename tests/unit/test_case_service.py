@@ -132,8 +132,20 @@ def test_cannot_update_closed_case(service: CaseService) -> None:
     service.close_case("2026-SEALED-0001")
 
     update_dto = CaseUpdateDto(title="Illegal Edit")
-    with pytest.raises(InvalidCaseStateError, match="Reopen the case"):
+    with pytest.raises(InvalidCaseStateError, match="permanently sealed"):
         service.update_case("2026-SEALED-0001", update_dto)
+
+
+def test_tracked_snapshot_and_changed_fields() -> None:
+    """Verify the shared 5W1H snapshot used by service diffs and shell previews."""
+    from trace_core.cases.domain import Case, changed_fields, tracked_snapshot
+
+    case = Case(number="2026-SNP-0001", title="T", lead_examiner="E", tags=["A", "b "])
+    snap = tracked_snapshot(case)
+    assert snap["title"] == "T"
+    assert snap["tags"] == ["a", "b"]
+    assert changed_fields(snap, {**snap, "notes": "new"}) == ["notes"]
+    assert changed_fields(snap, dict(snap)) == []
 
 
 def test_cannot_update_deleted_case(service: CaseService) -> None:

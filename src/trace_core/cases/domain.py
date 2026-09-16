@@ -1,12 +1,12 @@
 """Case domain entity, status enum, and lifecycle state machine."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from trace_core.core.domain import BaseEntity, InvariantViolationError, now_utc
+from trace_core.core.domain import BaseEntity, InvariantViolationError, now_utc, require_utc
 
 
 class CaseStatus(StrEnum):
@@ -40,6 +40,24 @@ _VALID_TRANSITIONS: dict[CaseStatus, set[CaseStatus]] = {
 def can_transition(current: CaseStatus, target: CaseStatus) -> bool:
     """Check if transition between statuses is allowed."""
     return target in _VALID_TRANSITIONS.get(current, set())
+
+
+STATUS_FILTER_KEYWORDS = ("ALL", "ARCHIVED")
+
+
+def is_archived_filter(raw: str | None) -> bool:
+    """Check if a status filter string requests archived (soft-deleted) records."""
+    return raw is not None and raw.upper() == "ARCHIVED"
+
+
+def parse_status_value(raw: str | None) -> CaseStatus | None:
+    """Parse CLI status filter. ALL/ARCHIVED/None/invalid map to None (no lifecycle filter)."""
+    if not raw or raw.upper() in STATUS_FILTER_KEYWORDS:
+        return None
+    try:
+        return CaseStatus(raw.upper())
+    except ValueError:
+        return None
 
 
 def transition_case(
@@ -123,11 +141,7 @@ class Case(BaseEntity):
     @classmethod
     def validate_closed_at_utc(cls, v: datetime | None) -> datetime | None:
         """Validate that closed_at is converted to canonical UTC if present."""
-        if v is None:
-            return None
-        if v.tzinfo is None or v.tzinfo.utcoffset(v) is None:
-            raise InvariantViolationError("All timestamps must be timezone-aware UTC.")
-        return v.astimezone(UTC)
+        return require_utc(v)
 
     @field_validator("number")
     @classmethod
@@ -156,10 +170,46 @@ class Case(BaseEntity):
     @field_validator("tags")
     @classmethod
     def validate_tags(cls, v: list[str]) -> list[str]:
-        """Strip whitespace, lowercase, discard empty tags, and deduplicate."""
+        """Strip whitespace, lowercase, discard empty tags, deduplicate, cap 50 tags ×50 chars."""
         cleaned: list[str] = []
         for tag in v:
             stripped = tag.strip().lower()
-            if stripped and stripped not in cleaned:
-                cleaned.append(stripped)
+            if not stripped or stripped in cleaned:
+                continue
+            if len(stripped) > 50:
+                raise InvariantViolationError("tag exceeds maximum length of 50 characters.")
+            cleaned.append(stripped)
+            if len(cleaned) > 50:
+                raise InvariantViolationError("too many tags (max 50).")
         return cleaned
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 10000:
+            raise InvariantViolationError("description exceeds maximum length of 10000 characters.")
+        return v
+
+    @field_validator("notes")
+    @classmethod
+    def validate_notes(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 50000:
+            raise InvariantViolationError("notes exceeds maximum length of 50000 characters.")
+        return v
+
+
+CASE_TRACKED_FIELDS = ("title", "lead_examiner", "description", "notes", "tags")
+
+
+def tracked_snapshot(case: Any) -> dict[str, Any]:
+    """5W1H field snapshot shared by service diffs and shell previews. Single source.
+
+    Accepts the domain entity or its response DTO (same field names, duck-typed) so the
+    domain layer never imports DTOs.
+    """
+    return {k: (list(getattr(case, k)) if k == "tags" else getattr(case, k)) for k in CASE_TRACKED_FIELDS}
+
+
+def changed_fields(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    """Field names whose snapshot values differ. Single source for diff detection."""
+    return [k for k in before if before[k] != after.get(k)]

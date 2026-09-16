@@ -54,6 +54,13 @@ def test_search_includes_notes(service: CaseService) -> None:
     assert any(c.number == "2026-NOTE-0001" for c in results)
 
 
+def test_search_case_insensitive(service: CaseService) -> None:
+    """Verify search matches across case on every backend (parity row 3)."""
+    service.create_case(CaseCreateDto(number="2026-CASE-0001", title="MixedCaseTitle", lead_examiner="Examiner Ci"))
+    assert any(c.number == "2026-CASE-0001" for c in service.list_cases(CaseFilterDto(search="mixedcasetitle")))
+    assert any(c.number == "2026-CASE-0001" for c in service.list_cases(CaseFilterDto(search="MIXEDCASETITLE")))
+
+
 def test_search_whitespace_normalization(service: CaseService) -> None:
     """Verify whitespace-only search string is normalized to None and returns cases."""
     service.create_case(
@@ -106,6 +113,32 @@ def test_error_sanitization_for_unexpected_exceptions() -> None:
         assert "password authentication failed" in message
     finally:
         settings.debug = orig_debug
+
+
+def test_archived_filter_shows_only_deleted(service: CaseService) -> None:
+    """Verify deleted_only filter returns archived cases and hides actives."""
+    service.create_case(CaseCreateDto(number="2026-ARC-0001", title="Active One", lead_examiner="Examiner A"))
+    service.create_case(CaseCreateDto(number="2026-ARC-0002", title="Archived One", lead_examiner="Examiner A"))
+    service.delete_case("2026-ARC-0002", purge=False)
+
+    archived = service.list_cases(CaseFilterDto(deleted_only=True))
+    numbers = {c.number for c in archived}
+    assert "2026-ARC-0002" in numbers
+    assert "2026-ARC-0001" not in numbers
+
+
+def test_delete_actor_falls_back_to_lead_examiner(service: CaseService) -> None:
+    """Verify archive audit attributes the lead examiner instead of system."""
+    from trace_core.audit.dto import AuditFilterDto
+    from trace_core.audit.service import AuditService
+
+    service.create_case(CaseCreateDto(number="2026-ACT-0001", title="Actor Check", lead_examiner="Lead Who"))
+    service.delete_case("2026-ACT-0001", purge=False)
+
+    events = AuditService(service.session_manager).list_events(AuditFilterDto(case_number="2026-ACT-0001"))
+    archived = [e for e in events if e.action.value == "CASE_ARCHIVED"]
+    assert len(archived) == 1
+    assert archived[0].actor == "Lead Who"
 
 
 def test_dto_input_size_limits() -> None:

@@ -85,8 +85,14 @@ def sample_cases_batch(service: CaseService) -> list[CaseResponseDto]:
     return [service.create_case(dto) for dto in dtos]
 
 
+def make_case(service: CaseService, title: str = "Test Case", examiner: str = "Ex") -> CaseResponseDto:
+    """Single source for case creation in tests. Reusable."""
+    return service.create_case(CaseCreateDto(title=title, lead_examiner=examiner))
+
+
 @pytest.fixture
 def cli_runner(monkeypatch: pytest.MonkeyPatch, session_manager: DatabaseSessionManager) -> CliRunner:
     """Provide a Typer CliRunner pre-isolated with an in-memory database."""
     monkeypatch.setattr("trace_core.cases.commands.db_manager", session_manager)
+    monkeypatch.setattr("trace_core.audit.commands.db_manager", session_manager)
     return CliRunner()

@@ -1,0 +1,106 @@
+"""Database tab: health, tables, migrations. One-button migrate with progress."""
+
+from rich.text import Text
+from textual import on
+from textual.app import ComposeResult
+from textual.binding import Binding
+from textual.containers import Vertical
+from textual.widgets import Button, DataTable, Static
+
+from trace_core.core.database.health import fetch_db_snapshot, migration_entries
+from trace_core.core.database.migrations import apply_migrations
+from trace_core.core.database.session import DatabaseSessionManager, db_manager
+from trace_core.core.errors import ApplicationError
+
+MIGRATIONS_TABLE = "db-migrations"
+
+
+class DbView(Vertical):
+    """Ops surface: health pill, tables, migration list. `m` applies pending."""
+
+    BINDINGS = [
+        Binding("m", "migrate", "Migrate"),
+    ]
+
+    def __init__(self, session_manager: DatabaseSessionManager | None = None) -> None:
+        super().__init__()
+        self._manager = session_manager
+
+    @property
+    def _mgr(self) -> DatabaseSessionManager:
+        return self._manager or db_manager
+
+    def compose(self) -> ComposeResult:
+        from textual.containers import VerticalScroll
+
+        with VerticalScroll(id="database-scroll"):
+            with Vertical(id="database-health", classes="card"):
+                yield Static("Connection", classes="card-title")
+                yield Static("", id="db-health")
+            with Vertical(id="database-tables", classes="card"):
+                yield Static("Tables", classes="card-title")
+                yield Static("", id="db-tables")
+            with Vertical(id="database-migrations", classes="card"):
+                yield Static("Migrations", classes="card-title")
+                yield DataTable(id=MIGRATIONS_TABLE, cursor_type="row")
+                yield Button("Apply pending migrations (m)", id="db-migrate")
+
+    def on_mount(self) -> None:
+        table = self.query_one(f"#{MIGRATIONS_TABLE}", DataTable)
+        table.add_column("Ver", width=5)
+        table.add_column("Name")
+        table.add_column("Status", width=10)
+        self.refresh_data()
+
+    def focus_default(self) -> None:
+        """Focus the migrations table. Called by the shell when this tab activates."""
+        self.query_one(f"#{MIGRATIONS_TABLE}", DataTable).focus()
+
+    def refresh_data(self) -> None:
+        """Reload health + tables + migrations. Called on mount and tab switch."""
+        mgr = self._mgr
+        try:
+            snap = fetch_db_snapshot(mgr)
+        except ApplicationError as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        healthy, message = snap.healthy, snap.message
+        status = Text()
+        status.append("● ", style="#5FD18A" if healthy else "#D06A73")
+        status.append("Online" if healthy else "Offline", style="bold")
+        status.append(f"  {snap.masked_url}", style="dim")
+        if not healthy:
+            status.append(f"\n{message}", style="dim")
+        self.query_one("#db-health", Static).update(status)
+        if not healthy:
+            return
+        tables, applied, pending = snap.tables, snap.applied, snap.pending
+        self.query_one("#db-tables", Static).update(Text(f"Tables  {', '.join(tables)}", style="dim"))
+        table = self.query_one(f"#{MIGRATIONS_TABLE}", DataTable)
+        table.clear()
+        for version, name, state, _ in migration_entries(applied, pending):
+            if state == "Applied":
+                table.add_row(str(version), name, Text("Applied", style="#5FD18A"))
+            else:
+                table.add_row(str(version), name, Text("Pending", style="#D8B56A"))
+
+    def run_command(self, command: str) -> None:
+        """Entry for the palette."""
+        if command == "migrate":
+            self.action_migrate()
+
+    @on(Button.Pressed, "#db-migrate")
+    def _migrate_pressed(self) -> None:
+        self.action_migrate()
+
+    def action_migrate(self) -> None:
+        try:
+            applied = apply_migrations(self._mgr.engine)
+        except (ApplicationError, RuntimeError) as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        if applied:
+            self.app.notify(f"Applied {len(applied)} migration(s).")
+        else:
+            self.app.notify("Already up to date.")
+        self.refresh_data()

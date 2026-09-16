@@ -1,9 +1,11 @@
 """SQLAlchemy 2.0 Base model and reusable schema mixins."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from trace_core.core.clock import now_utc
 
 
 class Base(DeclarativeBase):
@@ -18,13 +20,13 @@ class TimestampMixin:
     opened_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         index=True,
-        default=lambda: datetime.now(UTC),
+        default=lambda: now_utc(),
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
+        default=lambda: now_utc(),
+        onupdate=lambda: now_utc(),
         nullable=False,
     )
 

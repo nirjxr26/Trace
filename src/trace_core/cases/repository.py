@@ -1,7 +1,6 @@
 """Case repository port interface and SQLAlchemy adapter implementation."""
 
 import uuid
-from datetime import UTC, datetime
 from typing import Protocol
 
 from sqlalchemy import or_, select
@@ -10,9 +9,10 @@ from sqlalchemy.orm import Session
 
 from trace_core.cases.domain import Case, CaseStatus
 from trace_core.cases.models import CaseModel, CaseSequenceModel
-from trace_core.core.database.repository import SqlAlchemyBaseRepository
-from trace_core.core.domain import ensure_utc, now_utc
-from trace_core.core.errors import ConcurrencyConflictError
+from trace_core.core.canonical import parse_trailing_seq
+from trace_core.core.clock import now_utc
+from trace_core.core.database.repository import SqlAlchemyBaseRepository, paginate
+from trace_core.core.domain import ensure_utc
 
 
 class CaseRepository(Protocol):
@@ -29,11 +29,14 @@ class CaseRepository(Protocol):
         include_deleted: bool = False,
         limit: int | None = None,
         offset: int | None = None,
+        recent: bool = False,
+        deleted_only: bool = False,
     ) -> list[Case]: ...
     def update(self, entity: Case) -> Case: ...
     def delete(self, entity_id: uuid.UUID, purge: bool = False) -> bool: ...
-    def soft_delete(self, case_id: uuid.UUID) -> bool: ...
-    def purge(self, case_id: uuid.UUID) -> bool: ...
+    def soft_delete(self, case_id: uuid.UUID, expected_version: int, archived_by: str | None = None) -> bool: ...
+    def restore(self, case_id: uuid.UUID, expected_version: int) -> bool: ...
+    def purge(self, case_id: uuid.UUID, expected_version: int) -> bool: ...
     def get_next_sequence_number(self, year: int | None = None) -> str: ...
     def exists(self, entity_id: uuid.UUID) -> bool: ...
     def count(self, include_deleted: bool = False) -> int: ...
@@ -52,13 +55,14 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
             title=model.title,
             lead_examiner=model.lead_examiner,
             status=CaseStatus(model.status),
-            opened_at=ensure_utc(model.opened_at) or datetime.now(UTC),
+            opened_at=ensure_utc(model.opened_at) or now_utc(),
             closed_at=ensure_utc(model.closed_at),
             closed_by=model.closed_by,
             closure_reason=model.closure_reason,
             archived_at=ensure_utc(model.archived_at),
+            archived_by=model.archived_by,
             version=model.version,
-            updated_at=ensure_utc(model.updated_at) or datetime.now(UTC),
+            updated_at=ensure_utc(model.updated_at) or now_utc(),
             description=model.description,
             notes=model.notes,
             tags=list(model.tags or []),
@@ -77,6 +81,7 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
             closed_by=case.closed_by,
             closure_reason=case.closure_reason,
             archived_at=case.archived_at,
+            archived_by=case.archived_by,
             version=case.version,
             updated_at=case.updated_at,
             description=case.description,
@@ -96,6 +101,7 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         model.closed_by = entity.closed_by
         model.closure_reason = entity.closure_reason
         model.archived_at = entity.archived_at
+        model.archived_by = entity.archived_by
         model.version = entity.version
         model.is_deleted = entity.is_deleted
 
@@ -124,11 +130,15 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         include_deleted: bool = False,
         limit: int | None = None,
         offset: int | None = None,
+        recent: bool = False,
+        deleted_only: bool = False,
     ) -> list[Case]:
         """List cases with search, status filters, deterministic sorting, and pagination."""
         stmt = select(CaseModel)
 
-        if not include_deleted:
+        if deleted_only:
+            stmt = stmt.where(CaseModel.is_deleted.is_(True))
+        elif not include_deleted:
             stmt = stmt.where(CaseModel.is_deleted.is_(False))
 
         if status is not None:
@@ -147,53 +157,75 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
                 )
             )
 
-        stmt = stmt.order_by(CaseModel.opened_at.desc(), CaseModel.id.asc())
+        if recent:
+            stmt = stmt.order_by(CaseModel.updated_at.desc(), CaseModel.id.asc())
+        else:
+            stmt = stmt.order_by(CaseModel.opened_at.desc(), CaseModel.id.asc())
 
-        if offset is not None:
-            stmt = stmt.offset(offset)
-        if limit is not None:
-            stmt = stmt.limit(limit)
+        stmt = paginate(stmt, limit, offset)
 
         models = self.session.scalars(stmt).all()
         return [self._to_domain(m) for m in models]
 
-    def soft_delete(self, case_id: uuid.UUID) -> bool:
+    def soft_delete(self, case_id: uuid.UUID, expected_version: int, archived_by: str | None = None) -> bool:
         """Mark a case as archived/deleted without corrupting investigation status."""
-        stmt = select(CaseModel).where(CaseModel.id == case_id)
-        model = self.session.scalar(stmt)
+        model = self._fetch(case_id)
         if not model:
             return False
 
+        self._guard_version(model, expected_version, "Case", str(model.number))
+
         model.is_deleted = True
-        model.archived_at = datetime.now(UTC)
-        model.updated_at = datetime.now(UTC)
+        model.archived_at = now_utc()
+        model.archived_by = archived_by
+        model.version += 1
+        model.updated_at = now_utc()
         self.session.flush()
         return True
 
-    def purge(self, case_id: uuid.UUID) -> bool:
-        """Permanently delete a case record."""
-        return super().delete(case_id, purge=True)
+    def restore(self, case_id: uuid.UUID, expected_version: int) -> bool:
+        """Restore an archived case back to active retention."""
+        model = self._fetch(case_id)
+        if not model:
+            return False
 
-    def delete(self, entity_id: uuid.UUID, purge: bool = False) -> bool:
-        """Delete case entity. If not purge, delegate to soft_delete."""
+        self._guard_version(model, expected_version, "Case", str(model.number))
+
+        model.is_deleted = False
+        model.archived_at = None
+        model.archived_by = None
+        model.version += 1
+        model.updated_at = now_utc()
+        self.session.flush()
+        return True
+
+    def purge(self, case_id: uuid.UUID, expected_version: int) -> bool:
+        """Permanently delete a case record."""
+        model = self._fetch(case_id)
+        if not model:
+            return False
+
+        self._guard_version(model, expected_version, "Case", str(model.number))
+
+        self.session.delete(model)
+        self.session.flush()
+        return True
+
+    def delete(self, entity_id: uuid.UUID, purge: bool = False, expected_version: int | None = None) -> bool:  # type: ignore[override]
+        """Delete case entity. Forensic path requires OCC version."""
+        if expected_version is None:
+            raise ValueError("expected_version is required for forensic delete")
         if purge:
-            return self.purge(entity_id)
-        return self.soft_delete(entity_id)
+            return self.purge(entity_id, expected_version=expected_version)
+        return self.soft_delete(entity_id, expected_version=expected_version)
 
     def update(self, entity: Case) -> Case:
         """Update case entity with optimistic concurrency checking."""
-        stmt = select(CaseModel).where(CaseModel.id == entity.id)
-        model = self.session.scalar(stmt)
+        model = self._fetch(entity.id)
         if not model:
             raise ValueError(f"Case with id {entity.id} does not exist.")
 
-        if model.version != entity.version:
-            raise ConcurrencyConflictError(
-                resource_type="Case",
-                identifier=entity.number,
-                expected_version=entity.version,
-                actual_version=model.version,
-            )
+        self._guard_version(model, entity.version, "Case", entity.number)
 
         self._update_model(model, entity)
         model.version += 1
@@ -215,8 +247,9 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
             max_seq = 0
             for num in existing_numbers:
                 suffix = num[len(prefix) :]
-                if suffix.isdigit():
-                    max_seq = max(max_seq, int(suffix))
+                seq = parse_trailing_seq(suffix)
+                if seq is not None:
+                    max_seq = max(max_seq, seq)
 
             try:
                 with self.session.begin_nested():
@@ -231,6 +264,10 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
                 if seq_record is None:
                     raise
 
-        seq_record.last_sequence += 1
-        self.session.flush()
-        return f"{prefix}{seq_record.last_sequence:04d}"
+        for _ in range(100):
+            seq_record.last_sequence += 1
+            self.session.flush()
+            candidate = f"{prefix}{seq_record.last_sequence:04d}"
+            if self.get_by_number(candidate) is None:
+                return candidate
+        raise ValueError(f"Case sequence exhausted for year {current_year}.")

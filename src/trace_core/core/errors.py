@@ -61,3 +61,10 @@ class StateTransitionError(ApplicationError):
 
 class ValidationError(ApplicationError):
     """Raised when input data fails business rule validation."""
+
+
+class AuditTamperError(ApplicationError):
+    """Raised when audit chain verification detects tampering."""
+
+    def __init__(self, message: str):
+        super().__init__(message)

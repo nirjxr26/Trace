@@ -16,7 +16,7 @@ def create_db_engine(database_url: str | None = None) -> Engine:
 
     connect_args: dict[str, Any] = {}
     engine_kwargs: dict[str, Any] = {
-        "echo": settings.debug,
+        "echo": settings.sql_echo,
     }
 
     if url.startswith("sqlite"):
@@ -73,7 +73,10 @@ class DatabaseSessionManager:
                 conn.execute(text("SELECT 1"))
             return True, "Database connection successful"
         except Exception as exc:
-            return False, f"Connection failed: {exc}"
+            import structlog
+
+            structlog.get_logger().warning("Database connection failed", error=str(exc))
+            return False, "Connection failed: database unreachable. Check service status or TRACE_DATABASE_URL."
 
     def init_schema(self) -> None:
         """Create database tables and apply pending migrations."""
@@ -92,6 +95,66 @@ class DatabaseSessionManager:
             raise
         finally:
             session.close()
+
+
+def sanitized_db_identity(url: str) -> str:
+    """Stable database identity without credentials. Safe for cache keys and logs."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        if parts.port:
+            host += f":{parts.port}"
+        user = parts.username or ""
+        return f"{parts.scheme}://{user}@{host}{parts.path or ''}"
+    except Exception:
+        return "unknown"
+
+
+def sanitized_db_url(url: str) -> str:
+    """Full database URL with the password masked. Single source for display."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    try:
+        parts = urlsplit(url)
+        if not parts.hostname:
+            return url
+        hostport = parts.hostname
+        if parts.port:
+            hostport += f":{parts.port}"
+        if parts.username and parts.password:
+            netloc = f"{parts.username}:*****@{hostport}"
+        elif parts.username:
+            netloc = f"*****@{hostport}"
+        else:
+            return url
+        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    except Exception:
+        return url
+
+
+def db_identity(manager: DatabaseSessionManager | None = None) -> str:
+    """Short stable identity for cache keys. Never includes credentials."""
+    import hashlib
+
+    try:
+        url = manager._url if manager is not None else settings.database_url
+        clean = sanitized_db_identity(url)
+    except Exception:
+        clean = "unknown"
+    return hashlib.sha256(clean.encode("utf-8")).hexdigest()[:16]
+
+
+def get_db(ctx: Any | None) -> DatabaseSessionManager:  # type: ignore[no-untyped-def]
+    """Single source for DB manager from shell context or global. Reusable."""
+    try:
+        mgr = getattr(getattr(ctx, "service", None), "session_manager", None)
+        if mgr is not None:
+            return mgr  # type: ignore[no-any-return]
+    except Exception:
+        pass
+    return db_manager
 
 
 # Default global instance configured with application settings

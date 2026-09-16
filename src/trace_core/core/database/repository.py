@@ -1,16 +1,25 @@
 """Generic reusable SQLAlchemy repository implementation."""
 
 from abc import ABC, abstractmethod
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from trace_core.core.domain import ensure_utc, now_utc
+from trace_core.core.domain import now_utc
 
 ModelT = TypeVar("ModelT")
 EntityT = TypeVar("EntityT")
 IdT = TypeVar("IdT")
+
+
+def paginate(stmt, limit: int | None, offset: int | None):  # type: ignore[no-untyped-def]
+    """Single source for offset/limit. Skips falsy values (0 offset = no-op)."""
+    if offset:
+        stmt = stmt.offset(offset)
+    if limit:
+        stmt = stmt.limit(limit)
+    return stmt
 
 
 class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):
@@ -47,21 +56,25 @@ class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):
 
     def get_by_id(self, entity_id: IdT) -> EntityT | None:
         """Fetch entity by primary key."""
-        stmt = select(self.model_cls).where(getattr(self.model_cls, "id") == entity_id)
-        model = self.session.scalar(stmt)
+        model = self._fetch(entity_id)
         return self._to_domain(model) if model else None
 
-    def list_all(self, include_deleted: bool = False) -> list[EntityT]:
-        """Fetch all entities with soft-delete filter."""
-        stmt = select(self.model_cls)
-        if hasattr(self.model_cls, "is_deleted") and not include_deleted:
-            stmt = stmt.where(getattr(self.model_cls, "is_deleted").is_(False))
+    def _fetch(self, entity_id: IdT):  # type: ignore[no-untyped-def]
+        """Single source for PK fetch. Shared by get/update/soft-delete flows."""
+        stmt = select(self.model_cls).where(getattr(self.model_cls, "id") == entity_id)
+        return self.session.scalar(stmt)
 
-        if hasattr(self.model_cls, "opened_at"):
-            stmt = stmt.order_by(getattr(self.model_cls, "opened_at").desc())
+    def _guard_version(self, model, expected_version: int, resource_type: str, identifier: str) -> None:  # type: ignore[no-untyped-def]
+        """Single source for OCC checks. Raises on version mismatch."""
+        from trace_core.core.errors import ConcurrencyConflictError
 
-        models = self.session.scalars(stmt).all()
-        return [self._to_domain(m) for m in models]
+        if model.version != expected_version:
+            raise ConcurrencyConflictError(
+                resource_type=resource_type,
+                identifier=identifier,
+                expected_version=expected_version,
+                actual_version=model.version,
+            )
 
     def update(self, entity: EntityT) -> EntityT:
         """Update an existing entity."""
@@ -82,19 +95,18 @@ class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):
         return self._to_domain(model)
 
     def delete(self, entity_id: IdT, purge: bool = False) -> bool:
-        """Delete an entity. If purge=False and model has is_deleted, soft-deletes."""
+        """Permanently delete a row by primary key.
+
+        Forensic policy lives in feature repositories (e.g. soft-delete/archive).
+        Do not add soft-delete magic here; callers must implement retention explicitly.
+        """
+        _ = purge
         stmt = select(self.model_cls).where(getattr(self.model_cls, "id") == entity_id)
         model = self.session.scalar(stmt)
         if not model:
             return False
 
-        if purge or not hasattr(model, "is_deleted"):
-            self.session.delete(model)
-        else:
-            setattr(model, "is_deleted", True)
-            if hasattr(model, "updated_at"):
-                setattr(model, "updated_at", now_utc())
-
+        self.session.delete(model)
         self.session.flush()
         return True
 
@@ -111,8 +123,3 @@ class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):
         if hasattr(self.model_cls, "is_deleted") and not include_deleted:
             stmt = stmt.where(getattr(self.model_cls, "is_deleted").is_(False))
         return self.session.scalar(stmt) or 0
-
-    @staticmethod
-    def ensure_utc(dt: Any) -> Any:
-        """Helper for subclass timestamp handling."""
-        return ensure_utc(dt)

@@ -1,10 +1,11 @@
 """Case application service managing Case lifecycle, numbering, and transactions."""
 
 import uuid
+from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 
-from trace_core.cases.domain import Case, CaseStatus, TransitionError, transition_case
+from trace_core.cases.domain import Case, CaseStatus, TransitionError, tracked_snapshot, transition_case
 from trace_core.cases.dto import (
     CaseCreateDto,
     CaseFilterDto,
@@ -50,16 +51,38 @@ class InvalidCaseStateError(StateTransitionError, CaseError):
         super().__init__(current_state="UNKNOWN", target_state="UNKNOWN", reason=message)
 
 
+def _resolve_actor(actor: str | None, fallback: str = "system") -> str:
+    """Resolve audit actor, defaulting to fallback examiner or system."""
+    cleaned = actor.strip() if actor else ""
+    return cleaned or fallback.strip() or "system"
+
+
+def _require_case(repo: SqlAlchemyCaseRepository, identifier: str) -> Case:
+    """Resolve case by number/UUID or raise not-found. Shared by all service actions."""
+    case = repo.resolve(identifier)
+    if not case:
+        raise CaseNotFoundError(identifier)
+    return case
+
+
+def _record_audit(session: Any, builder_tuple: tuple[Any, Any, dict[str, Any], Any], actor: str) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.audit.service import AuditService
+
+    action, subject, details, ctx = builder_tuple
+    AuditService().record(session, action, subject, actor, details, ctx)
+
+
 class CaseService(BaseService):
     """Application service for managing Case lifecycle and queries."""
 
     def __init__(self, session_manager: DatabaseSessionManager | None = None):
         super().__init__(session_manager)
 
-    def create_case(self, dto: CaseCreateDto) -> CaseResponseDto:
+    def create_case(self, dto: CaseCreateDto, actor: str | None = None) -> CaseResponseDto:
         """Create and persist a new forensic case."""
-        with self.session_manager.session() as session:
-            repo = SqlAlchemyCaseRepository(session)
+        resolved_actor = _resolve_actor(actor, dto.lead_examiner)
+        with self.transaction() as uow:
+            repo = SqlAlchemyCaseRepository(uow.session)
 
             case_number = dto.number.strip() if dto.number else repo.get_next_sequence_number()
 
@@ -81,10 +104,19 @@ class CaseService(BaseService):
 
             try:
                 created = repo.create(case_entity)
-                session.commit()
+
+                def _audit(s: Any) -> None:
+                    from trace_core.audit.builder import for_case_created
+
+                    _record_audit(
+                        s,
+                        for_case_created(created.number, created.id, created.title, created.lead_examiner),
+                        resolved_actor,
+                    )
+
+                uow.before_commit(_audit)
                 return CaseResponseDto.from_domain(created)
             except IntegrityError as e:
-                session.rollback()
                 err_msg = str(e).lower()
                 if "number" in err_msg or "uq_cases_number" in err_msg:
                     raise DuplicateCaseNumberError(case_number) from e
@@ -94,10 +126,7 @@ class CaseService(BaseService):
         """Retrieve a case by UUID or Case Number."""
         with self.session_manager.session() as session:
             repo = SqlAlchemyCaseRepository(session)
-            case = repo.resolve(identifier)
-            if not case:
-                raise CaseNotFoundError(identifier)
-            return CaseResponseDto.from_domain(case)
+            return CaseResponseDto.from_domain(_require_case(repo, identifier))
 
     def list_cases(self, filter_dto: CaseFilterDto | None = None) -> list[CaseResponseDto]:
         """List cases according to filter criteria."""
@@ -110,48 +139,72 @@ class CaseService(BaseService):
                 include_deleted=query_filter.include_deleted,
                 limit=query_filter.limit,
                 offset=query_filter.offset,
+                recent=query_filter.recent,
+                deleted_only=query_filter.deleted_only,
             )
             return [CaseResponseDto.from_domain(c) for c in cases]
 
-    def update_case(self, identifier: str, dto: CaseUpdateDto) -> CaseResponseDto:
+    def update_case(
+        self, identifier: str, dto: CaseUpdateDto, actor: str | None = None, reason: str = ""
+    ) -> CaseResponseDto:
         """Update mutable fields of an existing case."""
-        with self.session_manager.session() as session:
-            repo = SqlAlchemyCaseRepository(session)
-            case = repo.resolve(identifier)
-            if not case:
-                raise CaseNotFoundError(identifier)
+        with self.transaction() as uow:
+            repo = SqlAlchemyCaseRepository(uow.session)
+            case = _require_case(repo, identifier)
+            resolved_actor = _resolve_actor(actor, case.lead_examiner)
 
             if case.is_deleted:
                 raise InvalidCaseStateError(f"Cannot update soft-deleted or archived case '{identifier}'.")
 
             if case.status == CaseStatus.CLOSED:
                 raise InvalidCaseStateError(
-                    f"Cannot update closed case '{identifier}'. Reopen the case before making changes."
+                    f"Cannot update closed case '{identifier}'. Closed cases are permanently sealed."
                 )
 
-            # Update mutable fields
-            if dto.title is not None:
+            # snapshot before for 5W1H diff
+            before = tracked_snapshot(case)
+            changed: list[str] = []
+            if dto.title is not None and dto.title != case.title:
+                changed.append("title")
                 case.title = dto.title
-            if dto.lead_examiner is not None:
+            if dto.lead_examiner is not None and dto.lead_examiner != case.lead_examiner:
+                changed.append("lead_examiner")
                 case.lead_examiner = dto.lead_examiner
-            if dto.description is not None:
+            if dto.description is not None and dto.description != case.description:
+                changed.append("description")
                 case.description = dto.description
-            if dto.notes is not None:
+            if dto.notes is not None and dto.notes != case.notes:
+                changed.append("notes")
                 case.notes = dto.notes
-            if dto.tags is not None:
+            if dto.tags is not None and dto.tags != case.tags:
+                changed.append("tags")
                 case.tags = dto.tags
 
+            if not changed:
+                return CaseResponseDto.from_domain(case)
+
+            after = tracked_snapshot(case)
             updated = repo.update(case)
-            session.commit()
+
+            def _audit(s: Any) -> None:
+                from trace_core.audit.builder import for_case_updated
+
+                _record_audit(
+                    s,
+                    for_case_updated(updated.number, updated.id, changed, before, after, reason=reason),
+                    resolved_actor,
+                )
+
+            uow.before_commit(_audit)
             return CaseResponseDto.from_domain(updated)
 
-    def close_case(self, identifier: str, reason: str = "", closed_by: str = "") -> CaseResponseDto:
+    def close_case(
+        self, identifier: str, reason: str = "", closed_by: str = "", actor: str | None = None
+    ) -> CaseResponseDto:
         """Transition case to permanently sealed CLOSED state."""
-        with self.session_manager.session() as session:
-            repo = SqlAlchemyCaseRepository(session)
-            case = repo.resolve(identifier)
-            if not case:
-                raise CaseNotFoundError(identifier)
+        with self.transaction() as uow:
+            repo = SqlAlchemyCaseRepository(uow.session)
+            case = _require_case(repo, identifier)
 
             if case.is_deleted:
                 raise InvalidCaseStateError(f"Cannot close soft-deleted or archived case '{identifier}'.")
@@ -159,27 +212,47 @@ class CaseService(BaseService):
             if case.status == CaseStatus.CLOSED:
                 raise InvalidCaseStateError(f"Case '{identifier}' is already permanently closed.")
 
-            examiner = closed_by.strip() or case.lead_examiner
+            examiner = closed_by.strip() or _resolve_actor(actor, case.lead_examiner)
             try:
                 transition_case(case, CaseStatus.CLOSED, reason=reason, closed_by=examiner)
             except TransitionError as e:
                 raise InvalidCaseStateError(str(e)) from e
 
             updated = repo.update(case)
-            session.commit()
+
+            def _audit(s: Any) -> None:
+                from trace_core.audit.builder import for_case_closed
+
+                _record_audit(s, for_case_closed(updated.number, updated.id, reason, examiner), examiner)
+
+            def _anchor() -> None:
+                try:
+                    from trace_core.audit.anchor import write_anchor
+                    from trace_core.audit.service import AuditService
+
+                    audit_svc = AuditService(self.session_manager)
+                    seq, chain = audit_svc.head()
+                    if seq:
+                        write_anchor(updated.number, seq, chain)
+                except Exception as exc:
+                    import structlog
+
+                    structlog.get_logger().warning("Audit anchor write failed", case=updated.number, error=str(exc))
+
+            uow.before_commit(_audit)
+            uow.on_commit(_anchor)
             return CaseResponseDto.from_domain(updated)
 
-    def delete_case(self, identifier: str, purge: bool = False) -> bool:
+    def delete_case(self, identifier: str, purge: bool = False, actor: str | None = None) -> bool:
         """
         Delete a case.
         Default: soft-delete (archive).
         purge=True: permanently remove row from database.
         """
-        with self.session_manager.session() as session:
-            repo = SqlAlchemyCaseRepository(session)
-            case = repo.resolve(identifier)
-            if not case:
-                raise CaseNotFoundError(identifier)
+        with self.transaction() as uow:
+            repo = SqlAlchemyCaseRepository(uow.session)
+            case = _require_case(repo, identifier)
+            resolved_actor = _resolve_actor(actor, case.lead_examiner)
 
             if not purge and case.is_deleted:
                 raise InvalidCaseStateError(f"Case '{identifier}' is already archived/deleted.")
@@ -189,9 +262,46 @@ class CaseService(BaseService):
                     raise InvalidCaseStateError(
                         f"Forensic safety violation: Case '{identifier}' must be archived before it can be purged."
                     )
-                success = repo.purge(case.id)
-            else:
-                success = repo.soft_delete(case.id)
+                purged_number = case.number
+                purged_id = case.id
+                result = repo.purge(case.id, expected_version=case.version)
 
-            session.commit()
-            return success
+                def _audit(s: Any) -> None:
+                    from trace_core.audit.builder import for_case_purged
+
+                    _record_audit(s, for_case_purged(purged_number, purged_id), resolved_actor)
+
+                uow.before_commit(_audit)
+                return result
+            result = repo.soft_delete(case.id, expected_version=case.version, archived_by=resolved_actor)
+
+            def _audit2(s: Any) -> None:
+                from trace_core.audit.builder import for_case_archived
+
+                _record_audit(s, for_case_archived(case.number, case.id), resolved_actor)
+
+            uow.before_commit(_audit2)
+            return result
+
+    def restore_case(self, identifier: str, actor: str | None = None) -> CaseResponseDto:
+        """Restore an archived case back to active retention."""
+        with self.transaction() as uow:
+            repo = SqlAlchemyCaseRepository(uow.session)
+            case = _require_case(repo, identifier)
+            resolved_actor = _resolve_actor(actor, case.lead_examiner)
+
+            if not case.is_deleted:
+                raise InvalidCaseStateError(f"Case '{identifier}' is not archived.")
+
+            repo.restore(case.id, expected_version=case.version)
+            restored = repo.resolve(identifier)
+            if not restored:
+                raise CaseNotFoundError(identifier)
+
+            def _audit(s: Any) -> None:
+                from trace_core.audit.builder import for_case_restored
+
+                _record_audit(s, for_case_restored(restored.number, restored.id), resolved_actor)
+
+            uow.before_commit(_audit)
+            return CaseResponseDto.from_domain(restored)

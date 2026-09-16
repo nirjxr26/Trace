@@ -1,24 +1,13 @@
 """Trace CLI main entrypoint."""
 
-import sys
-
 import typer
 
-if hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
-if hasattr(sys.stderr, "reconfigure"):
-    try:
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
-
-from trace_core.cases.commands import case_app
 from trace_core.cli.shell import run_interactive_shell
-from trace_core.core.cli.db_commands import db_app
+from trace_core.core.cli.catalog import feature_apps
 from trace_core.core.settings import settings
+from trace_core.core.ui.renderers import configure_utf8_streams
+
+configure_utf8_streams()
 
 app = typer.Typer(
     name="trace",
@@ -28,8 +17,16 @@ app = typer.Typer(
 )
 
 # Register feature subcommands
-app.add_typer(case_app, name="case")
-app.add_typer(db_app, name="db")
+for _name, _sub in feature_apps():
+    app.add_typer(_sub, name=_name)
+
+
+@app.command("tui")
+def launch_tui() -> None:
+    """Launch the fullscreen live console."""
+    from trace_core.tui.app import run_tui
+
+    run_tui()
 
 
 def version_callback(value: bool) -> None:
