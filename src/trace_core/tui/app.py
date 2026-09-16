@@ -8,12 +8,9 @@ from textual.widgets import Static, TabbedContent, TabPane
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.tui.theme import TRACE_THEME
 
-TAB_HINTS = {
-    "cases": "[↑↓] Navigate · [?] Help",
-    "audit": "[↑↓] Navigate · [?] Help",
-    "integrity": "[↑↓] Navigate · [?] Help",
-    "database": "[↑↓] Navigate · [?] Help",
-}
+_DEFAULT_HINT = "[↑↓] Navigate · [?] Help"
+
+TAB_HINTS = {tab: _DEFAULT_HINT for tab in ("cases", "audit", "integrity", "database")}
 
 
 class TraceApp(App[None]):

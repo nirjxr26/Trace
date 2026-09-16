@@ -40,6 +40,7 @@ _AUDIT_VALUE_FLAGS = (
 
 class AuditShellCommandHandler(BaseShellHandler):
     resource = "Audit"
+
     @property
     def command_name(self) -> str:
         return "audit"
@@ -169,17 +170,16 @@ class AuditShellCommandHandler(BaseShellHandler):
                 console.print(f"[dim]Scoped to active case {ctx.active_case.number}[/dim]")
         self._show_list(svc, args)
 
-    def _show_seq(self, svc: AuditService, args: list[str], seq_raw: str) -> bool:
+    def _show_seq(self, svc: AuditService, args: list[str], seq_raw: str) -> None:
         from trace_core.audit.helpers import show_seq_view
 
         try:
             seq = int(seq_raw)
         except ValueError:
             render_error_card("Invalid seq", f"--seq '{seq_raw}' is not a number.")
-            return True
+            return
         with capture_cli_errors("Audit Show", exit_on_error=False):
             show_seq_view(svc, seq, parse_output_format(args))
-        return True
 
     def _show_list(self, svc: AuditService, args: list[str]) -> None:
         from trace_core.audit.helpers import parse_action_value

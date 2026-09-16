@@ -192,24 +192,29 @@ def test_audit_failure_rolls_back_case(
 
     with monkeypatch.context() as mp:
         mp.setattr(SqlAlchemyAuditRepository, "append", failing_append)
+        failing_dto = CaseCreateDto(title="Fail", lead_examiner="Ex")
         with pytest.raises(RuntimeError, match="audit write failed"):
-            svc.create_case(CaseCreateDto(title="Fail", lead_examiner="Ex"))
+            svc.create_case(failing_dto)
         assert len(svc.list_cases()) == 0
         assert AuditService(session_manager).verify().events_verified == 0
     created = svc.create_case(CaseCreateDto(title="OK", lead_examiner="Ex"))
     assert created.title == "OK"
 
 
+def _attempt_ledger_write(s, stmt: str) -> None:  # type: ignore[no-untyped-def]
+    """Execute a tamper statement and commit. Single throwing call for narrow raises blocks."""
+    s.execute(sqlalchemy.text(stmt))
+    s.commit()
+
+
 def test_triggers_reject_update_delete(session_manager: DatabaseSessionManager) -> None:
     CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
     with session_manager.session() as s:
         with pytest.raises(sqlalchemy.exc.IntegrityError):
-            s.execute(sqlalchemy.text("UPDATE audit_events SET actor='hax' WHERE seq=1"))
-            s.commit()
+            _attempt_ledger_write(s, "UPDATE audit_events SET actor='hax' WHERE seq=1")
         s.rollback()
         with pytest.raises(sqlalchemy.exc.IntegrityError):
-            s.execute(sqlalchemy.text("DELETE FROM audit_events WHERE seq=1"))
-            s.commit()
+            _attempt_ledger_write(s, "DELETE FROM audit_events WHERE seq=1")
 
 
 def test_export_verifiable_offline(tmp_path, session_manager: DatabaseSessionManager) -> None:  # type: ignore[no-untyped-def]

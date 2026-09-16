@@ -31,8 +31,11 @@ def _service_key(service: Any, kind: str, extra: str = "") -> str:
     return f"{kind}:{ident}:{extra}"
 
 
-def cached_complete(kind: str, service: Any, loader: Callable[[], list[tuple[str, str]]], limit: int = 8, extra: str = "") -> list[tuple[str, str]]:
+def cached_complete(
+    kind: str, service: Any, loader: Callable[[], list[tuple[str, str]]], limit: int = 8, extra: str = ""
+) -> list[tuple[str, str]]:
     """Single source for cached completion loaders. try/except→[], slice to limit."""
+
     def _safe() -> list[tuple[str, str]]:
         try:
             return loader()
@@ -136,21 +139,26 @@ def number_group(number: str) -> str:
         return "OTHER"
 
 
+def _group_ranked(ranked: list[Any]) -> tuple[dict[str, list[Any]], list[str]]:
+    """Group ranked cases by prefix like CR/NR/CLI, keeping rank order inside groups."""
+    grouped: dict[str, list[Any]] = {}
+    order: list[str] = []
+    for c in ranked:
+        prefix = number_group(c.number)
+        if prefix not in grouped:
+            grouped[prefix] = []
+            order.append(prefix)
+        grouped[prefix].append(c)
+    return grouped, order
+
+
 def complete_from_cases(case_service: Any, active_number: str | None = None, limit: int = 8) -> list[tuple[str, str]]:
     """Case-number completions ranked active→recent→open, grouped by prefix CR/NR/CLI, cached 2s, limit 8."""
     cap = limit + 4  # room for group headers
 
     def _load() -> list[tuple[str, str]]:
         ranked = rank_cases(_fetch_cases(case_service, include_deleted=True), active_number)
-        # group by prefix like CR/NR/CLI for together + space
-        grouped: dict[str, list[Any]] = {}
-        order: list[str] = []
-        for c in ranked:
-            prefix = number_group(c.number)
-            if prefix not in grouped:
-                grouped[prefix] = []
-                order.append(prefix)
-            grouped[prefix].append(c)
+        grouped, order = _group_ranked(ranked)
         out: list[tuple[str, str]] = []
         for pref in order:
             # header as non-insertable separator (text="" display="── CR ──")

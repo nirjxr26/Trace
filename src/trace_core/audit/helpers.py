@@ -53,7 +53,9 @@ def fetch_case_with_history(case_svc, identifier: str, limit: int = 6):  # type:
 
     case = case_svc.get_case(identifier)
     try:
-        events = AuditService(case_svc.session_manager).list_events(AuditFilterDto(case_number=case.number, limit=limit))
+        events = AuditService(case_svc.session_manager).list_events(
+            AuditFilterDto(case_number=case.number, limit=limit)
+        )
     except Exception:
         events = None
     return case, events

@@ -2,6 +2,9 @@
 
 from typing import Final
 
+_BLUE = "bold #72B7D3"
+_GREEN = "bold #63D391"
+
 THEME_TOKENS: Final[dict[str, str]] = {
     # ─────────────────────────────────────────────
     # SURFACES
@@ -31,8 +34,8 @@ THEME_TOKENS: Final[dict[str, str]] = {
     # ─────────────────────────────────────────────
     # INFORMATION / INTERACTION — blue reserved
     # ─────────────────────────────────────────────
-    "accent": "bold #72B7D3",
-    "section_title": "bold #72B7D3",
+    "accent": _BLUE,
+    "section_title": _BLUE,
     "link": "#72B7D3",
     "focus": "#5B8DB8",
     "selection": "#182B35",
@@ -44,7 +47,7 @@ THEME_TOKENS: Final[dict[str, str]] = {
     # ─────────────────────────────────────────────
     # STATUS
     # ─────────────────────────────────────────────
-    "status_open": "bold #63D391",
+    "status_open": _GREEN,
     "status_review": "bold #D7B765",
     "status_closed": "bold #A995D6",
     "status_archived": "bold #87939B",
@@ -58,13 +61,13 @@ THEME_TOKENS: Final[dict[str, str]] = {
     # ─────────────────────────────────────────────
     # ACTION SEMANTICS
     # ─────────────────────────────────────────────
-    "success": "bold #63D391",
+    "success": _GREEN,
     "warning": "bold #D7B765",
     "danger": "bold #D06A73",
-    "info": "bold #72B7D3",
+    "info": _BLUE,
     # ─────────────────────────────────────────────
     # RECORD STATE
     # ─────────────────────────────────────────────
-    "record_active": "bold #63D391",
+    "record_active": _GREEN,
     "record_deleted": "bold #737C84",
 }

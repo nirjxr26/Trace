@@ -1101,6 +1101,19 @@
 - **Intentionally left explicit (no behavior-change risk)**: per-handler completion display labels differ (cases FORMAT_CHOICES vs shared OUTPUT_CHOICES); full TableDossierView/CardView base-class rewrite and registry dispatch unification deferred (would risk UI/focus/precedence changes); `parse_args` single-pass deferred (subtle dash-skip differences). Smallest safe diffs only.
 - **Files touched**: `core/canonical/domain/clock`, `core/database/repository/health`, `core/cli/args/completion/db_commands/catalog/shell_base`, `core/ui/renderers`, `cases/domain/repository/renderers/commands/shell_handler`, `audit/domain/repository/exporter/anchor/helpers/renderers/commands/shell_handler`, `cli/main/shell`, `tui/theme/actions/app/forms/screens/cases/screens/db` + new `health/catalog/shell_base/actions`.
 
+---
+
+## 2026-09-16 — SonarQube 45-issue remediation (no logic/UI change)
+
+- **Rule followed**: AGENTS.md + ponytail full. Behavior identical everywhere. Verified: 112 passed, ruff check clean, ruff format clean, mypy clean (68 files), ci.yml parses.
+- **Blocker + reliability**: `audit/shell_handler._show_seq` returns `None` (was `True` on all paths; caller ignores it); `cases/renderers` same-value ternary collapsed to plain style.
+- **Security (ci.yml)**: `pip-audit==2.10.1` + `cyclonedx-bom==7.4.0` pinned with `--only-binary :all:` (verified resolvable via pip index).
+- **Dup literals → constants**: `theme._BLUE/_GREEN`; `suggest._CASE_SHOW/_MANUAL_META`; `core/ui/renderers.COLUMN_CASE_NUMBER` shared by case+audit tables; `tui/app._DEFAULT_HINT`; per-screen `TABLE_ID`/`MIGRATIONS_TABLE`/`ANCHOR_INPUT`/`EXPORT_INPUT`, `cases/_NO_SELECTION`; `THEME_TOKENS["accent"]` replaces hardcoded `"bold #72B7D3"` in TUI screens.
+- **Complexity (9)**: `render_case_table` → `_group_cases` + `_case_table_row`; `render_case_detail` → `_case_dossier_fields` + `_render_case_history`; `_complete_list_args` → `_complete_flag_value`; `_get_candidate_case_numbers` → `_prepend_active` + `_fallback_candidates`; `suggest.get_completions` → `_ROOT_OPTIONS`/`_ACTIVE_ROOT_OPTIONS` + `_root_completions` + `_delegated_completions`; `complete_from_cases` → `_group_ranked`; `db_status` → `_migration_table_columns` + `_migration_table_rows`; `render_dossier` → `_dossier_heading` + `_render_dossier_sections`; TUI `_render_dossier` → `_dossier_events` + `_append_history`.
+- **Triaged, not changed**: `theme.py` section dividers are headers, not dead code (kept per AGENTS §10); `tui/actions` unused `require_selection/mutate/export_bundle` deleted (zero callers); per-handler completion labels differ intentionally (cases `FORMAT_CHOICES` vs shared `OUTPUT_CHOICES`); `health.dict(pending)` micro-fix.
+- **Tests (9)**: DTO/seal setup hoisted out of `raises` blocks; single-invocation `_attempt_tamper_write`/`_attempt_ledger_write` helpers; `Exception` → `DBAPIError` in PG test; split composite assert in completion test. Intent unchanged.
+- **Files touched**: `.github/workflows/ci.yml`, `core/ui/theme/renderers`, `core/database/health`, `core/cli/completion/db_commands/suggest`, `cases/renderers/shell_handler`, `audit/shell_handler/renderers`, `tui/actions/app/theme/screens/{cases,audit,db,verify}`, `tests/{unit,test_completion,test_audit_ledger,test_case_state_machine_property,test_database_migrations_and_lifecycle,integration/test_postgres}`.
+
 
 
 

@@ -68,7 +68,8 @@ def test_ghost_contextAware(service: CaseService) -> None:
     # case show ghost for active
     sugg2 = suggester.get_suggestion(None, Document("case show "))  # type: ignore[arg-type]
     # should suggest active number
-    assert sugg2 is not None and c.number in sugg2.text
+    assert sugg2 is not None
+    assert c.number in sugg2.text
 
 
 def test_hide_irrelevant_globals_when_active(service: CaseService) -> None:

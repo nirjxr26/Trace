@@ -49,7 +49,7 @@ def fetch_db_snapshot(mgr=None):  # type: ignore[no-untyped-def]
 def migration_entries(applied: list[dict], pending: list[tuple]) -> list[tuple]:
     """Sorted (version, name, status, applied_at) rows shared by CLI and TUI tables."""
     applied_by_ver = {m["version"]: m for m in applied}
-    pending_by_ver = {v: n for v, n in pending}
+    pending_by_ver = dict(pending)
     entries = []
     for version in sorted(set(applied_by_ver) | set(pending_by_ver)):
         if version in applied_by_ver:

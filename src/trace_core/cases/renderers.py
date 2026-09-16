@@ -6,6 +6,7 @@ from rich.text import Text
 
 from trace_core.cases.dto import CaseResponseDto
 from trace_core.core.ui.renderers import (
+    COLUMN_CASE_NUMBER,
     breakpoint_width,
     format_india_datetime,
     format_india_table_time,
@@ -24,7 +25,7 @@ def _case_table_columns(bp: str, term_w: int) -> list[tuple[str, dict[str, Any]]
 
     if bp == "XS":
         return [
-            ("Case #", {"style": THEME_TOKENS["accent"], "no_wrap": True, "max_width": 16}),
+            (COLUMN_CASE_NUMBER, {"style": THEME_TOKENS["accent"], "no_wrap": True, "max_width": 16}),
             (
                 "Title",
                 {"style": THEME_TOKENS["value"], "overflow": "ellipsis", "max_width": title_max_width(bp, term_w)},
@@ -33,7 +34,7 @@ def _case_table_columns(bp: str, term_w: int) -> list[tuple[str, dict[str, Any]]
         ]
     if bp in ("MD", "LG") and term_w < 100:
         return [
-            ("Case #", {"style": THEME_TOKENS["accent"], "no_wrap": True, "max_width": 16}),
+            (COLUMN_CASE_NUMBER, {"style": THEME_TOKENS["accent"], "no_wrap": True, "max_width": 16}),
             (
                 "Title",
                 {"style": THEME_TOKENS["value"], "overflow": "ellipsis", "max_width": title_max_width(bp, term_w)},
@@ -43,7 +44,7 @@ def _case_table_columns(bp: str, term_w: int) -> list[tuple[str, dict[str, Any]]
         ]
     if bp in ("MD", "LG"):
         return [
-            ("Case #", {"style": THEME_TOKENS["accent"], "no_wrap": True, "max_width": 16}),
+            (COLUMN_CASE_NUMBER, {"style": THEME_TOKENS["accent"], "no_wrap": True, "max_width": 16}),
             (
                 "Title",
                 {"style": THEME_TOKENS["value"], "overflow": "ellipsis", "max_width": title_max_width(bp, term_w)},
@@ -53,7 +54,7 @@ def _case_table_columns(bp: str, term_w: int) -> list[tuple[str, dict[str, Any]]
             ("Opened", {"style": THEME_TOKENS["muted"], "no_wrap": True, "max_width": 14}),
         ]
     return [
-        ("Case #", {"style": THEME_TOKENS["accent"], "no_wrap": True, "max_width": 16}),
+        (COLUMN_CASE_NUMBER, {"style": THEME_TOKENS["accent"], "no_wrap": True, "max_width": 16}),
         ("Title", {"style": THEME_TOKENS["value"], "overflow": "ellipsis"}),
         ("Examiner", {"style": THEME_TOKENS["label"], "overflow": "ellipsis", "max_width": 16}),
         ("Status", {"justify": "left", "no_wrap": True, "max_width": 10}),
@@ -62,15 +63,10 @@ def _case_table_columns(bp: str, term_w: int) -> list[tuple[str, dict[str, Any]]
     ]
 
 
-def render_case_table(cases: list[CaseResponseDto], active_number: str | None = None) -> None:
-    """Render streamlined table grouped by middle code CR/NR/CLI with space between groups. Responsive XS-XL."""
+def _group_cases(cases: list[CaseResponseDto]) -> tuple[dict[str, list[CaseResponseDto]], list[str]]:
+    """Group by middle code CR/NR/CLI, original order inside group, CR first then alphabetical."""
     from trace_core.core.cli.completion import number_group
-    from trace_core.core.ui.renderers import breakpoint_width
 
-    bp, term_w = breakpoint_width()
-    columns = _case_table_columns(bp, term_w)
-
-    # group by middle code like CR/NR/CLI, keep original order inside group, groups sorted alphabetically but CR first
     grouped: dict[str, list[CaseResponseDto]] = {}
     order: list[str] = []
     for c in cases:
@@ -79,54 +75,51 @@ def render_case_table(cases: list[CaseResponseDto], active_number: str | None = 
             grouped[pref] = []
             order.append(pref)
         grouped[pref].append(c)
-    # prefer CR first, then others alphabetically
     order.sort(key=lambda p: (0 if p == "CR" else 1, p))
+    return grouped, order
+
+
+def _case_table_row(c: CaseResponseDto, bp: str, term_w: int, active_number: str | None) -> list[Any]:
+    """One table row for a case. Breakpoint branches mirror _case_table_columns."""
+    label, style, _ = get_status_style_and_label(c.status, c.is_deleted)
+    prefix = "● " if active_number and c.number == active_number else "  "
+    case_cell = Text(f"{prefix}{c.number}", style=THEME_TOKENS["accent"])
+    if prefix == "● ":
+        case_cell.stylize("bold")
+    title = c.title or "Untitled"
+    examiner = c.lead_examiner or "-"
+    badge = Text(label, style=style)
+    if bp == "XS":
+        return [case_cell, title, badge]
+    if bp == "XL":
+        tags = " ".join(f"#{t}" for t in c.tags[:2]) if c.tags else "-"
+        return [
+            case_cell,
+            title,
+            examiner,
+            badge,
+            format_india_table_time(c.opened_at),
+            Text(tags, style=THEME_TOKENS["tag"]),
+        ]
+    if bp in ("MD", "LG") and term_w < 100:
+        return [case_cell, title, examiner, badge]
+    return [case_cell, title, examiner, badge, format_india_table_time(c.opened_at)]
+
+
+def render_case_table(cases: list[CaseResponseDto], active_number: str | None = None) -> None:
+    """Render streamlined table grouped by middle code CR/NR/CLI with space between groups. Responsive XS-XL."""
+    from trace_core.core.ui.renderers import breakpoint_width
+
+    bp, term_w = breakpoint_width()
+    columns = _case_table_columns(bp, term_w)
+    grouped, order = _group_cases(cases)
     rows: list[list[Any]] = []
     for idx, pref in enumerate(order):
         if idx > 0:
             # blank separator — width matches columns
             rows.append(["" for _ in columns])  # type: ignore[list-item]
         for c in grouped[pref]:
-            label, style, _ = get_status_style_and_label(c.status, c.is_deleted)
-            prefix = "● " if active_number and c.number == active_number else "  "
-            case_cell = Text(
-                f"{prefix}{c.number}", style=THEME_TOKENS["accent"] if prefix == "● " else THEME_TOKENS["accent"]
-            )
-            if prefix == "● ":
-                case_cell.stylize("bold")
-            if bp == "XS":
-                rows.append([case_cell, c.title or "Untitled", Text(label, style=style)])
-            elif bp == "XL":
-                tags = " ".join(f"#{t}" for t in c.tags[:2]) if c.tags else "-"
-                rows.append(
-                    [
-                        case_cell,
-                        c.title or "Untitled",
-                        c.lead_examiner or "-",
-                        Text(label, style=style),
-                        format_india_table_time(c.opened_at),
-                        Text(tags, style=THEME_TOKENS["tag"]),
-                    ]
-                )
-            elif bp in ("MD", "LG") and term_w < 100:
-                rows.append(
-                    [
-                        case_cell,
-                        c.title or "Untitled",
-                        c.lead_examiner or "-",
-                        Text(label, style=style),
-                    ]
-                )
-            else:
-                rows.append(
-                    [
-                        case_cell,
-                        c.title or "Untitled",
-                        c.lead_examiner or "-",
-                        Text(label, style=style),
-                        format_india_table_time(c.opened_at),
-                    ]
-                )
+            rows.append(_case_table_row(c, bp, term_w, active_number))
 
     render_minimalist_table(
         title="Forensic Cases",
@@ -135,6 +128,48 @@ def render_case_table(cases: list[CaseResponseDto], active_number: str | None = 
         empty_message="No cases found. Run 'case create' to add one.",
         total=len(cases),
     )
+
+
+def _case_dossier_fields(case: CaseResponseDto, opened: str) -> list[tuple[str, Any]]:
+    """Metadata rows for the dossier grid. Optional closure/archive rows appended when present."""
+    from trace_core.core.ui.theme import THEME_TOKENS as TOK
+
+    tags = "  ".join(f"#{t}" for t in case.tags) if case.tags else "—"
+    fields: list[tuple[str, Any]] = [
+        ("Lead Examiner", case.lead_examiner or "None"),
+        ("Tags", Text(tags, style=TOK["tag"] if case.tags else TOK["muted"])),
+        ("", ""),
+        ("Opened", opened),
+        ("Updated", f"{format_india_datetime(case.updated_at)} ({format_utc_zulu(case.updated_at)})"),
+        ("Closed", _closed_value(case)),
+    ]
+    if case.closed_by:
+        fields.append(("Closed By", case.closed_by))
+    if case.closure_reason:
+        fields.append(("Closure Reason", case.closure_reason))
+    if case.archived_at:
+        fields.append(("Archived At", format_india_datetime(case.archived_at)))
+    if case.archived_by:
+        fields.append(("Archived By", case.archived_by))
+    return fields
+
+
+def _render_case_history(case: CaseResponseDto, events: list[Any] | None) -> None:
+    """HISTORY proof block: newest 5 ledger events with a pointer to the full timeline."""
+    if not events:
+        return
+    from trace_core.audit.renderers import short_action_label
+    from trace_core.core.ui.renderers import console, format_ledger_time, render_section_title
+    from trace_core.core.ui.theme import THEME_TOKENS as TOK
+
+    count = f"{len(events)} event" + ("s" if len(events) != 1 else "")
+    render_section_title(f"HISTORY · {count}")
+    console.print("")
+    for e in events[:5]:
+        console.print(Text(f"  {format_ledger_time(e.ts)}  {short_action_label(e.action)} · {e.actor}"))
+    if len(events) > 5:
+        console.print(Text(f"  … and older in `audit show --case {case.number}`", style=TOK["muted"]))
+    console.print("")
 
 
 def render_case_detail(case: CaseResponseDto, events: list[Any] | None = None) -> None:
@@ -161,23 +196,7 @@ def render_case_detail(case: CaseResponseDto, events: list[Any] | None = None) -
         Text.assemble((f"  {label} · ", style), (f"Opened {format_india_datetime(case.opened_at)}", TOK["muted"])),
     )
 
-    tags = "  ".join(f"#{t}" for t in case.tags) if case.tags else "—"
-    fields: list[tuple[str, Any]] = [
-        ("Lead Examiner", case.lead_examiner or "None"),
-        ("Tags", Text(tags, style=TOK["tag"] if case.tags else TOK["muted"])),
-        ("", ""),
-        ("Opened", opened),
-        ("Updated", f"{format_india_datetime(case.updated_at)} ({format_utc_zulu(case.updated_at)})"),
-        ("Closed", _closed_value(case)),
-    ]
-    if case.closed_by:
-        fields.append(("Closed By", case.closed_by))
-    if case.closure_reason:
-        fields.append(("Closure Reason", case.closure_reason))
-    if case.archived_at:
-        fields.append(("Archived At", format_india_datetime(case.archived_at)))
-    if case.archived_by:
-        fields.append(("Archived By", case.archived_by))
+    fields = _case_dossier_fields(case, opened)
     bp, term_w = breakpoint_width()
     # Tight rhythm: dividers hug the content above; exactly one blank line below
     # every divider and every title, so sections stay easy to notice.
@@ -198,18 +217,7 @@ def render_case_detail(case: CaseResponseDto, events: list[Any] | None = None) -
         console.print(divider)
         console.print("")
 
-    if events:
-        from trace_core.audit.renderers import short_action_label
-        from trace_core.core.ui.renderers import format_ledger_time
-
-        count = f"{len(events)} event" + ("s" if len(events) != 1 else "")
-        render_section_title(f"HISTORY · {count}")
-        console.print("")
-        for e in events[:5]:
-            console.print(Text(f"  {format_ledger_time(e.ts)}  {short_action_label(e.action)} · {e.actor}"))
-        if len(events) > 5:
-            console.print(Text(f"  … and older in `audit show --case {case.number}`", style=TOK["muted"]))
-        console.print("")
+    _render_case_history(case, events)
 
     render_raw_tip(f"case show {case.number} --output json")
 

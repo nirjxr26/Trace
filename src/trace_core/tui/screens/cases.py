@@ -15,8 +15,11 @@ from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.errors import ApplicationError
 from trace_core.core.ui.renderers import format_india_datetime
 from trace_core.tui.forms import CaseForm, RawModal, TypedConfirmModal, YesNoModal
-from trace_core.tui.theme import STATUS_COLORS, status_text
+from trace_core.tui.theme import STATUS_COLORS, THEME_TOKENS, status_text
 from trace_core.tui.widgets import DossierScroll
+
+TABLE_ID = "case-table"
+_NO_SELECTION = "Select a case first."
 
 
 def _status_text(status: object, is_deleted: bool) -> Text:
@@ -52,19 +55,19 @@ class CasesView(Vertical):
         with Horizontal(id="cases-top"):
             with Vertical(id="cases-left"):
                 yield Input(placeholder="search cases…", id="case-search")
-                yield DataTable(id="case-table", cursor_type="row")
+                yield DataTable(id=TABLE_ID, cursor_type="row")
             with DossierScroll(id="cases-right"):
                 yield Static("Select a case…", id="case-dossier")
 
     def on_mount(self) -> None:
-        table = self.query_one("#case-table", DataTable)
+        table = self.query_one(f"#{TABLE_ID}", DataTable)
         table.add_column("Case #", width=16)
         table.add_column("Status", width=10)
         self.refresh_data()
 
     def focus_default(self) -> None:
         """Focus the table. Called by the shell when this tab activates."""
-        self.query_one("#case-table", DataTable).focus()
+        self.query_one(f"#{TABLE_ID}", DataTable).focus()
 
     def _query(self) -> list[CaseResponseDto]:
         query = self.query_one("#case-search", Input).value.strip() or None
@@ -79,7 +82,7 @@ class CasesView(Vertical):
         except ApplicationError as exc:
             self.app.notify(str(exc), severity="error")
             return
-        table = self.query_one("#case-table", DataTable)
+        table = self.query_one(f"#{TABLE_ID}", DataTable)
         table.clear()
         for case in self._cases:
             table.add_row(
@@ -90,7 +93,7 @@ class CasesView(Vertical):
         self._render_dossier()
 
     def _selected(self) -> CaseResponseDto | None:
-        table = self.query_one("#case-table", DataTable)
+        table = self.query_one(f"#{TABLE_ID}", DataTable)
         if table.cursor_row is None or table.cursor_row >= len(self._cases):
             return None
         return self._cases[table.cursor_row]
@@ -102,10 +105,7 @@ class CasesView(Vertical):
         if case is None:
             self.query_one("#case-dossier", Static).update(Text("No cases.", style="dim"))
             return
-        try:
-            events = AuditService(self._manager).list_events(AuditFilterDto(case_number=case.number, limit=6))
-        except ApplicationError:
-            events = []
+        events = self._dossier_events(case)
         rule = self.query_one("#cases-right", DossierScroll).divider()
         status_label = "ARCHIVED" if case.is_deleted else str(getattr(case.status, "value", case.status))
         status_color = STATUS_COLORS.get("ARCHIVED" if case.is_deleted else status_label, "#E5EAF0")
@@ -142,12 +142,12 @@ class CasesView(Vertical):
         body.append("\n")
         body.append(rule)
         if case.description:
-            body.append("\nDESCRIPTION\n", style="bold #72B7D3")
+            body.append("\nDESCRIPTION\n", style=THEME_TOKENS["accent"])
             body.append(f"  {case.description}\n")
             body.append("\n")
             body.append(rule)
         if case.notes:
-            body.append("\nNOTES\n", style="bold #72B7D3")
+            body.append("\nNOTES\n", style=THEME_TOKENS["accent"])
             body.append(f"  {case.notes}\n")
             body.append("\n")
             body.append(rule)
@@ -156,13 +156,36 @@ class CasesView(Vertical):
             from trace_core.core.ui.renderers import format_ledger_time
 
             count = f"{len(events)} event" + ("s" if len(events) != 1 else "")
-            body.append(f"\nHISTORY · {count}\n", style="bold #72B7D3")
+            body.append(f"\nHISTORY · {count}\n", style=THEME_TOKENS["accent"])
             body.append("\n")
             for e in events[:5]:
                 body.append(f"{format_ledger_time(e.ts)}  ", style="dim")
                 body.append(f"{short_action_label(e.action)}", style="bold #E5EAF0")
                 body.append(f"  ·  {e.actor}\n", style="dim")
+        self._append_history(body, case, events)
         self.query_one("#case-dossier", Static).update(body)
+
+    def _dossier_events(self, case):  # type: ignore[no-untyped-def]
+        # Recent audit events for the dossier. Empty on ledger errors.
+        try:
+            return AuditService(self._manager).list_events(AuditFilterDto(case_number=case.number, limit=6))
+        except ApplicationError:
+            return []
+
+    def _append_history(self, body, case, events) -> None:  # type: ignore[no-untyped-def]
+        # HISTORY proof block shared by dossier renders.
+        if not events:
+            return
+        from trace_core.audit.renderers import short_action_label
+        from trace_core.core.ui.renderers import format_ledger_time
+
+        count = f"{len(events)} event" + ("s" if len(events) != 1 else "")
+        body.append(f"\nHISTORY \u00b7 {count}\n", style=THEME_TOKENS["accent"])
+        body.append("\n")
+        for e in events[:5]:
+            body.append(f"{format_ledger_time(e.ts)}  ", style="dim")
+            body.append(f"{short_action_label(e.action)}", style="bold #E5EAF0")
+            body.append(f"  \u00b7  {e.actor}\n", style="dim")
 
     def run_command(self, command: str) -> None:
         """Entry for the palette. Unknown ids are ignored."""
@@ -172,12 +195,12 @@ class CasesView(Vertical):
 
     @on(DataTable.RowHighlighted)
     def _highlighted(self, event: DataTable.RowHighlighted) -> None:
-        if event.data_table.id == "case-table":
+        if event.data_table.id == TABLE_ID:
             self._render_dossier()
 
     @on(DataTable.RowSelected)
     def _opened(self, event: DataTable.RowSelected) -> None:
-        if event.data_table.id == "case-table":
+        if event.data_table.id == TABLE_ID:
             self.query_one("#cases-right").focus()
 
     @on(Input.Changed)
@@ -196,7 +219,7 @@ class CasesView(Vertical):
     def action_raw(self) -> None:
         case = self._selected()
         if case is None:
-            self.app.notify("Select a case first.", severity="warning")
+            self.app.notify(_NO_SELECTION, severity="warning")
             return
         self.app.push_screen(RawModal(f"case show {case.number} --output json", case.model_dump_json(indent=2)))
 
@@ -228,7 +251,7 @@ class CasesView(Vertical):
     def action_edit(self) -> None:
         case = self._selected()
         if case is None:
-            self.app.notify("Select a case first.", severity="warning")
+            self.app.notify(_NO_SELECTION, severity="warning")
             return
         initial = {
             "title": case.title,
@@ -266,7 +289,7 @@ class CasesView(Vertical):
     def action_seal(self) -> None:
         case = self._selected()
         if case is None:
-            self.app.notify("Select a case first.", severity="warning")
+            self.app.notify(_NO_SELECTION, severity="warning")
             return
         self.app.push_screen(
             TypedConfirmModal(f"Seal case {case.number} permanently?", case.number),
@@ -284,7 +307,7 @@ class CasesView(Vertical):
     def action_archive(self) -> None:
         case = self._selected()
         if case is None:
-            self.app.notify("Select a case first.", severity="warning")
+            self.app.notify(_NO_SELECTION, severity="warning")
             return
         self.app.push_screen(
             YesNoModal(f"Archive case {case.number}?"), lambda ok: self._archived(case.number) if ok else None
@@ -301,7 +324,7 @@ class CasesView(Vertical):
     def action_purge(self) -> None:
         case = self._selected()
         if case is None:
-            self.app.notify("Select a case first.", severity="warning")
+            self.app.notify(_NO_SELECTION, severity="warning")
             return
         self.app.push_screen(
             TypedConfirmModal(f"PURGE case {case.number}? Irreversible.", case.number),
@@ -319,7 +342,7 @@ class CasesView(Vertical):
     def action_restore(self) -> None:
         case = self._selected()
         if case is None:
-            self.app.notify("Select a case first.", severity="warning")
+            self.app.notify(_NO_SELECTION, severity="warning")
             return
         self.app.push_screen(
             YesNoModal(f"Restore archived case {case.number}?"),

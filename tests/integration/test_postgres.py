@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from trace_core.cases.domain import CaseStatus
 from trace_core.cases.dto import CaseCreateDto, CaseFilterDto, CaseUpdateDto
@@ -93,6 +94,12 @@ def test_postgres_integration_lifecycle(pg_session_manager: DatabaseSessionManag
     assert service.delete_case(created.number, purge=True) is True
 
 
+def _attempt_tamper_write(session, stmt: str) -> None:  # type: ignore[no-untyped-def]
+    """Execute a tamper statement and flush. Single throwing call for narrow raises blocks."""
+    session.execute(text(stmt))
+    session.flush()
+
+
 def test_postgres_audit_append_only(pg_session_manager: DatabaseSessionManager) -> None:
     """Verify the 008 trigger rejects ledger UPDATE/DELETE on PostgreSQL (parity row 1)."""
     from trace_core.core.database.migrations import get_applied_migrations
@@ -107,9 +114,8 @@ def test_postgres_audit_append_only(pg_session_manager: DatabaseSessionManager) 
     try:
         with pg_session_manager.session() as session:
             for stmt in ("UPDATE audit_events SET actor = 'mallory'", "DELETE FROM audit_events"):
-                with pytest.raises(Exception):
-                    session.execute(text(stmt))
-                    session.flush()
+                with pytest.raises(DBAPIError):
+                    _attempt_tamper_write(session, stmt)
                 session.rollback()
     finally:
         service.delete_case(created.number, purge=False)

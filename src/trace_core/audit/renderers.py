@@ -6,6 +6,7 @@ from rich.text import Text
 
 from trace_core.audit.dto import AuditEventDto, VerifyResultDto
 from trace_core.core.ui.renderers import (
+    COLUMN_CASE_NUMBER,
     format_india_datetime,
     get_status_style_and_label,
     render_key_value_grid,
@@ -22,14 +23,14 @@ def _audit_table_columns(bp: str) -> list[tuple[str, dict[str, Any]]]:
         return [
             ("Seq", {"style": THEME_TOKENS["accent"], "no_wrap": True, "max_width": 6}),
             ("Action", {"style": THEME_TOKENS["value"], "no_wrap": True, "max_width": 14}),
-            ("Case #", {"style": THEME_TOKENS["label"], "no_wrap": True, "max_width": 16}),
+            (COLUMN_CASE_NUMBER, {"style": THEME_TOKENS["label"], "no_wrap": True, "max_width": 16}),
             ("Actor", {"style": THEME_TOKENS["muted"], "overflow": "ellipsis", "max_width": 14}),
         ]
     if bp in ("LG", "XL"):
         return [
             ("Seq", {"style": THEME_TOKENS["accent"], "no_wrap": True, "max_width": 6}),
             ("Action", {"style": THEME_TOKENS["value"], "no_wrap": True, "max_width": 14}),
-            ("Case #", {"style": THEME_TOKENS["label"], "no_wrap": True, "max_width": 16}),
+            (COLUMN_CASE_NUMBER, {"style": THEME_TOKENS["label"], "no_wrap": True, "max_width": 16}),
             ("Actor", {"style": THEME_TOKENS["muted"], "overflow": "ellipsis", "max_width": 14}),
             ("Command", {"style": THEME_TOKENS["muted"], "overflow": "ellipsis", "max_width": 24}),
             ("Time", {"style": THEME_TOKENS["muted"], "no_wrap": True, "max_width": 14}),
@@ -37,7 +38,7 @@ def _audit_table_columns(bp: str) -> list[tuple[str, dict[str, Any]]]:
     return [
         ("Seq", {"style": THEME_TOKENS["accent"], "no_wrap": True, "max_width": 6}),
         ("Action", {"style": THEME_TOKENS["value"], "no_wrap": True, "max_width": 14}),
-        ("Case #", {"style": THEME_TOKENS["label"], "no_wrap": True, "max_width": 16}),
+        (COLUMN_CASE_NUMBER, {"style": THEME_TOKENS["label"], "no_wrap": True, "max_width": 16}),
         ("Actor", {"style": THEME_TOKENS["muted"], "overflow": "ellipsis", "max_width": 14}),
         ("Time", {"style": THEME_TOKENS["muted"], "no_wrap": True, "max_width": 14}),
     ]

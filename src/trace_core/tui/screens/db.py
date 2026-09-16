@@ -12,6 +12,8 @@ from trace_core.core.database.migrations import apply_migrations
 from trace_core.core.database.session import DatabaseSessionManager, db_manager
 from trace_core.core.errors import ApplicationError
 
+MIGRATIONS_TABLE = "db-migrations"
+
 
 class DbView(Vertical):
     """Ops surface: health pill, tables, migration list. `m` applies pending."""
@@ -40,11 +42,11 @@ class DbView(Vertical):
                 yield Static("", id="db-tables")
             with Vertical(id="database-migrations", classes="card"):
                 yield Static("Migrations", classes="card-title")
-                yield DataTable(id="db-migrations", cursor_type="row")
+                yield DataTable(id=MIGRATIONS_TABLE, cursor_type="row")
                 yield Button("Apply pending migrations (m)", id="db-migrate")
 
     def on_mount(self) -> None:
-        table = self.query_one("#db-migrations", DataTable)
+        table = self.query_one(f"#{MIGRATIONS_TABLE}", DataTable)
         table.add_column("Ver", width=5)
         table.add_column("Name")
         table.add_column("Status", width=10)
@@ -52,7 +54,7 @@ class DbView(Vertical):
 
     def focus_default(self) -> None:
         """Focus the migrations table. Called by the shell when this tab activates."""
-        self.query_one("#db-migrations", DataTable).focus()
+        self.query_one(f"#{MIGRATIONS_TABLE}", DataTable).focus()
 
     def refresh_data(self) -> None:
         """Reload health + tables + migrations. Called on mount and tab switch."""
@@ -74,7 +76,7 @@ class DbView(Vertical):
             return
         tables, applied, pending = snap.tables, snap.applied, snap.pending
         self.query_one("#db-tables", Static).update(Text(f"Tables  {', '.join(tables)}", style="dim"))
-        table = self.query_one("#db-migrations", DataTable)
+        table = self.query_one(f"#{MIGRATIONS_TABLE}", DataTable)
         table.clear()
         for version, name, state, _ in migration_entries(applied, pending):
             if state == "Applied":

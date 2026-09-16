@@ -24,9 +24,8 @@ def test_closed_never_reopens_property() -> None:
                     # start is OPEN/UNDER_REVIEW -> CLOSED is allowed, but after close, reopen must fail
                     if target == CaseStatus.CLOSED:
                         continue
+                    # try illegal: seal first (legal), then the reopen must fail
+                    c3 = Case(number="2026-CR-9997", title="T", lead_examiner="Ex", status=start)
+                    transition_case(c3, CaseStatus.CLOSED, reason="x")
                     with pytest.raises((TransitionError, InvariantViolationError)):
-                        # try illegal
-                        c3 = Case(number="2026-CR-9997", title="T", lead_examiner="Ex", status=start)
-                        if start != CaseStatus.CLOSED:
-                            transition_case(c3, CaseStatus.CLOSED, reason="x")
-                            transition_case(c3, target)
+                        transition_case(c3, target)

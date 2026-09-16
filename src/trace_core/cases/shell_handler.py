@@ -184,27 +184,32 @@ class CaseShellCommandHandler(BaseShellHandler):
             return self._complete_case_targets(act, parts, text, ctx)
         return []
 
+    def _complete_flag_value(self, flag: str, ctx: ShellContext) -> list[Any] | None:
+        """Completions for a value-taking list flag. None when the flag takes no values."""
+        from trace_core.core.cli.completion import complete_search_terms, complete_tags, filter_completions
+
+        if flag in ("--status", "-s"):
+            return filter_completions(STATUS_CHOICES, "", limit=8)
+        if flag in ("--output", "-o"):
+            return filter_completions(FORMAT_CHOICES, "", limit=8)
+        try:
+            if not ctx.service:
+                return []
+            if flag in ("--search", "-q"):
+                return complete_search_terms(ctx.service)
+            if flag == "--tags":
+                return complete_tags(ctx.service)
+        except Exception:
+            return []
+        return None
+
     def _complete_list_args(self, parts: list[str], text: str, ctx: ShellContext) -> list[Any]:
         from trace_core.core.cli.completion import filter_completions
 
-        if len(parts) >= 3 and parts[-1] in ("--status", "-s") and text.endswith(" "):
-            return filter_completions(STATUS_CHOICES, "", limit=8)
-        if len(parts) >= 3 and parts[-1] in ("--output", "-o") and text.endswith(" "):
-            return filter_completions(FORMAT_CHOICES, "", limit=8)
-        if len(parts) >= 3 and parts[-1] in ("--search", "-q") and text.endswith(" "):
-            from trace_core.core.cli.completion import complete_search_terms
-
-            try:
-                return complete_search_terms(ctx.service) if ctx.service else []
-            except Exception:
-                return []
-        if len(parts) >= 3 and parts[-1] in ("--tags",) and text.endswith(" "):
-            from trace_core.core.cli.completion import complete_tags
-
-            try:
-                return complete_tags(ctx.service) if ctx.service else []
-            except Exception:
-                return []
+        if len(parts) >= 3 and text.endswith(" "):
+            values = self._complete_flag_value(parts[-1], ctx)
+            if values is not None:
+                return values
         curr = parts[-1] if not text.endswith(" ") else ""
         return filter_completions(CASE_FLAGS, curr)
 
@@ -232,23 +237,14 @@ class CaseShellCommandHandler(BaseShellHandler):
             return [(r, m) for r, m in res if r.startswith(curr)]
         return []
 
-    def _get_candidate_case_numbers(self, ctx: ShellContext) -> list[tuple[str, str]]:
-        # reusable, cached, ranked: active → recent/open, preview "2026-CR-0029 · CLOSED · Title"
-        from trace_core.core.cli.completion import (  # local to keep shell independent
-            complete_from_cases,
-        )
+    def _prepend_active(self, ranked: list[tuple[str, str]], ctx: ShellContext) -> list[tuple[str, str]]:
+        """Ensure the active case heads the list with an Active preview."""
+        if ctx.active_case and ranked and ranked[0][0] != ctx.active_case.number:
+            return [(ctx.active_case.number, f"Active: {ctx.active_case.title}")] + ranked
+        return ranked
 
-        if ctx.service:
-            try:
-                active = ctx.active_case.number if ctx.active_case else None
-                ranked = complete_from_cases(ctx.service, active_number=active, limit=20)
-                # complete_from_cases already ranked + cached + preview; just return
-                # add active meta if not already top
-                if ctx.active_case and ranked and ranked[0][0] != ctx.active_case.number:
-                    ranked = [(ctx.active_case.number, f"Active: {ctx.active_case.title}")] + ranked
-                return ranked[:20]
-            except Exception:
-                pass
+    def _fallback_candidates(self, ctx: ShellContext) -> list[tuple[str, str]]:
+        """Direct service read when the cached ranker is unavailable."""
         candidates: list[tuple[str, str]] = []
         if ctx.active_case:
             candidates.append((ctx.active_case.number, f"Active: {ctx.active_case.title}"))
@@ -261,6 +257,22 @@ class CaseShellCommandHandler(BaseShellHandler):
             except Exception:
                 pass
         return candidates
+
+    def _get_candidate_case_numbers(self, ctx: ShellContext) -> list[tuple[str, str]]:
+        # reusable, cached, ranked: active → recent/open, preview "2026-CR-0029 · CLOSED · Title"
+        from trace_core.core.cli.completion import (  # local to keep shell independent
+            complete_from_cases,
+        )
+
+        if ctx.service:
+            try:
+                active = ctx.active_case.number if ctx.active_case else None
+                ranked = complete_from_cases(ctx.service, active_number=active, limit=20)
+                # complete_from_cases already ranked + cached + preview; just return
+                return self._prepend_active(ranked, ctx)[:20]
+            except Exception:
+                pass
+        return self._fallback_candidates(ctx)
 
     def execute(self, action: str, args: list[str], ctx: ShellContext) -> bool:
         service: CaseService = ctx.service or CaseService()

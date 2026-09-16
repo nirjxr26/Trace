@@ -117,6 +117,8 @@ BREAKPOINTS: list[tuple[str, int, int]] = [
 
 MAX_TABLE_WIDTH = 116
 
+COLUMN_CASE_NUMBER = "Case #"
+
 
 def get_breakpoint(width: int | None = None) -> str:
     """Return responsive breakpoint name: XS (<80), MD (80-119), LG (120-159), XL (160+)."""
@@ -424,19 +426,16 @@ def create_dual_key_value_grid(
     return grid
 
 
-def render_dossier(
+def _dossier_heading(
     header_prefix: str,
     identifier: str,
     title: str,
     subtitle: str | None,
     status_badge: Panel | Text | None,
-    fields: list[tuple[str, Any]],
-    sections: list[tuple[str, str | None]] | None = None,
-) -> None:
-    """Render streamlined forensic dossier with clean whitespace and responsive layout."""
-    bp, term_w = breakpoint_width()
-    rule_str = rule_line(term_w)
-
+    bp: str,
+    term_w: int,
+) -> Text:
+    """Identity block: PREFIX id + badge / title / subtitle. Truncates on XS."""
     shown_title = fit_text(title, max(20, term_w - 6)) if bp == "XS" else title
     shown_sub = fit_text(subtitle, max(20, term_w - 4)) if subtitle and bp == "XS" else subtitle
     left_text = Text()
@@ -454,9 +453,41 @@ def render_dossier(
     left_text.append(f"\n  {shown_title}\n\n", style=THEME_TOKENS["value"])
     if shown_sub:
         left_text.append(f"  {shown_sub}", style=THEME_TOKENS["muted"])
+    return left_text
+
+
+def _render_dossier_sections(sections: list[tuple[str, str | None]], term_w: int) -> None:
+    """Section blocks with narrow-terminal hash splitting."""
+    for sec_title, sec_content in sections:
+        console.print(Text(f"  {sec_title}", style=THEME_TOKENS["accent"]))
+        if sec_content:
+            # Break 64-char hashes cleanly into two 32-char lines on narrow terminals
+            display_content = split_hash(sec_content, term_w)
+        else:
+            display_content = "--"
+        console.print(
+            Text(
+                f"    {display_content}\n",
+                style=THEME_TOKENS["value"] if sec_content else THEME_TOKENS["muted"],
+            )
+        )
+
+
+def render_dossier(
+    header_prefix: str,
+    identifier: str,
+    title: str,
+    subtitle: str | None,
+    status_badge: Panel | Text | None,
+    fields: list[tuple[str, Any]],
+    sections: list[tuple[str, str | None]] | None = None,
+) -> None:
+    """Render streamlined forensic dossier with clean whitespace and responsive layout."""
+    bp, term_w = breakpoint_width()
+    rule_str = rule_line(term_w)
 
     console.print("")
-    console.print(left_text)
+    console.print(_dossier_heading(header_prefix, identifier, title, subtitle, status_badge, bp, term_w))
     console.print("")
     console.print(Text(rule_str, style=THEME_TOKENS["border"]))
 
@@ -469,19 +500,7 @@ def render_dossier(
     console.print(Text(rule_str, style=THEME_TOKENS["border"]))
 
     if sections:
-        for sec_title, sec_content in sections:
-            console.print(Text(f"  {sec_title}", style=THEME_TOKENS["accent"]))
-            if sec_content:
-                # Break 64-char hashes cleanly into two 32-char lines on narrow terminals
-                display_content = split_hash(sec_content, term_w)
-            else:
-                display_content = "--"
-            console.print(
-                Text(
-                    f"    {display_content}\n",
-                    style=THEME_TOKENS["value"] if sec_content else THEME_TOKENS["muted"],
-                )
-            )
+        _render_dossier_sections(sections, term_w)
 
 
 def render_detail_header(prefix: str, identifier: str, title: str, meta: str | Text) -> None:

@@ -13,6 +13,9 @@ from trace_core.audit.service import AuditService
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.errors import ApplicationError
 
+ANCHOR_INPUT = "verify-anchor"
+EXPORT_INPUT = "verify-out"
+
 
 class VerifyView(Vertical):
     """Big verdict, then the numbers. Anchor picker + export, no flags to memorize."""
@@ -38,13 +41,13 @@ class VerifyView(Vertical):
                 yield Static("Anchor check", classes="card-title")
                 yield Static("Compare the live tip against an off-host anchor file.", classes="muted")
                 with Horizontal(classes="input-row"):
-                    yield Input(placeholder="anchor file (optional)…", id="verify-anchor")
+                    yield Input(placeholder="anchor file (optional)…", id=ANCHOR_INPUT)
                     yield Button("Verify", variant="primary", id="verify-run")
             with Vertical(id="integrity-export", classes="card"):
                 yield Static("Export bundle", classes="card-title")
                 yield Static("Header + JSONL, offline-verifiable. Copy it off-host.", classes="muted")
                 with Horizontal(classes="input-row"):
-                    yield Input(placeholder="export bundle to…", id="verify-out")
+                    yield Input(placeholder="export bundle to…", id=EXPORT_INPUT)
                     yield Button("Export", id="verify-export")
 
     def on_mount(self) -> None:
@@ -52,7 +55,7 @@ class VerifyView(Vertical):
 
     def focus_default(self) -> None:
         """Focus the anchor input. Called by the shell when this tab activates."""
-        self.query_one("#verify-anchor", Input).focus()
+        self.query_one(f"#{ANCHOR_INPUT}", Input).focus()
 
     def refresh_data(self) -> None:
         """Re-run verification. Called on mount and tab switch."""
@@ -91,25 +94,25 @@ class VerifyView(Vertical):
         if command == "anchor":
             self.action_anchor()
         elif command == "export":
-            self.query_one("#verify-out", Input).focus()
+            self.query_one(f"#{EXPORT_INPUT}", Input).focus()
 
     def action_anchor(self) -> None:
-        self.query_one("#verify-anchor", Input).focus()
+        self.query_one(f"#{ANCHOR_INPUT}", Input).focus()
 
     def action_export(self) -> None:
-        self.query_one("#verify-out", Input).focus()
+        self.query_one(f"#{EXPORT_INPUT}", Input).focus()
 
     @on(Button.Pressed, "#verify-run")
-    @on(Input.Submitted, "#verify-anchor")
+    @on(Input.Submitted, f"#{ANCHOR_INPUT}")
     def _verify_pressed(self) -> None:
-        path = self.query_one("#verify-anchor", Input).value.strip() or None
+        path = self.query_one(f"#{ANCHOR_INPUT}", Input).value.strip() or None
         self._anchor = path
         self._run_verify()
 
     @on(Button.Pressed, "#verify-export")
-    @on(Input.Submitted, "#verify-out")
+    @on(Input.Submitted, f"#{EXPORT_INPUT}")
     def _export_pressed(self) -> None:
-        path = self.query_one("#verify-out", Input).value.strip()
+        path = self.query_one(f"#{EXPORT_INPUT}", Input).value.strip()
         if not path:
             self.app.notify("Enter an export path first.", severity="warning")
             return

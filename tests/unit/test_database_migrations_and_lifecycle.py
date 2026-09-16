@@ -164,6 +164,14 @@ def test_mask_db_url_with_special_char_password() -> None:
     assert _mask_db_url("sqlite:///trace.db") == "sqlite:///trace.db"
 
 
+def _attempt_tamper_write(session, stmt: str) -> None:  # type: ignore[no-untyped-def]
+    """Execute a tamper statement and flush. Single throwing call for narrow raises blocks."""
+    from sqlalchemy import text
+
+    session.execute(text(stmt))
+    session.flush()
+
+
 def test_migration_008_audit_append_only(sqlite_file_manager) -> None:  # type: ignore[no-untyped-def]
     """Verify 008 installs ledger triggers and writes/updates are rejected (parity row 1)."""
     from sqlalchemy import text
@@ -185,12 +193,10 @@ def test_migration_008_audit_append_only(sqlite_file_manager) -> None:  # type: 
 
     with sqlite_file_manager.session() as session:
         with pytest.raises(DBAPIError):
-            session.execute(text("UPDATE audit_events SET actor = 'mallory'"))
-            session.flush()
+            _attempt_tamper_write(session, "UPDATE audit_events SET actor = 'mallory'")
         session.rollback()
         with pytest.raises(DBAPIError):
-            session.execute(text("DELETE FROM audit_events"))
-            session.flush()
+            _attempt_tamper_write(session, "DELETE FROM audit_events")
         session.rollback()
 
 

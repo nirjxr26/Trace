@@ -35,12 +35,12 @@ jobs:
 
       - name: Security Audit (pip-audit)
         run: |
-          pip install pip-audit --quiet
+          pip install --only-binary :all: "pip-audit==2.10.1" --quiet
           pip-audit --desc --require-hashes -r requirements.txt || true
 
       - name: SBOM (CycloneDX)
         run: |
-          pip install cyclonedx-bom --quiet || true
+          pip install --only-binary :all: "cyclonedx-bom==7.4.0" --quiet || true
           cyclonedx-py -o sbom.json . || true
 
       - name: Verify Code Formatting (Ruff)

@@ -29,6 +29,41 @@ def _require_db() -> None:
         raise typer.Exit(code=1)
 
 
+def _migration_table_columns(bp: str, term_w: int) -> list[tuple[str, dict]]:
+    """Migration columns: XS keeps Ver/Name, wider adds Status/Applied."""
+    columns: list[tuple[str, dict]] = [
+        ("Ver", {"style": "bold", "no_wrap": True, "max_width": 5}),
+        ("Name", {"overflow": "ellipsis", "max_width": max(16, term_w - 50)}),
+    ]
+    if bp != "XS":
+        columns += [
+            ("Status", {"no_wrap": True, "max_width": 10}),
+            ("Applied", {"style": "dim", "no_wrap": True, "max_width": 14}),
+        ]
+    return columns
+
+
+def _migration_table_rows(entries: list[tuple], bp: str) -> list[list]:
+    """Migration rows from shared entries. XS keeps Ver/Name only."""
+    from rich.text import Text
+
+    from trace_core.core.ui.renderers import format_india_table_time
+
+    rows: list[list] = []
+    for version, name, status, applied_at in entries:
+        row = [str(version), name]
+        if bp != "XS":
+            if status == "Applied":
+                row += [
+                    Text("Applied", style="green"),
+                    format_india_table_time(applied_at) if applied_at else "N/A",
+                ]
+            else:
+                row += [Text("Pending", style="yellow"), "-"]
+        rows.append(row)
+    return rows
+
+
 @db_app.command("status")
 def db_status() -> None:
     """Check database connection and show migration / table status."""
@@ -62,35 +97,14 @@ def db_status() -> None:
             tables_str = fit_text(tables_str, max(20, term_w - 12))
         console.print("\n[bold]Tables:[/bold] " + (tables_str if tables else "[dim]None[/dim]"))
 
-        from rich.text import Text
+        from trace_core.core.ui.renderers import render_minimalist_table
 
-        from trace_core.core.ui.renderers import format_india_table_time, render_minimalist_table
-
-        if bp == "XS":
-            columns: list[tuple[str, dict]] = [
-                ("Ver", {"style": "bold", "no_wrap": True, "max_width": 5}),
-                ("Name", {"overflow": "ellipsis", "max_width": max(16, term_w - 50)}),
-            ]
-        else:
-            columns = [
-                ("Ver", {"style": "bold", "no_wrap": True, "max_width": 5}),
-                ("Name", {"overflow": "ellipsis", "max_width": max(16, term_w - 50)}),
-                ("Status", {"no_wrap": True, "max_width": 10}),
-                ("Applied", {"style": "dim", "no_wrap": True, "max_width": 14}),
-            ]
-        rows: list[list] = []
-        for version, name, status, applied_at in migration_entries(applied, pending):
-            row = [str(version), name]
-            if bp != "XS":
-                if status == "Applied":
-                    row += [
-                        Text("Applied", style="green"),
-                        format_india_table_time(applied_at) if applied_at else "N/A",
-                    ]
-                else:
-                    row += [Text("Pending", style="yellow"), "-"]
-            rows.append(row)
-        render_minimalist_table("Schema Migrations", columns, rows, empty_message="No migrations recorded.")
+        render_minimalist_table(
+            "Schema Migrations",
+            _migration_table_columns(bp, term_w),
+            _migration_table_rows(migration_entries(applied, pending), bp),
+            empty_message="No migrations recorded.",
+        )
 
 
 @db_app.command("init")

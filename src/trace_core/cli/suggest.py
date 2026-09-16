@@ -8,6 +8,9 @@ from prompt_toolkit.completion import Completer, Completion
 if TYPE_CHECKING:
     from trace_core.cli.shell import InteractiveShell
 
+_CASE_SHOW = "case show"
+_MANUAL_META = "Display command manual"
+
 
 class TraceAutoSuggest(AutoSuggest):
     """Context-aware inline ghost command suggestion generator."""
@@ -18,7 +21,7 @@ class TraceAutoSuggest(AutoSuggest):
         self.default_suggestions = [
             "case list",
             "case create",
-            "case show",
+            _CASE_SHOW,
             "case select",
             "case deselect",
             "case edit",
@@ -44,12 +47,12 @@ class TraceAutoSuggest(AutoSuggest):
     def _suggest_from_defaults(self, text: str) -> Suggestion | None:
         # context-aware: active case → most logical next is case show / audit show
         if self.shell.active_case and not text:
-            return Suggestion("case show")
+            return Suggestion(_CASE_SHOW)
         # rank: active-aware defaults first
         ranked = []
         if self.shell.active_case:
             ranked = [
-                "case show",
+                _CASE_SHOW,
                 f"audit show --case {self.shell.active_case.number}",
                 "case edit",
                 "case list",
@@ -96,55 +99,52 @@ class TraceShellCompleter(Completer):
     def __init__(self, shell: "InteractiveShell") -> None:
         self.shell = shell
 
-    def get_completions(self, document: Any, complete_event: Any) -> Any:
-        text = document.text_before_cursor.lstrip()
-        word = document.get_word_before_cursor()
+    _ROOT_OPTIONS: list[tuple[str, str]] = [
+        ("case", "Forensic case management commands"),
+        ("audit", "Audit ledger commands"),
+        ("status", "Display system & database status"),
+        ("clear", "Clear screen & re-render banner"),
+        ("cls", "Clear screen & re-render banner"),
+        ("help", _MANUAL_META),
+        ("?", _MANUAL_META),
+        ("exit", "Exit interactive console"),
+        ("quit", "Exit interactive console"),
+        ("list", "List cases (alias: list cases)"),
+        ("create", "Create case (alias: create case)"),
+        ("show", "Show case (alias: show case)"),
+        ("select", "Set active case context"),
+        ("use", "Set active case context"),
+        ("deselect", "Clear active case context"),
+        ("unuse", "Clear active case context"),
+        ("edit", "Edit case metadata"),
+        ("close", "Close case"),
+        ("delete", "Delete / purge case"),
+        ("restore", "Restore archived case"),
+        ("ls", "List cases (short)"),
+        ("sh", "Show case (short)"),
+        ("ed", "Edit case (short)"),
+        ("recent", "Recent cases"),
+        ("back", "Back to general"),
+    ]
 
-        if " " not in text:
-            from trace_core.core.cli.completion import filter_completions
+    _ACTIVE_ROOT_OPTIONS: list[tuple[str, str]] = [
+        ("case", "Forensic case management commands"),
+        ("audit", "Audit ledger commands"),
+        ("status", "Display system & database status"),
+        ("recent", "Recent cases"),
+        ("back", "Back to general"),
+        ("help", _MANUAL_META),
+    ]
 
-            root_options = [
-                ("case", "Forensic case management commands"),
-                ("audit", "Audit ledger commands"),
-                ("status", "Display system & database status"),
-                ("clear", "Clear screen & re-render banner"),
-                ("cls", "Clear screen & re-render banner"),
-                ("help", "Display command manual"),
-                ("?", "Display command manual"),
-                ("exit", "Exit interactive console"),
-                ("quit", "Exit interactive console"),
-                ("list", "List cases (alias: list cases)"),
-                ("create", "Create case (alias: create case)"),
-                ("show", "Show case (alias: show case)"),
-                ("select", "Set active case context"),
-                ("use", "Set active case context"),
-                ("deselect", "Clear active case context"),
-                ("unuse", "Clear active case context"),
-                ("edit", "Edit case metadata"),
-                ("close", "Close case"),
-                ("delete", "Delete / purge case"),
-                ("restore", "Restore archived case"),
-                ("ls", "List cases (short)"),
-                ("sh", "Show case (short)"),
-                ("ed", "Edit case (short)"),
-                ("recent", "Recent cases"),
-                ("back", "Back to general"),
-            ]
-            # hide irrelevant globals when inside case context (prompt shows active)
-            if self.shell.active_case and not text:
-                # prioritize case/audit when active
-                root_options = [
-                    ("case", "Forensic case management commands"),
-                    ("audit", "Audit ledger commands"),
-                    ("status", "Display system & database status"),
-                    ("recent", "Recent cases"),
-                    ("back", "Back to general"),
-                    ("help", "Display command manual"),
-                ]
-            for cmd, meta in filter_completions(root_options, text.lower(), limit=8):
-                yield Completion(cmd, start_position=-len(word), display_meta=meta)
-            return
+    def _root_completions(self, text: str, word: str) -> Any:
+        from trace_core.core.cli.completion import filter_completions
 
+        # hide irrelevant globals when inside case context (prompt shows active)
+        options = self._ACTIVE_ROOT_OPTIONS if self.shell.active_case and not text else self._ROOT_OPTIONS
+        for cmd, meta in filter_completions(options, text.lower(), limit=8):
+            yield Completion(cmd, start_position=-len(word), display_meta=meta)
+
+    def _delegated_completions(self, text: str, word: str) -> Any:
         ctx = self.shell.context
         for handler in self.shell.registry.all_handlers():
             for completion in handler.get_completions(text, ctx):
@@ -160,3 +160,13 @@ class TraceShellCompleter(Completer):
                     yield Completion(val, start_position=-len(word), display=meta)
                 else:
                     yield Completion(val, start_position=-len(word), display_meta=meta)
+
+    def get_completions(self, document: Any, complete_event: Any) -> Any:
+        text = document.text_before_cursor.lstrip()
+        word = document.get_word_before_cursor()
+
+        if " " not in text:
+            yield from self._root_completions(text, word)
+            return
+
+        yield from self._delegated_completions(text, word)

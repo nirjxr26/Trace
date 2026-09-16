@@ -14,8 +14,11 @@ from trace_core.audit.service import AuditService
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.errors import ApplicationError
 from trace_core.core.ui.renderers import format_india_datetime
+from trace_core.core.ui.theme import THEME_TOKENS
 from trace_core.tui.forms import RawModal, TextInputModal
 from trace_core.tui.widgets import DossierScroll
+
+TABLE_ID = "audit-table"
 
 
 class AuditView(Vertical):
@@ -45,19 +48,19 @@ class AuditView(Vertical):
             with Vertical(id="audit-left"):
                 yield Input(placeholder="search actor / action / case…", id="audit-search")
                 yield Static("", id="audit-scope")
-                yield DataTable(id="audit-table", cursor_type="row")
+                yield DataTable(id=TABLE_ID, cursor_type="row")
             with DossierScroll(id="audit-right"):
                 yield Static("Select an event…", id="audit-detail")
 
     def on_mount(self) -> None:
-        table = self.query_one("#audit-table", DataTable)
+        table = self.query_one(f"#{TABLE_ID}", DataTable)
         table.add_column("Seq", width=6)
         table.add_column("Event")
         self.refresh_data()
 
     def focus_default(self) -> None:
         """Focus the table. Called by the shell when this tab activates."""
-        self.query_one("#audit-table", DataTable).focus()
+        self.query_one(f"#{TABLE_ID}", DataTable).focus()
 
     def refresh_data(self) -> None:
         """Reload stream + detail. Called on mount, tab switch, and scope change."""
@@ -73,14 +76,14 @@ class AuditView(Vertical):
             return
         from trace_core.audit.renderers import short_action_label
 
-        table = self.query_one("#audit-table", DataTable)
+        table = self.query_one(f"#{TABLE_ID}", DataTable)
         table.clear()
         for e in self._events:
             table.add_row(str(e.seq), short_action_label(e.action), key=str(e.seq))
         self._render_detail()
 
     def _selected(self) -> AuditEventDto | None:
-        table = self.query_one("#audit-table", DataTable)
+        table = self.query_one(f"#{TABLE_ID}", DataTable)
         if table.cursor_row is None or table.cursor_row >= len(self._events):
             return None
         return self._events[table.cursor_row]
@@ -97,7 +100,7 @@ class AuditView(Vertical):
         pane = self.query_one("#audit-right", DossierScroll)
         rule = pane.divider()
         body = Text()
-        body.append(f"#{e.seq}  {action_title(e.action.value)}\n", style="bold #72B7D3")
+        body.append(f"#{e.seq}  {action_title(e.action.value)}\n", style=THEME_TOKENS["accent"])
         body.append(f"{e.subject_case_number} · {format_india_datetime(e.ts)}\n", style="dim")
         body.append("\n")
         body.append(rule)
@@ -123,7 +126,7 @@ class AuditView(Vertical):
             from trace_core.audit.renderers import format_change_value
 
             before, after = details.get("before", {}), details.get("after", {})
-            body.append(f"\nCHANGES · {len(changed)}\n", style="bold #72B7D3")
+            body.append(f"\nCHANGES · {len(changed)}\n", style=THEME_TOKENS["accent"])
             body.append("\n")
             for field in changed:
                 body.append(f"{field}\n", style="dim")
@@ -132,7 +135,7 @@ class AuditView(Vertical):
                 body.append(f"{format_change_value(after.get(field))}\n", style="#5FD18A")
             body.append("\n")
             body.append(rule)
-        body.append("\nINTEGRITY · ", style="bold #72B7D3")
+        body.append("\nINTEGRITY · ", style=THEME_TOKENS["accent"])
         body.append("✓ VERIFIED\n" if intact else "✗ MISMATCH — run Verify\n", style="#5FD18A" if intact else "#D06A73")
         body.append("\n")
         body.append(f"Payload   {e.payload_hash}\n", style="dim")
@@ -149,12 +152,12 @@ class AuditView(Vertical):
 
     @on(DataTable.RowHighlighted)
     def _highlighted(self, event: DataTable.RowHighlighted) -> None:
-        if event.data_table.id == "audit-table":
+        if event.data_table.id == TABLE_ID:
             self._render_detail()
 
     @on(DataTable.RowSelected)
     def _opened(self, event: DataTable.RowSelected) -> None:
-        if event.data_table.id == "audit-table":
+        if event.data_table.id == TABLE_ID:
             self.query_one("#audit-right").focus()
 
     @on(Input.Changed)
