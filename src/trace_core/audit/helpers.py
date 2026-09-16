@@ -48,9 +48,6 @@ def do_export(svc: AuditService, out: str):  # type: ignore[no-untyped-def]
 
 def fetch_case_with_history(case_svc, identifier: str, limit: int = 6):  # type: ignore[no-untyped-def]
     """Case + recent audit events shared by Typer show and shell show. Events None on ledger miss."""
-    from trace_core.audit.dto import AuditFilterDto
-    from trace_core.audit.service import AuditService
-
     case = case_svc.get_case(identifier)
     try:
         events = AuditService(case_svc.session_manager).list_events(

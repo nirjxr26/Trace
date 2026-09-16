@@ -369,7 +369,7 @@ def _file_lock(path: str):  # type: ignore[no-untyped-def]
         if os.name == "nt":
             import msvcrt
 
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
         else:
             import fcntl  # type: ignore[import-not-found]
 
@@ -380,7 +380,7 @@ def _file_lock(path: str):  # type: ignore[no-untyped-def]
             if os.name == "nt":
                 import msvcrt
 
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
             else:
                 import fcntl  # type: ignore[import-not-found]
 

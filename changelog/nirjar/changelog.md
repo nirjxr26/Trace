@@ -1114,6 +1114,29 @@
 - **Tests (9)**: DTO/seal setup hoisted out of `raises` blocks; single-invocation `_attempt_tamper_write`/`_attempt_ledger_write` helpers; `Exception` → `DBAPIError` in PG test; split composite assert in completion test. Intent unchanged.
 - **Files touched**: `.github/workflows/ci.yml`, `core/ui/theme/renderers`, `core/database/health`, `core/cli/completion/db_commands/suggest`, `cases/renderers/shell_handler`, `audit/shell_handler/renderers`, `tui/actions/app/theme/screens/{cases,audit,db,verify}`, `tests/{unit,test_completion,test_audit_ledger,test_case_state_machine_property,test_database_migrations_and_lifecycle,integration/test_postgres}`.
 
+## 2026-09-16 — CI mypy `src tests` fix (msvcrt attr-defined)
+
+- **Root cause**: typeshed's `msvcrt` stub lacks `locking`/`LK_LOCK`/`LK_UNLCK`; mypy checks both `os.name` branches, so `mypy src tests` (the CI command) failed with 4 errors in `core/database/migrations.py`.
+- **Fix**: `# type: ignore[attr-defined]` on the two `msvcrt.locking(...)` lines — same convention the file already uses for `fcntl`.
+- **Caught by tests**: first attempt dropped the `else:` and broke Windows file locking (3 sqlite file-lock tests failed); restored immediately. Verified: `mypy src tests` clean (88 files), 112 passed, ruff check + format clean.
+- **Files touched**: `core/database/migrations.py`.
+
+## 2026-09-16 — SonarQube 7-issue follow-up (no logic/UI change)
+
+- **Bug found while triaging**: `_render_dossier` rendered HISTORY twice — the old inline block survived the earlier `_append_history` extraction. Deleted the inline copy; dossier now renders one HISTORY via the helper. Verified by diff (identical row order) + TUI tests.
+- **Complexity**: `_render_dossier` → `_append_head` + `_append_meta` (helper kept); `complete_from_cases._load` → `_grouped_rows`.
+- **Literals**: `_TITLE_STYLE = "bold #E5EAF0"` module const in TUI cases screen; `TAB_HINTS = dict.fromkeys(...)`.
+- **Triaged, not changed**: `theme.py` dividers (L9/L25/L42) are section headers, not dead code — kept per AGENTS §10 (second time Sonar flagged them after line shifts).
+- **Verified**: 112 passed, ruff check + format clean, `mypy src tests` clean (88 files).
+- **Files touched**: `tui/screens/cases.py`, `tui/app.py`, `core/cli/completion.py`.
+
+## 2026-09-16 — Pylance diagnostics (3 errors, 2 sites)
+
+- **`audit/helpers.py:57` "No parameter named case_number"**: false-ish positive triggered by a redundant function-level re-import (mine, copied from the call sites the helper replaced). Deleted the two local imports — module already imports both names. Same objects, zero behavior change.
+- **`tui/app.py:148` `.get()` overload/Literal mismatch**: `dict.fromkeys` inferred literal keys. Annotated `TAB_HINTS: dict[str, str]`. Same dict at runtime.
+- **Verified**: 112 passed, ruff check + format clean, `mypy src tests` clean (88 files). Pylance itself can't run headless here — confirm the squiggles clear on your side.
+- **Files touched**: `audit/helpers.py`, `tui/app.py`.
+
 
 
 

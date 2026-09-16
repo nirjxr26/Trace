@@ -10,7 +10,7 @@ from trace_core.tui.theme import TRACE_THEME
 
 _DEFAULT_HINT = "[↑↓] Navigate · [?] Help"
 
-TAB_HINTS = {tab: _DEFAULT_HINT for tab in ("cases", "audit", "integrity", "database")}
+TAB_HINTS: dict[str, str] = dict.fromkeys(("cases", "audit", "integrity", "database"), _DEFAULT_HINT)
 
 
 class TraceApp(App[None]):

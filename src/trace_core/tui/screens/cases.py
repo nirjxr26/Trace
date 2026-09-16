@@ -20,6 +20,7 @@ from trace_core.tui.widgets import DossierScroll
 
 TABLE_ID = "case-table"
 _NO_SELECTION = "Select a case first."
+_TITLE_STYLE = "bold #E5EAF0"
 
 
 def _status_text(status: object, is_deleted: bool) -> Text:
@@ -111,22 +112,32 @@ class CasesView(Vertical):
         status_color = STATUS_COLORS.get("ARCHIVED" if case.is_deleted else status_label, "#E5EAF0")
 
         body = Text()
+        self._append_head(body, case, rule, status_label, status_color)
+        self._append_meta(body, case, rule)
+        self._append_history(body, case, events)
+        self.query_one("#case-dossier", Static).update(body)
+
+    def _append_head(self, body, case, rule, status_label, status_color) -> None:  # type: ignore[no-untyped-def]
+        # Identity + examiner/tags rows.
         body.append(f"{case.number}\n", style="#72B7D3")
-        body.append(f"{case.title or 'Untitled'}\n", style="bold #E5EAF0")
-        body.append("● ", style=status_color)
+        body.append(f"{case.title or 'Untitled'}\n", style=_TITLE_STYLE)
+        body.append("\u25cf ", style=status_color)
         body.append(f"{status_label} ", style=f"bold {status_color}")
-        body.append(f"· Opened {format_india_datetime(case.opened_at)}\n", style="dim")
+        body.append(f"\u00b7 Opened {format_india_datetime(case.opened_at)}\n", style="dim")
         body.append("\n")
         body.append(rule)
         body.append("\n")
         body.append(f"{'Lead Examiner':<15} ", style="dim")
-        body.append(f"{case.lead_examiner or '—'}\n", style="#E5EAF0")
+        body.append(f"{case.lead_examiner or '\u2014'}\n", style="#E5EAF0")
         body.append(f"{'Tags':<15} ", style="dim")
         if case.tags:
             body.append(" ".join(f"#{t}" for t in case.tags) + "\n", style="#6FA8B8")
         else:
-            body.append("—\n", style="dim")
+            body.append("\u2014\n", style="dim")
         body.append("\n")
+
+    def _append_meta(self, body, case, rule) -> None:  # type: ignore[no-untyped-def]
+        # Timestamp/closure rows plus DESCRIPTION/NOTES sections.
         body.append(f"{'Opened':<15} ", style="dim")
         body.append(f"{format_india_datetime(case.opened_at)}\n")
         body.append(f"{'Updated':<15} ", style="dim")
@@ -138,7 +149,7 @@ class CasesView(Vertical):
                 body.append(f"{'Reason':<15} ", style="dim")
                 body.append(f"{case.closure_reason}\n")
         else:
-            body.append("— (active)\n", style="dim")
+            body.append("\u2014 (active)\n", style="dim")
         body.append("\n")
         body.append(rule)
         if case.description:
@@ -151,19 +162,6 @@ class CasesView(Vertical):
             body.append(f"  {case.notes}\n")
             body.append("\n")
             body.append(rule)
-        if events:
-            from trace_core.audit.renderers import short_action_label
-            from trace_core.core.ui.renderers import format_ledger_time
-
-            count = f"{len(events)} event" + ("s" if len(events) != 1 else "")
-            body.append(f"\nHISTORY · {count}\n", style=THEME_TOKENS["accent"])
-            body.append("\n")
-            for e in events[:5]:
-                body.append(f"{format_ledger_time(e.ts)}  ", style="dim")
-                body.append(f"{short_action_label(e.action)}", style="bold #E5EAF0")
-                body.append(f"  ·  {e.actor}\n", style="dim")
-        self._append_history(body, case, events)
-        self.query_one("#case-dossier", Static).update(body)
 
     def _dossier_events(self, case):  # type: ignore[no-untyped-def]
         # Recent audit events for the dossier. Empty on ledger errors.
@@ -184,7 +182,7 @@ class CasesView(Vertical):
         body.append("\n")
         for e in events[:5]:
             body.append(f"{format_ledger_time(e.ts)}  ", style="dim")
-            body.append(f"{short_action_label(e.action)}", style="bold #E5EAF0")
+            body.append(f"{short_action_label(e.action)}", style=_TITLE_STYLE)
             body.append(f"  \u00b7  {e.actor}\n", style="dim")
 
     def run_command(self, command: str) -> None:

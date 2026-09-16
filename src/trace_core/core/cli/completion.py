@@ -152,25 +152,29 @@ def _group_ranked(ranked: list[Any]) -> tuple[dict[str, list[Any]], list[str]]:
     return grouped, order
 
 
+def _grouped_rows(grouped: dict[str, list[Any]], order: list[str], cap: int) -> list[tuple[str, str]]:
+    """Flatten grouped cases to rows with group headers, capped."""
+    out: list[tuple[str, str]] = []
+    for pref in order:
+        # header as non-insertable separator (text="" display="── CR ──")
+        if len(order) > 1:
+            out.append(("", f"── {pref} ──"))
+        for c in grouped[pref]:
+            out.append(preview_case(c))
+            if len(out) >= cap:
+                break
+        if len(out) >= cap:
+            break
+    return out
+
+
 def complete_from_cases(case_service: Any, active_number: str | None = None, limit: int = 8) -> list[tuple[str, str]]:
     """Case-number completions ranked active→recent→open, grouped by prefix CR/NR/CLI, cached 2s, limit 8."""
     cap = limit + 4  # room for group headers
 
     def _load() -> list[tuple[str, str]]:
         ranked = rank_cases(_fetch_cases(case_service, include_deleted=True), active_number)
-        grouped, order = _group_ranked(ranked)
-        out: list[tuple[str, str]] = []
-        for pref in order:
-            # header as non-insertable separator (text="" display="── CR ──")
-            if len(order) > 1:
-                out.append(("", f"── {pref} ──"))
-            for c in grouped[pref]:
-                out.append(preview_case(c))
-                if len(out) >= cap:
-                    break
-            if len(out) >= cap:
-                break
-        return out
+        return _grouped_rows(*_group_ranked(ranked), cap)
 
     return cached_complete("cases", case_service, _load, cap, extra=active_number or "")
 
