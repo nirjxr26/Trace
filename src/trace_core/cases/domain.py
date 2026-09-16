@@ -1,12 +1,12 @@
 """Case domain entity, status enum, and lifecycle state machine."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from trace_core.core.domain import BaseEntity, InvariantViolationError, now_utc
+from trace_core.core.domain import BaseEntity, InvariantViolationError, now_utc, require_utc
 
 
 class CaseStatus(StrEnum):
@@ -141,11 +141,7 @@ class Case(BaseEntity):
     @classmethod
     def validate_closed_at_utc(cls, v: datetime | None) -> datetime | None:
         """Validate that closed_at is converted to canonical UTC if present."""
-        if v is None:
-            return None
-        if v.tzinfo is None or v.tzinfo.utcoffset(v) is None:
-            raise InvariantViolationError("All timestamps must be timezone-aware UTC.")
-        return v.astimezone(UTC)
+        return require_utc(v)
 
     @field_validator("number")
     @classmethod

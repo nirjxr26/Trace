@@ -2,10 +2,8 @@
 
 import typer
 
-from trace_core.audit.commands import audit_app
-from trace_core.cases.commands import case_app
 from trace_core.cli.shell import run_interactive_shell
-from trace_core.core.cli.db_commands import db_app
+from trace_core.core.cli.catalog import feature_apps
 from trace_core.core.settings import settings
 from trace_core.core.ui.renderers import configure_utf8_streams
 
@@ -19,9 +17,8 @@ app = typer.Typer(
 )
 
 # Register feature subcommands
-app.add_typer(case_app, name="case")
-app.add_typer(audit_app, name="audit")
-app.add_typer(db_app, name="db")
+for _name, _sub in feature_apps():
+    app.add_typer(_sub, name=_name)
 
 
 @app.command("tui")

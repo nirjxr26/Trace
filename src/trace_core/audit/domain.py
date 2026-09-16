@@ -1,15 +1,15 @@
 """Audit domain: actions, hashing helpers, and invariants."""
 
 import hashlib
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from trace_core.core.canonical import canonical_json
-from trace_core.core.clock import now_utc
+from trace_core.core.canonical import canonical_json, canonical_ts
+from trace_core.core.clock import default_ts
 from trace_core.core.domain import InvariantViolationError
 
 GENESIS_CHAIN: str = "0" * 64
@@ -71,10 +71,10 @@ def build_payload(
     ts: datetime | None = None,
 ) -> dict[str, Any]:
     """Build canonical payload dict for hashing."""
-    ts_val = ts or now_utc()
+    ts_val = default_ts(ts)
     if ts_val.tzinfo is None or ts_val.tzinfo.utcoffset(ts_val) is None:
         raise InvariantViolationError("Audit ts must be timezone-aware UTC.")
-    ts_utc = ts_val.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    ts_utc = canonical_ts(ts_val)
     return {
         "action": action.value,
         "actor": actor,

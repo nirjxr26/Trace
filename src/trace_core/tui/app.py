@@ -126,13 +126,9 @@ class TraceApp(App[None]):
     def _palette_done(self, command: str | None) -> None:
         if not command:
             return
-        # aliases for pre-rename ids
-        if command == "tab-verify":
-            command = "tab-integrity"
-        if command == "tab-db":
-            command = "tab-database"
-        if command == "db-migrate":
-            command = "database-migrate"
+        from trace_core.tui.actions import resolve_palette_command
+
+        command = resolve_palette_command(command)
         if command.startswith("tab-"):
             self.action_tab(command.removeprefix("tab-"))
             return

@@ -3,14 +3,9 @@
 import typer
 
 from trace_core.core.cli.error_handler import capture_cli_errors
-from trace_core.core.database.migrations import (
-    apply_migrations,
-    get_applied_migrations,
-    get_pending_migrations,
-    get_table_names,
-)
-from trace_core.core.database.session import db_manager, sanitized_db_url
-from trace_core.core.settings import settings
+from trace_core.core.database.health import fetch_db_snapshot, migration_entries
+from trace_core.core.database.migrations import apply_migrations, get_table_names
+from trace_core.core.database.session import db_manager
 from trace_core.core.ui.renderers import (
     breakpoint_width,
     console,
@@ -28,9 +23,9 @@ def _require_db() -> None:
     """Abort command when the database is unreachable."""
     from trace_core.core.ui.renderers import render_error_card
 
-    is_healthy, message = db_manager.check_connection()
-    if not is_healthy:
-        render_error_card("Cannot Connect to Database", message, "Start PostgreSQL or set TRACE_DATABASE_URL.")
+    snap = fetch_db_snapshot(db_manager)
+    if not snap.healthy:
+        render_error_card("Cannot Connect to Database", snap.message, "Start PostgreSQL or set TRACE_DATABASE_URL.")
         raise typer.Exit(code=1)
 
 
@@ -38,8 +33,8 @@ def _require_db() -> None:
 def db_status() -> None:
     """Check database connection and show migration / table status."""
     with capture_cli_errors("Database Health Check Failed"):
-        is_healthy, message = db_manager.check_connection()
-        masked_url = sanitized_db_url(settings.database_url)
+        snap = fetch_db_snapshot(db_manager)
+        is_healthy, message, masked_url = snap.healthy, snap.message, snap.masked_url
 
         status_text = f"[green]Online[/green] ({message})" if is_healthy else f"[red]Offline[/red] ({message})"
         bp, term_w = breakpoint_width()
@@ -60,9 +55,7 @@ def db_status() -> None:
             raise typer.Exit(code=1)
 
         # Inspect tables
-        tables = get_table_names(db_manager.engine)
-        applied = get_applied_migrations(db_manager.engine)
-        pending = get_pending_migrations(db_manager.engine)
+        tables, applied, pending = snap.tables, snap.applied, snap.pending
 
         tables_str = ", ".join(tables) if tables else "None"
         if bp == "XS":
@@ -86,18 +79,16 @@ def db_status() -> None:
                 ("Applied", {"style": "dim", "no_wrap": True, "max_width": 14}),
             ]
         rows: list[list] = []
-        for m in applied:
-            row = [str(m["version"]), m["name"]]
-            if bp != "XS":
-                row += [
-                    Text("Applied", style="green"),
-                    format_india_table_time(m["applied_at"]) if m["applied_at"] else "N/A",
-                ]
-            rows.append(row)
-        for version, name in pending:
+        for version, name, status, applied_at in migration_entries(applied, pending):
             row = [str(version), name]
             if bp != "XS":
-                row += [Text("Pending", style="yellow"), "-"]
+                if status == "Applied":
+                    row += [
+                        Text("Applied", style="green"),
+                        format_india_table_time(applied_at) if applied_at else "N/A",
+                    ]
+                else:
+                    row += [Text("Pending", style="yellow"), "-"]
             rows.append(row)
         render_minimalist_table("Schema Migrations", columns, rows, empty_message="No migrations recorded.")
 

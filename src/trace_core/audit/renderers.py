@@ -10,6 +10,8 @@ from trace_core.core.ui.renderers import (
     get_status_style_and_label,
     render_key_value_grid,
     render_minimalist_table,
+    render_output,
+    split_hash,
 )
 from trace_core.core.ui.theme import THEME_TOKENS
 
@@ -104,32 +106,17 @@ def render_audit_table(events: list[AuditEventDto]) -> None:
 
 def render_event(event: AuditEventDto, output: str = "table") -> None:
     """Render a single event as a 5W1H dossier or raw JSON. Mirrors render_case."""
-    from trace_core.core.ui.renderers import render_json
-
-    if output.lower() == "json":
-        render_json(event)
-    else:
-        render_audit_detail(event)
+    render_output(output, event, lambda: render_audit_detail(event))
 
 
 def render_events(events: list[AuditEventDto], output: str = "table") -> None:
     """Render an event collection as a table or raw JSON. Mirrors render_cases."""
-    from trace_core.core.ui.renderers import render_json
-
-    if output.lower() == "json":
-        render_json(events)
-    else:
-        render_audit_table(events)
+    render_output(output, events, lambda: render_audit_table(events))
 
 
 def render_verify(res: VerifyResultDto, output: str = "table", anchor: str | None = None) -> None:
     """Render a verify result as a grid or raw JSON."""
-    from trace_core.core.ui.renderers import render_json
-
-    if output.lower() == "json":
-        render_json(res)
-    else:
-        render_verify_result(res, anchor)
+    render_output(output, res, lambda: render_verify_result(res, anchor))
 
 
 def render_case_audit_header(case_number: str, title: str, status: str, events: list[AuditEventDto]) -> None:
@@ -240,14 +227,10 @@ def format_change_value(value: Any) -> str:
 
 def _integrity_rows(e: AuditEventDto, term_w: int) -> list[tuple[str, Any]]:
     """Categorized ledger hashes, split for narrow terminals."""
-
-    def _split(h: str) -> str:
-        return f"{h[:32]}\n    {h[32:]}" if term_w < 70 and len(h) == 64 else h
-
     return [
-        ("Payload Hash", _split(e.payload_hash)),
-        ("Previous Chain", _split(e.prev_chain)),
-        ("Chain Hash", _split(e.chain_hash)),
+        ("Payload Hash", split_hash(e.payload_hash, term_w)),
+        ("Previous Chain", split_hash(e.prev_chain, term_w)),
+        ("Chain Hash", split_hash(e.chain_hash, term_w)),
     ]
 
 

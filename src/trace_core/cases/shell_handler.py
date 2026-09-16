@@ -14,14 +14,14 @@ from trace_core.cases.service import CaseService
 from trace_core.core.cli.args import extract_flag_value, extract_int_flag, has_flag
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.output import parse_output_format
-from trace_core.core.cli.registry import ShellCommandHandler, ShellContext
+from trace_core.core.cli.registry import ShellContext
+from trace_core.core.cli.shell_base import BaseShellHandler
 from trace_core.core.ui.renderers import (
     console,
     get_warning_icon,
     prompt_confirm,
     prompt_optional,
     prompt_required,
-    render_error_card,
     render_success,
     render_wizard_header,
 )
@@ -123,7 +123,8 @@ def _parse_list_options(sub_args: list[str]) -> tuple[CaseFilterDto, str]:
     return filter_dto, output
 
 
-class CaseShellCommandHandler(ShellCommandHandler):
+class CaseShellCommandHandler(BaseShellHandler):
+    resource = "Case"
     """Case feature handler for the interactive shell REPL."""
 
     @property
@@ -294,11 +295,9 @@ class CaseShellCommandHandler(ShellCommandHandler):
             console.print("[dim]Active case context cleared.[/dim]")
             return True
 
-        render_error_card(
-            "Unknown Case Action",
-            f"Action '{act}' is not valid for case commands. Type 'help' for available actions.",
+        return self.unknown_action(
+            act, f"Action '{act}' is not valid for case commands. Type 'help' for available actions."
         )
-        return False
 
     def _resolve_target_identifier(self, sub_args: list[str], ctx: ShellContext) -> str | None:
         from trace_core.core.cli.args import extract_positional
@@ -370,16 +369,9 @@ class CaseShellCommandHandler(ShellCommandHandler):
         with capture_cli_errors(
             "Show Case", exit_on_error=False, default_remediation="Use 'case list' to inspect available cases."
         ):
-            from trace_core.audit.dto import AuditFilterDto
-            from trace_core.audit.service import AuditService
+            from trace_core.audit.helpers import fetch_case_with_history
 
-            case = service.get_case(ident)
-            try:
-                events = AuditService(service.session_manager).list_events(
-                    AuditFilterDto(case_number=case.number, limit=6)
-                )
-            except Exception:
-                events = None
+            case, events = fetch_case_with_history(service, ident)
             render_case(case, output_format, events)
 
     def _interactive_edit_case(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:

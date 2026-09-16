@@ -13,6 +13,15 @@ EntityT = TypeVar("EntityT")
 IdT = TypeVar("IdT")
 
 
+def paginate(stmt, limit: int | None, offset: int | None):  # type: ignore[no-untyped-def]
+    """Single source for offset/limit. Skips falsy values (0 offset = no-op)."""
+    if offset:
+        stmt = stmt.offset(offset)
+    if limit:
+        stmt = stmt.limit(limit)
+    return stmt
+
+
 class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):
     """
     Abstract base repository providing common CRUD operations.
@@ -47,9 +56,25 @@ class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):
 
     def get_by_id(self, entity_id: IdT) -> EntityT | None:
         """Fetch entity by primary key."""
-        stmt = select(self.model_cls).where(getattr(self.model_cls, "id") == entity_id)
-        model = self.session.scalar(stmt)
+        model = self._fetch(entity_id)
         return self._to_domain(model) if model else None
+
+    def _fetch(self, entity_id: IdT):  # type: ignore[no-untyped-def]
+        """Single source for PK fetch. Shared by get/update/soft-delete flows."""
+        stmt = select(self.model_cls).where(getattr(self.model_cls, "id") == entity_id)
+        return self.session.scalar(stmt)
+
+    def _guard_version(self, model, expected_version: int, resource_type: str, identifier: str) -> None:  # type: ignore[no-untyped-def]
+        """Single source for OCC checks. Raises on version mismatch."""
+        from trace_core.core.errors import ConcurrencyConflictError
+
+        if model.version != expected_version:
+            raise ConcurrencyConflictError(
+                resource_type=resource_type,
+                identifier=identifier,
+                expected_version=expected_version,
+                actual_version=model.version,
+            )
 
     def update(self, entity: EntityT) -> EntityT:
         """Update an existing entity."""

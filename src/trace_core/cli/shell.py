@@ -9,7 +9,6 @@ from rich.text import Text
 
 from trace_core.cases.domain import Case
 from trace_core.cases.service import CaseService
-from trace_core.cases.shell_handler import CaseShellCommandHandler
 from trace_core.cli.suggest import TraceAutoSuggest, TraceShellCompleter
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.registry import ShellCommandHandler, ShellCommandRegistry, ShellContext
@@ -88,13 +87,10 @@ class InteractiveShell:
 
     def _register_default_handlers(self) -> None:
         """Register built-in feature handlers."""
-        self.registry.register(CaseShellCommandHandler())
-        try:
-            from trace_core.audit.shell_handler import AuditShellCommandHandler
+        from trace_core.core.cli.catalog import default_handlers
 
-            self.registry.register(AuditShellCommandHandler())
-        except Exception:
-            pass
+        for handler in default_handlers():
+            self.registry.register(handler)
 
     def register_handler(self, handler: ShellCommandHandler) -> None:
         """Allow other AI agents and feature modules to plug in commands."""

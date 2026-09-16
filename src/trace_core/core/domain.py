@@ -6,15 +6,21 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from trace_core.core.canonical import coerce_utc
 from trace_core.core.clock import now_utc
 
 
 def ensure_utc(dt: datetime | None) -> datetime | None:
     """Ensure a datetime object is timezone-aware UTC."""
+    return coerce_utc(dt)
+
+
+def require_utc(dt: datetime | None) -> datetime | None:
+    """Reject naive timestamps, coerce aware to UTC. Single source for validators."""
     if dt is None:
         return None
     if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
-        return dt.replace(tzinfo=UTC)
+        raise InvariantViolationError("All timestamps must be timezone-aware UTC.")
     return dt.astimezone(UTC)
 
 
@@ -59,8 +65,4 @@ class BaseEntity(BaseModel):
     @classmethod
     def validate_utc(cls, v: datetime | None) -> datetime | None:
         """Enforce timezone-aware UTC timestamps."""
-        if v is None:
-            return None
-        if v.tzinfo is None or v.tzinfo.utcoffset(v) is None:
-            raise InvariantViolationError("All timestamps must be timezone-aware UTC.")
-        return v.astimezone(UTC)
+        return require_utc(v)

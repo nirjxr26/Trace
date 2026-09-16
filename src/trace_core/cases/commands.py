@@ -121,15 +121,10 @@ def show_case(
 ) -> None:
     """Display comprehensive case details."""
     with capture_cli_errors("Show Case", default_remediation="Run 'trace case list' to inspect available cases."):
-        from trace_core.audit.dto import AuditFilterDto
-        from trace_core.audit.service import AuditService
+        from trace_core.audit.helpers import fetch_case_with_history
 
         service = _get_service()
-        case = service.get_case(identifier)
-        try:
-            events = AuditService(service.session_manager).list_events(AuditFilterDto(case_number=case.number, limit=6))
-        except Exception:
-            events = None
+        case, events = fetch_case_with_history(service, identifier)
         render_case(case, output, events)
 
 

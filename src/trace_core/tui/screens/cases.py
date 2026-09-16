@@ -15,17 +15,12 @@ from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.errors import ApplicationError
 from trace_core.core.ui.renderers import format_india_datetime
 from trace_core.tui.forms import CaseForm, RawModal, TypedConfirmModal, YesNoModal
-from trace_core.tui.theme import STATUS_COLORS
+from trace_core.tui.theme import STATUS_COLORS, status_text
 from trace_core.tui.widgets import DossierScroll
 
 
 def _status_text(status: object, is_deleted: bool) -> Text:
-
-    label = "ARCHIVED" if is_deleted else str(getattr(status, "value", status))
-    color = STATUS_COLORS.get("ARCHIVED" if is_deleted else label, "#E5EAF0")
-    if label == "UNDER_REVIEW":
-        label = "REVIEW"
-    return Text(label, style=color)
+    return status_text(status, is_deleted)
 
 
 class CasesView(Vertical):

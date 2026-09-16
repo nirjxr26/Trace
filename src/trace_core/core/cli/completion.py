@@ -31,6 +31,17 @@ def _service_key(service: Any, kind: str, extra: str = "") -> str:
     return f"{kind}:{ident}:{extra}"
 
 
+def cached_complete(kind: str, service: Any, loader: Callable[[], list[tuple[str, str]]], limit: int = 8, extra: str = "") -> list[tuple[str, str]]:
+    """Single source for cached completion loaders. try/except→[], slice to limit."""
+    def _safe() -> list[tuple[str, str]]:
+        try:
+            return loader()
+        except Exception:
+            return []
+
+    return _cached(_service_key(service, kind, extra), _safe)[:limit]
+
+
 def _fetch_cases(case_service: Any, include_deleted: bool = False) -> list[Any]:
     """Single source for completion case reads. Raises on DB failure (callers coerce to [])."""
     from trace_core.cases.dto import CaseFilterDto
@@ -107,17 +118,14 @@ def complete_from_audit(audit_service: Any, limit: int = 8) -> list[tuple[str, s
     """Seq completions with preview, cached 2s, limit 8."""
 
     def _load() -> list[tuple[str, str]]:
-        try:
-            evts = audit_service.list_events()[:20]
-            out = []
-            for e in evts:
-                preview = f"Seq {e.seq} · {e.action.value} · {e.subject_case_number}"
-                out.append((str(e.seq), preview))
-            return out
-        except Exception:
-            return []
+        evts = audit_service.list_events()[:20]
+        out = []
+        for e in evts:
+            preview = f"Seq {e.seq} · {e.action.value} · {e.subject_case_number}"
+            out.append((str(e.seq), preview))
+        return out
 
-    return _cached(_service_key(audit_service, "audit"), _load)[:limit]
+    return cached_complete("audit", audit_service, _load, limit)
 
 
 def number_group(number: str) -> str:
@@ -133,68 +141,56 @@ def complete_from_cases(case_service: Any, active_number: str | None = None, lim
     cap = limit + 4  # room for group headers
 
     def _load() -> list[tuple[str, str]]:
-        try:
-            ranked = rank_cases(_fetch_cases(case_service, include_deleted=True), active_number)
-            # group by prefix like CR/NR/CLI for together + space
-            grouped: dict[str, list[Any]] = {}
-            order: list[str] = []
-            for c in ranked:
-                prefix = number_group(c.number)
-                if prefix not in grouped:
-                    grouped[prefix] = []
-                    order.append(prefix)
-                grouped[prefix].append(c)
-            out: list[tuple[str, str]] = []
-            for pref in order:
-                # header as non-insertable separator (text="" display="── CR ──")
-                if len(order) > 1:
-                    out.append(("", f"── {pref} ──"))
-                for c in grouped[pref]:
-                    out.append(preview_case(c))
-                    if len(out) >= cap:
-                        break
+        ranked = rank_cases(_fetch_cases(case_service, include_deleted=True), active_number)
+        # group by prefix like CR/NR/CLI for together + space
+        grouped: dict[str, list[Any]] = {}
+        order: list[str] = []
+        for c in ranked:
+            prefix = number_group(c.number)
+            if prefix not in grouped:
+                grouped[prefix] = []
+                order.append(prefix)
+            grouped[prefix].append(c)
+        out: list[tuple[str, str]] = []
+        for pref in order:
+            # header as non-insertable separator (text="" display="── CR ──")
+            if len(order) > 1:
+                out.append(("", f"── {pref} ──"))
+            for c in grouped[pref]:
+                out.append(preview_case(c))
                 if len(out) >= cap:
                     break
-            return out
-        except Exception:
-            return []
+            if len(out) >= cap:
+                break
+        return out
 
-    return _cached(_service_key(case_service, "cases", active_number or ""), _load)[:cap]
+    return cached_complete("cases", case_service, _load, cap, extra=active_number or "")
 
 
 def complete_tags(case_service: Any, limit: int = 8) -> list[tuple[str, str]]:
     """Tag completions from live case taxonomy."""
 
     def _load() -> list[tuple[str, str]]:
-        try:
-            return _distinct_terms([t for c in _fetch_cases(case_service) for t in c.tags], "Tag", limit)
-        except Exception:
-            return []
+        return _distinct_terms([t for c in _fetch_cases(case_service) for t in c.tags], "Tag", limit)
 
-    return _cached(_service_key(case_service, "tags"), _load)[:limit]
+    return cached_complete("tags", case_service, _load, limit)
 
 
 def complete_search_terms(case_service: Any, limit: int = 8) -> list[tuple[str, str]]:
     """Title/examiner completions for search boxes."""
 
     def _load() -> list[tuple[str, str]]:
-        try:
-            cases = _fetch_cases(case_service)
-            return _distinct_terms([c.title for c in cases] + [c.lead_examiner for c in cases], "Search", limit)
-        except Exception:
-            return []
+        cases = _fetch_cases(case_service)
+        return _distinct_terms([c.title for c in cases] + [c.lead_examiner for c in cases], "Search", limit)
 
-    return _cached(_service_key(case_service, "search"), _load)[:limit]
+    return cached_complete("search", case_service, _load, limit)
 
 
 def complete_actors(audit_service: Any, limit: int = 8) -> list[tuple[str, str]]:
     """Actor completions from live ledger."""
 
     def _load() -> list[tuple[str, str]]:
-        try:
-            evts = audit_service.list_events()[:50]
-            return _distinct_terms([e.actor for e in evts], "Actor", limit)
-        except Exception:
-            return []
+        evts = audit_service.list_events()[:50]
+        return _distinct_terms([e.actor for e in evts], "Actor", limit)
 
-    return _cached(_service_key(audit_service, "actors"), _load)[:limit]
+    return cached_complete("actors", audit_service, _load, limit)

@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from trace_core.audit.domain import CANONICAL_VERSION, HASH_ALGO, SPEC_VERSION
 from trace_core.audit.models import AuditEventModel
+from trace_core.core.canonical import canonical_ts
 
 
 def _header() -> str:
@@ -20,9 +21,13 @@ def _header() -> str:
 
 
 def _record_dict(m) -> dict:  # type: ignore[no-untyped-def]
+    try:
+        ts_str = canonical_ts(m.ts)
+    except Exception:
+        ts_str = str(m.ts)
     return {
         "seq": m.seq,
-        "ts": m.ts.isoformat().replace("+00:00", "Z") if hasattr(m.ts, "isoformat") else str(m.ts),
+        "ts": ts_str,
         "action": m.action,
         "actor": m.actor,
         "subject_case_number": m.subject_case_number,

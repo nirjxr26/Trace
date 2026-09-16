@@ -1,15 +1,15 @@
 """Audit repository: serialized global chain append, list, and streaming helpers."""
 
-import hashlib
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from trace_core.audit.domain import GENESIS_CHAIN, AuditAction, AuditEvent, build_payload, chain_hash
+from trace_core.audit.domain import GENESIS_CHAIN, AuditAction, AuditEvent, build_payload, chain_hash, payload_hash
 from trace_core.audit.dto import AuditEventDto, AuditFilterDto
 from trace_core.audit.models import AuditChainStateModel, AuditEventModel
+from trace_core.core.database.repository import paginate
 from trace_core.core.domain import ensure_utc
 
 
@@ -71,16 +71,14 @@ class SqlAlchemyAuditRepository:
         payload_details: dict[str, Any] | None = None,
         ts: Any | None = None,
     ) -> AuditEventDto:
-        from trace_core.core.clock import now_utc
+        from trace_core.core.canonical import canonical_json_str
+        from trace_core.core.clock import default_ts
 
-        ts_val = ts or now_utc()
+        ts_val = default_ts(ts)
         details = dict(payload_details or {})
         payload = build_payload(action, subject_case_number, actor, details, ts_val)
-        from trace_core.core.canonical import canonical_json
-
-        payload_bytes = canonical_json(payload)
-        payload_json_str = payload_bytes.decode("utf-8")
-        p_hash = hashlib.sha256(payload_bytes).hexdigest()
+        payload_json_str = canonical_json_str(payload)
+        p_hash = payload_hash(payload)
 
         head = self._ensure_head_locked()
         prev = head.last_chain_hash
@@ -130,9 +128,6 @@ class SqlAlchemyAuditRepository:
                 | AuditEventModel.action.ilike(pat)
             )
         stmt = stmt.order_by(AuditEventModel.seq.desc())
-        if filt.offset:
-            stmt = stmt.offset(filt.offset)
-        if filt.limit:
-            stmt = stmt.limit(filt.limit)
+        stmt = paginate(stmt, filt.limit, filt.offset)
         rows = self.session.scalars(stmt).all()
         return [_model_to_dto(m) for m in rows]

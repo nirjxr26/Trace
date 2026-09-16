@@ -11,8 +11,8 @@ from trace_core.core.ui.renderers import (
     format_india_table_time,
     format_utc_zulu,
     get_status_style_and_label,
-    render_json,
     render_minimalist_table,
+    render_output,
     rule_line,
 )
 from trace_core.core.ui.theme import THEME_TOKENS
@@ -223,15 +223,9 @@ def _closed_value(case: CaseResponseDto) -> Any:
 
 def render_case(case: CaseResponseDto, output: str = "table", events: list[Any] | None = None) -> None:
     """Render a single case in table dossier or raw JSON form."""
-    if output.lower() == "json":
-        render_json(case)
-    else:
-        render_case_detail(case, events)
+    render_output(output, case, lambda: render_case_detail(case, events))
 
 
 def render_cases(cases: list[CaseResponseDto], output: str = "table", active_number: str | None = None) -> None:
     """Render a case collection in minimalist table or raw JSON form."""
-    if output.lower() == "json":
-        render_json(cases)
-    else:
-        render_case_table(cases, active_number=active_number)
+    render_output(output, cases, lambda: render_case_table(cases, active_number=active_number))

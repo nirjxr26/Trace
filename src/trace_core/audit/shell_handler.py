@@ -13,7 +13,8 @@ from trace_core.audit.service import AuditService
 from trace_core.core.cli.args import extract_flag_value
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.output import OUTPUT_CHOICES, parse_output_format
-from trace_core.core.cli.registry import ShellCommandHandler, ShellContext
+from trace_core.core.cli.registry import ShellContext
+from trace_core.core.cli.shell_base import BaseShellHandler
 from trace_core.core.ui.renderers import console, render_error_card
 
 AUDIT_ACTIONS = [
@@ -37,7 +38,8 @@ _AUDIT_VALUE_FLAGS = (
 )
 
 
-class AuditShellCommandHandler(ShellCommandHandler):
+class AuditShellCommandHandler(BaseShellHandler):
+    resource = "Audit"
     @property
     def command_name(self) -> str:
         return "audit"
@@ -149,8 +151,7 @@ class AuditShellCommandHandler(ShellCommandHandler):
         if act == "export":
             self._export(svc, args)
             return True
-        render_error_card("Unknown Audit Action", f"Action '{act}' not valid. Try 'help'.")
-        return False
+        return self.unknown_action(act)
 
     def _show(self, svc: AuditService, args: list[str], ctx: ShellContext | None = None) -> None:
         from trace_core.core.cli.args import extract_positional
@@ -181,8 +182,7 @@ class AuditShellCommandHandler(ShellCommandHandler):
         return True
 
     def _show_list(self, svc: AuditService, args: list[str]) -> None:
-        from trace_core.audit.domain import AuditAction
-        from trace_core.audit.renderers import render_events
+        from trace_core.audit.helpers import parse_action_value
         from trace_core.core.cli.args import extract_int_flag
 
         case_number = extract_flag_value(args, "--case")
@@ -194,33 +194,23 @@ class AuditShellCommandHandler(ShellCommandHandler):
         offset = extract_int_flag(args, 0, "--offset")
         act = None
         if action_raw:
-            try:
-                act = AuditAction(action_raw.upper())
-            except ValueError:
+            act = parse_action_value(action_raw)
+            if act is None:
                 render_error_card("Unknown Action", f"Unknown action '{action_raw}'.")
                 return
         f = AuditFilterDto(case_number=case_number, action=act, actor=actor, search=search, limit=limit, offset=offset)
         with capture_cli_errors("Audit Show", exit_on_error=False):
-            from trace_core.audit.helpers import render_case_timeline_view
+            from trace_core.audit.helpers import do_show_list
 
-            events = svc.list_events(f)
-            if render_case_timeline_view(svc, case_number, events, output):
-                return
-            if not events and case_number and output != "json":
-                console.print(f"[dim]No events for {case_number}. Try --action CASE_CREATED.[/dim]\n")
-                return
-            render_events(events, output)
+            do_show_list(svc, f, case_number, output)
 
     def _verify(self, svc: AuditService, args: list[str]) -> None:
-        from trace_core.audit.anchor import verify_against_anchor
-        from trace_core.audit.renderers import render_verify
-
         output = parse_output_format(args)
         anchor = extract_flag_value(args, "--anchor")
         with capture_cli_errors("Audit Verify", exit_on_error=False):
-            res = svc.verify()
-            verify_against_anchor(svc, res, anchor)
-            render_verify(res, output, anchor)
+            from trace_core.audit.helpers import do_verify
+
+            do_verify(svc, output, anchor)
 
     def _export(self, svc: AuditService, args: list[str]) -> None:
         out = extract_flag_value(args, "--out")
@@ -228,7 +218,8 @@ class AuditShellCommandHandler(ShellCommandHandler):
             render_error_card("Missing Output", "Pass --out FILE for the export bundle.")
             return
         with capture_cli_errors("Audit Export", exit_on_error=False):
+            from trace_core.audit.helpers import do_export
             from trace_core.core.ui.renderers import render_success
 
-            path = svc.export(out)
+            path = do_export(svc, out)
             render_success(f"Exported to {path}")

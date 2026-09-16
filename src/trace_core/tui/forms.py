@@ -23,6 +23,17 @@ class _BaseModal(ModalScreen):
         self.dismiss(None)  # type: ignore[attr-defined]
 
 
+FIELD_LABELS: dict[str, str] = {
+    "title": "Title *",
+    "examiner": "Lead examiner *",
+    "number": "Number (blank = auto)",
+    "tags": "Tags (comma-separated)",
+    "reason": "Reason (why)",
+    "description": "Description",
+    "notes": "Notes",
+}
+
+
 class CaseForm(_BaseModal, ModalScreen[dict[str, str] | None]):
     """Create/edit form. Returns field values or None on cancel."""
 
@@ -42,20 +53,20 @@ class CaseForm(_BaseModal, ModalScreen[dict[str, str] | None]):
     """
 
     CREATE_FIELDS: tuple[tuple[str, str], ...] = (
-        ("title", "Title *"),
-        ("examiner", "Lead examiner *"),
-        ("number", "Number (blank = auto)"),
-        ("tags", "Tags (comma-separated)"),
-        ("description", "Description"),
-        ("notes", "Notes"),
+        ("title", FIELD_LABELS["title"]),
+        ("examiner", FIELD_LABELS["examiner"]),
+        ("number", FIELD_LABELS["number"]),
+        ("tags", FIELD_LABELS["tags"]),
+        ("description", FIELD_LABELS["description"]),
+        ("notes", FIELD_LABELS["notes"]),
     )
     EDIT_FIELDS: tuple[tuple[str, str], ...] = (
-        ("title", "Title *"),
-        ("examiner", "Lead examiner *"),
-        ("tags", "Tags (comma-separated)"),
-        ("reason", "Reason (why)"),
-        ("description", "Description"),
-        ("notes", "Notes"),
+        ("title", FIELD_LABELS["title"]),
+        ("examiner", FIELD_LABELS["examiner"]),
+        ("tags", FIELD_LABELS["tags"]),
+        ("reason", FIELD_LABELS["reason"]),
+        ("description", FIELD_LABELS["description"]),
+        ("notes", FIELD_LABELS["notes"]),
     )
 
     def __init__(

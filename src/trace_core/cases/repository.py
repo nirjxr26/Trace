@@ -9,10 +9,10 @@ from sqlalchemy.orm import Session
 
 from trace_core.cases.domain import Case, CaseStatus
 from trace_core.cases.models import CaseModel, CaseSequenceModel
+from trace_core.core.canonical import parse_trailing_seq
 from trace_core.core.clock import now_utc
-from trace_core.core.database.repository import SqlAlchemyBaseRepository
+from trace_core.core.database.repository import SqlAlchemyBaseRepository, paginate
 from trace_core.core.domain import ensure_utc
-from trace_core.core.errors import ConcurrencyConflictError
 
 
 class CaseRepository(Protocol):
@@ -162,28 +162,18 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         else:
             stmt = stmt.order_by(CaseModel.opened_at.desc(), CaseModel.id.asc())
 
-        if offset is not None:
-            stmt = stmt.offset(offset)
-        if limit is not None:
-            stmt = stmt.limit(limit)
+        stmt = paginate(stmt, limit, offset)
 
         models = self.session.scalars(stmt).all()
         return [self._to_domain(m) for m in models]
 
     def soft_delete(self, case_id: uuid.UUID, expected_version: int, archived_by: str | None = None) -> bool:
         """Mark a case as archived/deleted without corrupting investigation status."""
-        stmt = select(CaseModel).where(CaseModel.id == case_id)
-        model = self.session.scalar(stmt)
+        model = self._fetch(case_id)
         if not model:
             return False
 
-        if model.version != expected_version:
-            raise ConcurrencyConflictError(
-                resource_type="Case",
-                identifier=str(model.number),
-                expected_version=expected_version,
-                actual_version=model.version,
-            )
+        self._guard_version(model, expected_version, "Case", str(model.number))
 
         model.is_deleted = True
         model.archived_at = now_utc()
@@ -195,18 +185,11 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
 
     def restore(self, case_id: uuid.UUID, expected_version: int) -> bool:
         """Restore an archived case back to active retention."""
-        stmt = select(CaseModel).where(CaseModel.id == case_id)
-        model = self.session.scalar(stmt)
+        model = self._fetch(case_id)
         if not model:
             return False
 
-        if model.version != expected_version:
-            raise ConcurrencyConflictError(
-                resource_type="Case",
-                identifier=str(model.number),
-                expected_version=expected_version,
-                actual_version=model.version,
-            )
+        self._guard_version(model, expected_version, "Case", str(model.number))
 
         model.is_deleted = False
         model.archived_at = None
@@ -218,18 +201,11 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
 
     def purge(self, case_id: uuid.UUID, expected_version: int) -> bool:
         """Permanently delete a case record."""
-        stmt = select(CaseModel).where(CaseModel.id == case_id)
-        model = self.session.scalar(stmt)
+        model = self._fetch(case_id)
         if not model:
             return False
 
-        if model.version != expected_version:
-            raise ConcurrencyConflictError(
-                resource_type="Case",
-                identifier=str(model.number),
-                expected_version=expected_version,
-                actual_version=model.version,
-            )
+        self._guard_version(model, expected_version, "Case", str(model.number))
 
         self.session.delete(model)
         self.session.flush()
@@ -245,18 +221,11 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
 
     def update(self, entity: Case) -> Case:
         """Update case entity with optimistic concurrency checking."""
-        stmt = select(CaseModel).where(CaseModel.id == entity.id)
-        model = self.session.scalar(stmt)
+        model = self._fetch(entity.id)
         if not model:
             raise ValueError(f"Case with id {entity.id} does not exist.")
 
-        if model.version != entity.version:
-            raise ConcurrencyConflictError(
-                resource_type="Case",
-                identifier=entity.number,
-                expected_version=entity.version,
-                actual_version=model.version,
-            )
+        self._guard_version(model, entity.version, "Case", entity.number)
 
         self._update_model(model, entity)
         model.version += 1
@@ -278,8 +247,9 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
             max_seq = 0
             for num in existing_numbers:
                 suffix = num[len(prefix) :]
-                if suffix.isdigit():
-                    max_seq = max(max_seq, int(suffix))
+                seq = parse_trailing_seq(suffix)
+                if seq is not None:
+                    max_seq = max(max_seq, seq)
 
             try:
                 with self.session.begin_nested():

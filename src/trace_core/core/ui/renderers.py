@@ -199,6 +199,22 @@ def page_rows(rows: list[list[Any]], limit: int = 10) -> tuple[list[list[Any]], 
     return rows, 0
 
 
+def split_hash(value: str, term_w: int) -> str:
+    """Split 64-char hashes on narrow terminals. Single source for dossiers."""
+    text = value.strip() if isinstance(value, str) else str(value)
+    if term_w < 70 and len(text) == 64 and " " not in text:
+        return f"{text[:32]}\n    {text[32:]}"
+    return value
+
+
+def render_output(output: str, json_data: Any, table_fn: Any) -> None:
+    """JSON-vs-table dispatch single source. table_fn is a zero-arg closure."""
+    if output.lower() == "json":
+        render_json(json_data)
+    else:
+        table_fn()
+
+
 _STATUS_STYLES: dict[str, tuple[str, str]] = {}
 
 
@@ -455,12 +471,11 @@ def render_dossier(
     if sections:
         for sec_title, sec_content in sections:
             console.print(Text(f"  {sec_title}", style=THEME_TOKENS["accent"]))
-            if sec_content and term_w < 70 and " " not in sec_content.strip() and len(sec_content.strip()) == 64:
+            if sec_content:
                 # Break 64-char hashes cleanly into two 32-char lines on narrow terminals
-                raw_hash = sec_content.strip()
-                display_content = f"{raw_hash[:32]}\n    {raw_hash[32:]}"
+                display_content = split_hash(sec_content, term_w)
             else:
-                display_content = sec_content or "--"
+                display_content = "--"
             console.print(
                 Text(
                     f"    {display_content}\n",

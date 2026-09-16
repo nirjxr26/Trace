@@ -7,15 +7,10 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Button, DataTable, Static
 
-from trace_core.core.database.migrations import (
-    apply_migrations,
-    get_applied_migrations,
-    get_pending_migrations,
-    get_table_names,
-)
+from trace_core.core.database.health import fetch_db_snapshot, migration_entries
+from trace_core.core.database.migrations import apply_migrations
 from trace_core.core.database.session import DatabaseSessionManager, db_manager
 from trace_core.core.errors import ApplicationError
-from trace_core.core.settings import settings
 
 
 class DbView(Vertical):
@@ -61,37 +56,30 @@ class DbView(Vertical):
 
     def refresh_data(self) -> None:
         """Reload health + tables + migrations. Called on mount and tab switch."""
-        from trace_core.core.database.session import sanitized_db_url
-
         mgr = self._mgr
         try:
-            healthy, message = mgr.check_connection()
-        except Exception as exc:  # pragma: no cover - defensive, connection checked above pattern
-            healthy, message = False, str(exc)
+            snap = fetch_db_snapshot(mgr)
+        except ApplicationError as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        healthy, message = snap.healthy, snap.message
         status = Text()
         status.append("● ", style="#5FD18A" if healthy else "#D06A73")
         status.append("Online" if healthy else "Offline", style="bold")
-        status.append(f"  {sanitized_db_url(settings.database_url)}", style="dim")
+        status.append(f"  {snap.masked_url}", style="dim")
         if not healthy:
             status.append(f"\n{message}", style="dim")
         self.query_one("#db-health", Static).update(status)
         if not healthy:
             return
-        try:
-            tables = get_table_names(mgr.engine)
-            applied = {m["version"]: m["name"] for m in get_applied_migrations(mgr.engine)}
-            pending = get_pending_migrations(mgr.engine)
-        except ApplicationError as exc:
-            self.app.notify(str(exc), severity="error")
-            return
+        tables, applied, pending = snap.tables, snap.applied, snap.pending
         self.query_one("#db-tables", Static).update(Text(f"Tables  {', '.join(tables)}", style="dim"))
         table = self.query_one("#db-migrations", DataTable)
         table.clear()
-        for version in sorted(set(applied) | {v for v, _ in pending}):
-            if version in applied:
-                table.add_row(str(version), applied[version], Text("Applied", style="#5FD18A"))
+        for version, name, state, _ in migration_entries(applied, pending):
+            if state == "Applied":
+                table.add_row(str(version), name, Text("Applied", style="#5FD18A"))
             else:
-                name = next(n for v, n in pending if v == version)
                 table.add_row(str(version), name, Text("Pending", style="#D8B56A"))
 
     def run_command(self, command: str) -> None:

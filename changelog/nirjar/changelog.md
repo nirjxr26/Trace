@@ -1085,6 +1085,22 @@
 - **Tests**: trigger enforcement, bootstrap race, threaded chain contiguity, case-insensitive search, knob decoupling.
 - **Verification**: 103 passed, 0 Ruff, 0 Mypy (71 files). Register Section E complete.
 
+---
+
+## 2026-09-16 — Code reusability refactor (pure, no logic/UI change)
+
+- **Rule followed**: AGENTS.md + ponytail full. No logic, UI, or behavior changed. All 112 tests pass, ruff clean, mypy clean (68 files).
+- **Fix 1 time/hash single-source**: `core/canonical.py` gained `coerce_utc/canonical_ts/canonical_json_str/parse_trailing_seq`; `core/domain.ensure_utc` delegates, new `require_utc`; `core/clock.default_ts`; `audit/domain.build_payload`, `cases/domain.validate_closed_at_utc`, `audit/repository.append` (uses `payload_hash`), `audit/exporter._record_dict`, `audit/anchor` (canonical_ts + trailing-seq), `cases/repository` sequence parse reuse.
+- **Fix 2 repo base**: `core/database/repository.paginate/_fetch/_guard_version`; `cases/repository` soft-delete/restore/purge/update use them (4 OCC blocks removed); `audit/repository.list_events` uses `paginate`.
+- **Fix 3 renderers**: `core/ui/renderers.render_output/split_hash`; `cases/renderers.render_case/render_cases`, `audit/renderers.render_event/render_events/render_verify` use dispatch; integrity + dossier hash splits share `split_hash`.
+- **Fix 4 Typer vs shell**: `audit/helpers.parse_action_value/do_show_list/do_verify/do_export/fetch_case_with_history`; `audit/commands`, `audit/shell_handler`, `cases/commands.show`, `cases/shell_handler._interactive_show_case` share cores (each keeps its own error UI/capture).
+- **Fix 5 db health**: new `core/database/health.fetch_db_snapshot/migration_entries/DbSnapshot`; `core/cli/db_commands.db_status/_require_db` and TUI `DbView.refresh_data` render from it (identical rows/colors).
+- **Fix 6 TUI**: `tui/theme.status_text/health_dot` (byte-identical to `CasesView._status_text`); `CasesView` reuses it; new `tui/actions.resolve_palette_command/export_bundle/require_selection/mutate`; `tui/app._palette_done` uses resolver.
+- **Fix 7 CLI**: `core/cli/completion.cached_complete` (5 loaders share cache/except/slice); new `core/cli/shell_base.BaseShellHandler.unknown_action`; case/audit shells extend it with exact messages preserved.
+- **Fix 8 forms/catalog**: `tui/forms.FIELD_LABELS` module-level single source for create/edit labels; new `core/cli/catalog.feature_apps/default_handlers`; `cli/main` + `cli/shell` register from it (same order/set).
+- **Intentionally left explicit (no behavior-change risk)**: per-handler completion display labels differ (cases FORMAT_CHOICES vs shared OUTPUT_CHOICES); full TableDossierView/CardView base-class rewrite and registry dispatch unification deferred (would risk UI/focus/precedence changes); `parse_args` single-pass deferred (subtle dash-skip differences). Smallest safe diffs only.
+- **Files touched**: `core/canonical/domain/clock`, `core/database/repository/health`, `core/cli/args/completion/db_commands/catalog/shell_base`, `core/ui/renderers`, `cases/domain/repository/renderers/commands/shell_handler`, `audit/domain/repository/exporter/anchor/helpers/renderers/commands/shell_handler`, `cli/main/shell`, `tui/theme/actions/app/forms/screens/cases/screens/db` + new `health/catalog/shell_base/actions`.
+
 
 
 

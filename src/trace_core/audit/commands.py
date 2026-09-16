@@ -16,15 +16,15 @@ def _get_service(mgr: DatabaseSessionManager | None = None) -> AuditService:
 
 
 def _parse_action(action: str | None):  # type: ignore[no-untyped-def]
+    from trace_core.audit.helpers import parse_action_value
+
     if not action:
         return None
-    from trace_core.audit.domain import AuditAction
-
-    try:
-        return AuditAction(action.upper())
-    except ValueError:
+    act = parse_action_value(action)
+    if act is None:
         typer.echo(f"Unknown action '{action}'", err=True)
         raise typer.Exit(1)
+    return act
 
 
 def _show_list(
@@ -47,18 +47,9 @@ def _show_list(
         limit=limit,
         offset=offset,
     )
-    from trace_core.audit.helpers import render_case_timeline_view
-    from trace_core.audit.renderers import render_events
+    from trace_core.audit.helpers import do_show_list
 
-    events = svc.list_events(f)
-    if render_case_timeline_view(svc, case_number, events, output):
-        return
-    if not events and case_number and output.lower() != "json":
-        from trace_core.core.ui.renderers import console
-
-        console.print(f"[dim]No events for {case_number}. Try --action CASE_CREATED.[/dim]\n")
-        return
-    render_events(events, output)
+    do_show_list(svc, f, case_number, output)
 
 
 @audit_app.command("show")
@@ -88,15 +79,11 @@ def audit_verify(
     output: str = typer.Option("table", "--output", "-o", help="table|json"),
     anchor: str = typer.Option(None, "--anchor", help="Anchor JSON file to verify tail against"),
 ) -> None:
-    from trace_core.audit.renderers import render_verify
-
     with capture_cli_errors("Audit Verify"):
-        from trace_core.audit.anchor import verify_against_anchor
+        from trace_core.audit.helpers import do_verify
 
         svc = _get_service()
-        res = svc.verify()
-        verify_against_anchor(svc, res, anchor)
-        render_verify(res, output, anchor)
+        res = do_verify(svc, output, anchor)
         if not res.is_valid:
             raise AuditTamperError(f"Tamper detected at seq {res.first_mismatch_seq} ({res.mismatch_type})")
 
@@ -111,5 +98,7 @@ def audit_export(
             typer.echo("Only --format jsonl supported in V1", err=True)
             raise typer.Exit(1)
         svc = _get_service()
-        path = svc.export(out)
+        from trace_core.audit.helpers import do_export
+
+        path = do_export(svc, out)
         typer.echo(f"Exported audit bundle to {path}")

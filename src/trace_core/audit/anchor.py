@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from trace_core.audit.domain import SPEC_VERSION
+from trace_core.core.canonical import canonical_ts, parse_trailing_seq
 from trace_core.core.clock import now_utc
 from trace_core.core.settings import settings
 
@@ -20,7 +21,7 @@ def write_anchor(case_number: str, seq: int, chain_hash: str) -> Path:
         "case": case_number,
         "last_seq": seq,
         "last_chain": chain_hash,
-        "anchored_at": now_utc().isoformat().replace("+00:00", "Z"),
+        "anchored_at": canonical_ts(now_utc()),
         "spec": SPEC_VERSION,
     }
     path = anchor_path(case_number, seq)
@@ -38,10 +39,7 @@ def latest_anchor_for(case_number: str) -> Path | None:
     """Newest anchor file for a case, if any. Single source for close output."""
 
     def _seq_of(path: Path) -> int:
-        try:
-            return int(path.stem.rsplit("-", 1)[1])
-        except (ValueError, IndexError):
-            return -1
+        return parse_trailing_seq(path.stem) or -1
 
     try:
         matches = list(Path(settings.storage_root).glob(f"anchors/anchor-{case_number}-*.json"))

@@ -31,3 +31,21 @@ STATUS_COLORS = {
     "CLOSED": THEME_TOKENS["status_closed"],
     "ARCHIVED": THEME_TOKENS["status_archived"],
 }
+
+
+def status_text(status, is_deleted: bool = False):  # type: ignore[no-untyped-def]
+    """Single source for TUI status labels. Byte-identical to CasesView._status_text."""
+    from rich.text import Text
+
+    label = "ARCHIVED" if is_deleted else str(getattr(status, "value", status))
+    color = STATUS_COLORS.get("ARCHIVED" if is_deleted else label, "#E5EAF0")
+    if label == "UNDER_REVIEW":
+        label = "REVIEW"
+    return Text(label, style=color)
+
+
+def health_dot(ok: bool):  # type: ignore[no-untyped-def]
+    """Single source for health pills (db online, verify verdict dots)."""
+    from rich.text import Text
+
+    return Text("● ", style="#5FD18A" if ok else "#D06A73")
