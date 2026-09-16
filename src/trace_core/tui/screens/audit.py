@@ -5,6 +5,7 @@ from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.timer import Timer
 from textual.widgets import DataTable, Input, Static
 
 from trace_core.audit.dto import AuditEventDto, AuditFilterDto
@@ -36,6 +37,7 @@ class AuditView(Vertical):
         self._manager = session_manager
         self._scope: str | None = None
         self._events: list[AuditEventDto] = []
+        self._search_timer: Timer | None = None
 
     @property
     def _svc(self) -> AuditService:
@@ -163,7 +165,10 @@ class AuditView(Vertical):
     @on(Input.Changed)
     def _searched(self, event: Input.Changed) -> None:
         if event.input.id == "audit-search":
-            self.refresh_data()
+            # Debounce keystrokes into one refresh; timers only delay, never drop.
+            if self._search_timer is not None:
+                self._search_timer.stop()
+            self._search_timer = self.set_timer(0.25, self.refresh_data)
 
     def action_search(self) -> None:
         self.query_one("#audit-search", Input).focus()

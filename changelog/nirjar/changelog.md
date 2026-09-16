@@ -1137,6 +1137,24 @@
 - **Verified**: 112 passed, ruff check + format clean, `mypy src tests` clean (88 files). Pylance itself can't run headless here — confirm the squiggles clear on your side.
 - **Files touched**: `audit/helpers.py`, `tui/app.py`.
 
+## 2026-09-16 — CI collection failure + TUI speed (no behavior change)
+
+- **CI fix**: `test_tui.py` needs the `anyio` pytest plugin but `requirements.txt` lacked it; `--strict-markers` turned that into a collection error on both runners. Added `anyio>=4.0` to dev extras and re-exported the chain (`pyproject` +1, `uv.lock` +24, `requirements.txt` +9, purely additive). Proved with a clean venv installed exactly like CI (`--require-hashes --only-binary :all:`): `test_tui.py` collects, 4 passed. No `ci.yml` changes.
+- **TUI perf** (measured headless, 60 cases):
+  - Dossier events cached per case, cleared on refresh (mutations/tab switches stay fresh): 120 highlights → 59 queries (was 120; revisits free).
+  - Integrity verdict cached on ledger-head `(seq, chain, anchor)`: tab revisits → 0 rescans (was a full O(n) chain rehash per visit).
+  - Search inputs debounced 250ms on Cases/Audit (timers delay, never drop; tests don't touch search).
+- **Verified**: 112 passed, ruff check + format clean, `mypy src tests` clean (88 files).
+- **Files touched**: `pyproject.toml`, `uv.lock`, `requirements.txt`, `tui/screens/{cases,audit,verify}.py`.
+
+## 2026-09-16 — CI speed-up (same checks, less redundant work)
+
+- **Caches**: pip was already cached; added `.mypy_cache`/`.ruff_cache` via pinned `actions/cache@v4` (SHA-verified against the repo tag), keyed on OS + Python + `requirements.txt` hash. Both tools self-invalidate on source edits.
+- **One resolver run**: `pip-audit` + `cyclonedx-bom` install in a single `pip install` (was two).
+- **Hygiene**: `permissions: contents: read`, `timeout-minutes` 15/20/20, `PIP_DISABLE_PIP_VERSION_CHECK=1`.
+- **Untouched**: gates, matrix, coverage, audit tolerance, postgres service. YAML parses; caches are gitignored.
+- **Files touched**: `.github/workflows/ci.yml`.
+
 
 
 

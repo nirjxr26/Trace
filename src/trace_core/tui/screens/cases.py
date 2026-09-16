@@ -5,6 +5,7 @@ from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.timer import Timer
 from textual.widgets import DataTable, Input, Static
 
 from trace_core.audit.dto import AuditFilterDto
@@ -47,6 +48,8 @@ class CasesView(Vertical):
         self._manager = session_manager
         self._recent = False
         self._cases: list[CaseResponseDto] = []
+        self._event_cache: dict[str, list] = {}
+        self._search_timer: Timer | None = None
 
     @property
     def _cases_svc(self) -> CaseService:
@@ -78,6 +81,7 @@ class CasesView(Vertical):
 
     def refresh_data(self) -> None:
         """Reload table + dossier. Called on mount, tab switch, and after every mutation."""
+        self._event_cache.clear()
         try:
             self._cases = self._query()
         except ApplicationError as exc:
@@ -164,11 +168,16 @@ class CasesView(Vertical):
             body.append(rule)
 
     def _dossier_events(self, case):  # type: ignore[no-untyped-def]
-        # Recent audit events for the dossier. Empty on ledger errors.
-        try:
-            return AuditService(self._manager).list_events(AuditFilterDto(case_number=case.number, limit=6))
-        except ApplicationError:
-            return []
+        # Recent audit events for the dossier, cached per case. Cleared on refresh.
+        # Empty on ledger errors.
+        if case.number not in self._event_cache:
+            try:
+                self._event_cache[case.number] = AuditService(self._manager).list_events(
+                    AuditFilterDto(case_number=case.number, limit=6)
+                )
+            except ApplicationError:
+                return []
+        return self._event_cache[case.number]
 
     def _append_history(self, body, case, events) -> None:  # type: ignore[no-untyped-def]
         # HISTORY proof block shared by dossier renders.
@@ -204,7 +213,10 @@ class CasesView(Vertical):
     @on(Input.Changed)
     def _searched(self, event: Input.Changed) -> None:
         if event.input.id == "case-search":
-            self.refresh_data()
+            # Debounce keystrokes into one refresh; timers only delay, never drop.
+            if self._search_timer is not None:
+                self._search_timer.stop()
+            self._search_timer = self.set_timer(0.25, self.refresh_data)
 
     def action_search(self) -> None:
         self.query_one("#case-search", Input).focus()

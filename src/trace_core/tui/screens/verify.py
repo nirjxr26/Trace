@@ -29,6 +29,8 @@ class VerifyView(Vertical):
         super().__init__()
         self._manager = session_manager
         self._anchor: str | None = None
+        self._last_key: tuple | None = None
+        self._last_verdict: Text | None = None
 
     def compose(self) -> ComposeResult:
         from textual.containers import VerticalScroll
@@ -64,13 +66,20 @@ class VerifyView(Vertical):
     def _run_verify(self) -> None:
         svc = AuditService(self._manager)
         try:
+            head = svc.head()
+            key = (head[0], head[1], self._anchor)
+            if key == self._last_key and self._last_verdict is not None:
+                # Ledger tip unchanged: full rescan would recompute the same verdict.
+                self.query_one("#verify-result", Static).update(self._last_verdict)
+                return
             res = svc.verify()
             if self._anchor:
                 verify_against_anchor(svc, res, self._anchor)
         except ApplicationError as exc:
             self.query_one("#verify-result", Static).update(Text(str(exc), style="#D06A73"))
             return
-        self.query_one("#verify-result", Static).update(self._verdict(res))
+        self._last_key, self._last_verdict = key, self._verdict(res)
+        self.query_one("#verify-result", Static).update(self._last_verdict)
 
     @staticmethod
     def _verdict(res: VerifyResultDto) -> Text:
