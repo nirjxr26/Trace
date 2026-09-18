@@ -1328,6 +1328,13 @@
 - Per request, the pre-PR gate script stays a local dev tool: added root-anchored `/check-pr.ps1` to `.gitignore` (new "Local Developer Scripts" section, same spirit as ignored `/docs`). Verified via `git status` (no longer listed) + `git check-ignore`.
 - Note: the `.gitignore` edit itself is tracked — required so the rule is shared and nobody commits the script by accident. The script file remains fully usable locally.
 
+## 2026-09-18 — Sonar Blocker + pytest hygiene (signing traversal, S5754 ×3)
+
+- **Blocker `audit/signing.py` (CWE path traversal)**: `_verify_ed25519` and `_load_private` interpolated the `key_id` suffix straight into a keystore path, but suffixes arrive from DB rows and the active-key pointer file (both attacker-writable). New `_key_file()` single source enforces grammar first (`^[\da-f]{16}$`, matching `init_key` output) then `check_contained()` (the existing `core/fs` backstop, same as `anchor_path`). Verify path still fails closed (`ValueError` is already in its caught tuple → `False`); signing path now raises `ValueError` instead of reading an arbitrary path.
+- **S5754 ×3 `tests/unit/test_security_regressions.py`**: hoisted DTO/service/subject setup out of `pytest.raises` blocks (purged-twin DTO, actor-length recorder/action/subject/actor, auditor-reader service + DTO) so each block holds exactly one throwing invocation — same pattern as the prior S5754 pass.
+- **Regression test**: `test_traversal_key_id_fails_closed` (`ed25519:../../../../tmp/pwn` → `verify_bytes False` + `verify_rows` signature-mismatch, fail closed).
+- **Proof**: 156 passed (155 + 1 new), 3 skipped (PG), 75.68% branch (>70%), 0 Ruff check/format (97 files), 0 Mypy (93 files).
+
 
 
 

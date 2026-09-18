@@ -117,8 +117,9 @@ def test_purged_number_stays_reserved(service: CaseService) -> None:
     created = service.create_case(CaseCreateDto(number="2026-RSV-0001", title="T", lead_examiner="Ex"))
     service.delete_case(created.number, purge=False)
     service.delete_case(created.number, purge=True)
+    twin = CaseCreateDto(number="2026-RSV-0001", title="Twin", lead_examiner="Ex")
     with pytest.raises(ConflictError):
-        service.create_case(CaseCreateDto(number="2026-RSV-0001", title="Twin", lead_examiner="Ex"))
+        service.create_case(twin)
     assert not service.list_cases(CaseFilterDto(search="2026-RSV-0001"))
 
 
@@ -186,16 +187,13 @@ def test_actor_length_enforced() -> None:
 
     mgr = DatabaseSessionManager("sqlite:///:memory:")
     mgr.init_schema()
+    recorder = AuditService()
+    action = AuditAction.CASE_CREATED
+    subject = Subject(type="case", number="2026-CR-0001", id=None)
+    actor = "m" * 256
     with mgr.session() as session:
         with pytest.raises(ValidationError, match="255"):
-            AuditService().record(
-                session,
-                AuditAction.CASE_CREATED,
-                Subject(type="case", number="2026-CR-0001", id=None),
-                "m" * 256,
-                {},
-                None,
-            )
+            recorder.record(session, action, subject, actor, {}, None)
 
 
 def test_search_wildcards_literal(service: CaseService) -> None:
@@ -333,8 +331,10 @@ def test_auditor_is_read_only(session_manager: DatabaseSessionManager, as_user) 
         row.role = ROLE_AUDITOR
         session.commit()
     as_user("viewer")
+    reader = CaseService(session_manager)
+    attempt = CaseCreateDto(title="T", lead_examiner="Ex")
     with pytest.raises(AuthorizationError):
-        CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+        reader.create_case(attempt)
     assert CaseService(session_manager).list_cases() == []
 
 
@@ -468,6 +468,20 @@ def test_unknown_key_fails_closed(detached_event) -> None:
     m = detached_event
     m.key_id = "ed25519:deadbeef"
     m.signature = "f" * 64
+    res = verify_rows([m])
+    assert res.is_valid is False
+    assert res.mismatch_type == "signature"
+
+
+def test_traversal_key_id_fails_closed(detached_event) -> None:
+    """Forged key_id with path traversal must fail closed without touching the filesystem."""
+    from trace_core.audit.signing import verify_bytes
+    from trace_core.audit.verifier import verify_rows
+
+    assert verify_bytes("ed25519:../../../../tmp/pwn", b"data", "0" * 128) is False
+    m = detached_event
+    m.key_id = "ed25519:../../../../tmp/pwn"
+    m.signature = "0" * 128
     res = verify_rows([m])
     assert res.is_valid is False
     assert res.mismatch_type == "signature"

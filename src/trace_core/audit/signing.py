@@ -6,9 +6,11 @@ operator-provided path — never in the DB, source, exports, or anchors.
 
 import hashlib
 import hmac
+import re
 
 HMAC_KEY_ID = "hmac-v1"
 ED25519_PREFIX = "ed25519:"
+_KEY_SUFFIX_RE = re.compile(r"^[\da-f]{16}$")
 _DEV_KEY_SENTINEL = "trace-local-dev-key-change-in-production"
 _warned_default_key = False
 
@@ -128,10 +130,24 @@ def list_keys() -> list[dict[str, str]]:
     return keys
 
 
+def _key_file(suffix: str, ext: str):  # type: ignore[no-untyped-def]
+    """Keystore path for a validated key suffix. Grammar first, containment second.
+
+    Suffixes come from DB rows and the active-key pointer file, both
+    attacker-writable: a crafted `ed25519:../../x` must never become a path.
+    """
+    from trace_core.core.fs import check_contained
+
+    if not _KEY_SUFFIX_RE.match(suffix):
+        raise ValueError(f"Refusing malformed signing key id suffix: {suffix!r}")
+    root = _keystore_dir()
+    return check_contained(root / f"{suffix}.{ext}", root, what="signing key")
+
+
 def _load_private(key_id: str):  # type: ignore[no-untyped-def]
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    priv_path = _keystore_dir() / f"{key_id[len(ED25519_PREFIX) :]}.key"
+    priv_path = _key_file(key_id[len(ED25519_PREFIX) :], "key")
     return Ed25519PrivateKey.from_private_bytes(priv_path.read_bytes())
 
 
@@ -140,9 +156,7 @@ def _verify_ed25519(key_id: str, data: bytes, signature: str) -> bool:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
     try:
-        raw_pub = bytes.fromhex(
-            (_keystore_dir() / f"{key_id[len(ED25519_PREFIX) :]}.pub").read_text(encoding="utf-8").strip()
-        )
+        raw_pub = bytes.fromhex(_key_file(key_id[len(ED25519_PREFIX) :], "pub").read_text(encoding="utf-8").strip())
         Ed25519PublicKey.from_public_bytes(raw_pub).verify(bytes.fromhex(signature), data)
     except (OSError, ValueError, InvalidSignature):
         return False
