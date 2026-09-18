@@ -1,5 +1,6 @@
 from typing import Any
 
+from rich.markup import escape
 from rich.prompt import Prompt
 
 from trace_core.cases.domain import is_archived_filter, parse_status_value
@@ -340,7 +341,7 @@ class CaseShellCommandHandler(BaseShellHandler):
         try:
             existing = sorted({t for c in service.list_cases() for t in c.tags})[:10]
             if existing:
-                console.print(f"  [dim]Existing tags: {', '.join(existing)}[/dim]")
+                console.print(f"  [dim]Existing tags: {escape(', '.join(existing))}[/dim]")
         except Exception:
             pass
         tags_raw = prompt_optional("Tags               ", hint="comma-separated, optional")
@@ -466,17 +467,17 @@ class CaseShellCommandHandler(BaseShellHandler):
         if not self._confirm_typed(ident, "close"):
             return
 
-        reason = prompt_optional("Reason             ", hint="optional")
+        reason = prompt_required("Reason             ", "A closure reason is required to seal a case.")
         closed_by = prompt_optional("Closed By          ", hint="examiner name, optional")
         with capture_cli_errors("Close Case", exit_on_error=False):
-            from trace_core.audit.anchor import latest_anchor_for
+            from trace_core.audit.anchor import describe_anchor
 
             closed = service.close_case(ident, reason=reason, closed_by=closed_by)
             _sync_active_case(ctx, closed)
             render_success(f"Case {closed.number} permanently closed.")
-            anchor = latest_anchor_for(closed.number)
-            if anchor is not None:
-                console.print(f"[dim]Anchor: {anchor} (copy off-host; verify with `audit verify --anchor FILE`)[/dim]")
+            line = describe_anchor(service.session_manager, closed.number)
+            if line is not None:
+                console.print(f"[dim]{escape(line)}[/dim]")
             render_case_detail(closed)
 
     def _interactive_delete_case(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:

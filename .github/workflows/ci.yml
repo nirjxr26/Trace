@@ -62,11 +62,18 @@ jobs:
 
       - name: Security Audit (pip-audit)
         run: |
-          pip-audit --desc --require-hashes -r requirements.txt || true
+          pip-audit --desc --require-hashes -r requirements.txt
 
       - name: SBOM (CycloneDX)
         run: |
-          cyclonedx-py -o sbom.json . || true
+          cyclonedx-py requirements requirements.txt -o sbom.json
+
+      - name: Upload SBOM Artifact
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: sbom-cyclonedx
+          path: sbom.json
+          retention-days: 14
 
       - name: Verify Code Formatting (Ruff)
         run: ruff format --check .
@@ -108,7 +115,7 @@ jobs:
           pip install --no-deps -e .
 
       - name: Execute Pytest with Branch Coverage
-        run: pytest --cov=trace_core --cov-report=term-missing --cov-report=xml
+        run: pytest --cov=trace_core --cov-report=term-missing --cov-report=xml --cov-fail-under=70
 
       - name: Upload Coverage Artifact (Linux)
         if: matrix.os == 'ubuntu-latest'

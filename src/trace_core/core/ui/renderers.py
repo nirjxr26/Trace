@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 import textwrap
 from datetime import UTC, datetime, timedelta, timezone
@@ -207,6 +208,27 @@ def split_hash(value: str, term_w: int) -> str:
     if term_w < 70 and len(text) == 64 and " " not in text:
         return f"{text[:32]}\n    {text[32:]}"
     return value
+
+
+_TERMINAL_ESCAPES_RE = re.compile(
+    r"\x1b\[[0-?]*[ -/]*[@-~]"  # CSI sequences
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC sequences
+    r"|\x1b[@-Z\\-_]"  # other ESC sequences
+    r"|[\x80-\x9f]"  # C1 controls
+)
+
+
+def sanitize_terminal(value: str) -> str:
+    """Remove terminal escape sequences from untrusted text. Backstop for legacy rows."""
+    text = _TERMINAL_ESCAPES_RE.sub("", value)
+    return text.replace("\u2028", "\n").replace("\u2029", "\n")
+
+
+def safe_text(value: Any) -> str:
+    """Sanitize + escape user content for Rich markup contexts. Single source."""
+    from rich.markup import escape
+
+    return escape(sanitize_terminal(str(value)))
 
 
 def render_output(output: str, json_data: Any, table_fn: Any) -> None:
@@ -629,45 +651,6 @@ def render_entity_panel(
     )
     console.print("")
     console.print(panel)
-    console.print("")
-
-
-def render_table(
-    title: str,
-    columns: list[tuple[str, dict[str, Any]]],
-    rows: list[list[Any]],
-    empty_message: str = "No records found.",
-    caption: str | None = None,
-) -> None:
-    """Generic reusable table renderer with rounded border, spacious padding, and clean styling."""
-    if not rows:
-        _print_empty_message(empty_message)
-        return
-
-    bp, term_w = breakpoint_width()
-    visible, hidden = page_rows(rows)
-    table = Table(
-        title=f"\n[{THEME_TOKENS['title_hero']}]{fit_text(title, max(20, term_w - 10))}[/{THEME_TOKENS['title_hero']}]\n",
-        title_style=THEME_TOKENS["title_hero"],
-        border_style=THEME_TOKENS["border_card"],
-        header_style=f"{THEME_TOKENS['section_title']} on #1E2833",
-        box=box.ROUNDED,
-        padding=table_padding(bp),
-        expand=False,
-        width=max(20, min(term_w - 2, MAX_TABLE_WIDTH)),
-        caption=f"[{THEME_TOKENS['muted']} italic]{caption}[/{THEME_TOKENS['muted']} italic]\n" if caption else None,
-    )
-
-    for col_name, col_opts in columns:
-        table.add_column(col_name, **col_opts)
-
-    for row in visible:
-        table.add_row(*_format_table_cells(row))
-
-    console.print("")
-    console.print(table)
-    if hidden:
-        console.print(Text(f"  … {hidden} more (short screen — use --limit to page)", style=THEME_TOKENS["muted"]))
     console.print("")
 
 

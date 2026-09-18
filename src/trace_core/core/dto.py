@@ -32,7 +32,7 @@ class BaseResponseDto(BaseDto):
 class BaseFilterDto(BaseDto):
     """Standardized pagination, search, and archival filters."""
 
-    search: str | None = None
+    search: str | None = Field(default=None, max_length=200)
     include_deleted: bool = False
     deleted_only: bool = False
     limit: int = Field(default=50, ge=1, le=500)

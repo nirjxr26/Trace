@@ -43,8 +43,3 @@ def extract_int_flag(args: list[str], default: int, *flags: str) -> int:
         return int(raw)
     except ValueError:
         raise ValidationError(f"Invalid integer value '{raw}' for {'/'.join(flags)}.") from None
-
-
-def extract_str_flag(args: list[str], default: str, *flags: str) -> str:
-    """Extract a string flag value with default. Single source for `or default` chains."""
-    return extract_flag_value(args, *flags) or default

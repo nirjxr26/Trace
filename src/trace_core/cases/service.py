@@ -14,12 +14,15 @@ from trace_core.cases.dto import (
 )
 from trace_core.cases.repository import SqlAlchemyCaseRepository
 from trace_core.core.database.session import DatabaseSessionManager
+from trace_core.core.domain import strip_controls
 from trace_core.core.errors import (
     ApplicationError,
     ConflictError,
     NotFoundError,
     StateTransitionError,
+    ValidationError,
 )
+from trace_core.core.operators import require_admin, require_mutator
 from trace_core.core.service import BaseService
 
 
@@ -53,8 +56,8 @@ class InvalidCaseStateError(StateTransitionError, CaseError):
 
 def _resolve_actor(actor: str | None, fallback: str = "system") -> str:
     """Resolve audit actor, defaulting to fallback examiner or system."""
-    cleaned = actor.strip() if actor else ""
-    return cleaned or fallback.strip() or "system"
+    cleaned = strip_controls(actor).strip() if actor else ""
+    return cleaned or strip_controls(fallback).strip() or "system"
 
 
 def _require_case(repo: SqlAlchemyCaseRepository, identifier: str) -> Case:
@@ -65,11 +68,20 @@ def _require_case(repo: SqlAlchemyCaseRepository, identifier: str) -> Case:
     return case
 
 
-def _record_audit(session: Any, builder_tuple: tuple[Any, Any, dict[str, Any], Any], actor: str) -> None:  # type: ignore[no-untyped-def]
+def _record_audit(  # type: ignore[no-untyped-def]
+    session: Any,
+    builder_tuple: tuple[Any, Any, dict[str, Any], Any],
+    actor: str,
+    claimed: str | None = None,
+):
     from trace_core.audit.service import AuditService
+    from trace_core.core.operators import current_identity
 
     action, subject, details, ctx = builder_tuple
-    AuditService().record(session, action, subject, actor, details, ctx)
+    actual, _ = current_identity()
+    if claimed and claimed.strip() and claimed.strip() != actual:
+        details = {**details, "claimed_actor": claimed.strip()}
+    return AuditService().record(session, action, subject, actor, details, ctx)
 
 
 class CaseService(BaseService):
@@ -82,13 +94,13 @@ class CaseService(BaseService):
         """Create and persist a new forensic case."""
         resolved_actor = _resolve_actor(actor, dto.lead_examiner)
         with self.transaction() as uow:
+            require_mutator(uow.session, action="create cases")
             repo = SqlAlchemyCaseRepository(uow.session)
 
             case_number = dto.number.strip() if dto.number else repo.get_next_sequence_number()
 
-            # Check duplicate case number upfront
-            existing = repo.get_by_number(case_number)
-            if existing:
+            # Check duplicate case number upfront; tombstoned numbers stay reserved
+            if repo.get_by_number(case_number) or repo.is_purged(case_number):
                 raise DuplicateCaseNumberError(case_number)
 
             case_entity = Case(
@@ -104,14 +116,23 @@ class CaseService(BaseService):
 
             try:
                 created = repo.create(case_entity)
+                if dto.number:
+                    repo.note_manual_number(case_number)
 
                 def _audit(s: Any) -> None:
                     from trace_core.audit.builder import for_case_created
 
                     _record_audit(
                         s,
-                        for_case_created(created.number, created.id, created.title, created.lead_examiner),
+                        for_case_created(
+                            created.number,
+                            created.id,
+                            created.title,
+                            created.lead_examiner,
+                            number_source="manual" if dto.number else "auto",
+                        ),
                         resolved_actor,
+                        claimed=actor,
                     )
 
                 uow.before_commit(_audit)
@@ -149,6 +170,7 @@ class CaseService(BaseService):
     ) -> CaseResponseDto:
         """Update mutable fields of an existing case."""
         with self.transaction() as uow:
+            require_mutator(uow.session, action="update cases")
             repo = SqlAlchemyCaseRepository(uow.session)
             case = _require_case(repo, identifier)
             resolved_actor = _resolve_actor(actor, case.lead_examiner)
@@ -193,6 +215,7 @@ class CaseService(BaseService):
                     s,
                     for_case_updated(updated.number, updated.id, changed, before, after, reason=reason),
                     resolved_actor,
+                    claimed=actor,
                 )
 
             uow.before_commit(_audit)
@@ -202,7 +225,10 @@ class CaseService(BaseService):
         self, identifier: str, reason: str = "", closed_by: str = "", actor: str | None = None
     ) -> CaseResponseDto:
         """Transition case to permanently sealed CLOSED state."""
+        if not reason.strip():
+            raise ValidationError("A closure reason is required to permanently seal a case.")
         with self.transaction() as uow:
+            require_mutator(uow.session, action="close cases")
             repo = SqlAlchemyCaseRepository(uow.session)
             case = _require_case(repo, identifier)
 
@@ -220,27 +246,39 @@ class CaseService(BaseService):
 
             updated = repo.update(case)
 
+            pinned: dict[str, Any] = {}
+
             def _audit(s: Any) -> None:
                 from trace_core.audit.builder import for_case_closed
 
-                _record_audit(s, for_case_closed(updated.number, updated.id, reason, examiner), examiner)
+                dto = _record_audit(
+                    s,
+                    for_case_closed(updated.number, updated.id, reason, examiner),
+                    examiner,
+                    claimed=closed_by or actor,
+                )
+                pinned["seq"], pinned["chain"] = dto.seq, dto.chain_hash
 
-            def _anchor() -> None:
+            def _intent(s: Any) -> None:
+                # Exact seq/chain of THIS close, captured in-transaction. Never re-read head.
+                from trace_core.audit.anchor import record_anchor_intent
+
+                if pinned:
+                    record_anchor_intent(s, updated.number, updated.id, pinned["seq"], pinned["chain"])
+
+            def _publish() -> None:
                 try:
-                    from trace_core.audit.anchor import write_anchor
-                    from trace_core.audit.service import AuditService
+                    from trace_core.audit.anchor import publish_pending_anchors
 
-                    audit_svc = AuditService(self.session_manager)
-                    seq, chain = audit_svc.head()
-                    if seq:
-                        write_anchor(updated.number, seq, chain)
+                    publish_pending_anchors(self.session_manager)
                 except Exception as exc:
                     import structlog
 
-                    structlog.get_logger().warning("Audit anchor write failed", case=updated.number, error=str(exc))
+                    structlog.get_logger().warning("Anchor publish failed", case=updated.number, error=str(exc))
 
             uow.before_commit(_audit)
-            uow.on_commit(_anchor)
+            uow.before_commit(_intent)
+            uow.on_commit(_publish)
             return CaseResponseDto.from_domain(updated)
 
     def delete_case(self, identifier: str, purge: bool = False, actor: str | None = None) -> bool:
@@ -250,6 +288,7 @@ class CaseService(BaseService):
         purge=True: permanently remove row from database.
         """
         with self.transaction() as uow:
+            require_mutator(uow.session, action="archive cases")
             repo = SqlAlchemyCaseRepository(uow.session)
             case = _require_case(repo, identifier)
             resolved_actor = _resolve_actor(actor, case.lead_examiner)
@@ -258,6 +297,7 @@ class CaseService(BaseService):
                 raise InvalidCaseStateError(f"Case '{identifier}' is already archived/deleted.")
 
             if purge:
+                require_admin(uow.session, action="purge cases")
                 if not case.is_deleted:
                     raise InvalidCaseStateError(
                         f"Forensic safety violation: Case '{identifier}' must be archived before it can be purged."
@@ -269,7 +309,7 @@ class CaseService(BaseService):
                 def _audit(s: Any) -> None:
                     from trace_core.audit.builder import for_case_purged
 
-                    _record_audit(s, for_case_purged(purged_number, purged_id), resolved_actor)
+                    _record_audit(s, for_case_purged(purged_number, purged_id), resolved_actor, claimed=actor)
 
                 uow.before_commit(_audit)
                 return result
@@ -278,7 +318,7 @@ class CaseService(BaseService):
             def _audit2(s: Any) -> None:
                 from trace_core.audit.builder import for_case_archived
 
-                _record_audit(s, for_case_archived(case.number, case.id), resolved_actor)
+                _record_audit(s, for_case_archived(case.number, case.id), resolved_actor, claimed=actor)
 
             uow.before_commit(_audit2)
             return result
@@ -286,6 +326,7 @@ class CaseService(BaseService):
     def restore_case(self, identifier: str, actor: str | None = None) -> CaseResponseDto:
         """Restore an archived case back to active retention."""
         with self.transaction() as uow:
+            require_mutator(uow.session, action="restore cases")
             repo = SqlAlchemyCaseRepository(uow.session)
             case = _require_case(repo, identifier)
             resolved_actor = _resolve_actor(actor, case.lead_examiner)
@@ -301,7 +342,7 @@ class CaseService(BaseService):
             def _audit(s: Any) -> None:
                 from trace_core.audit.builder import for_case_restored
 
-                _record_audit(s, for_case_restored(restored.number, restored.id), resolved_actor)
+                _record_audit(s, for_case_restored(restored.number, restored.id), resolved_actor, claimed=actor)
 
             uow.before_commit(_audit)
             return CaseResponseDto.from_domain(restored)

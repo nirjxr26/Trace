@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from trace_core.audit.domain import GENESIS_CHAIN, AuditAction, AuditEvent, build_payload, chain_hash, payload_hash
 from trace_core.audit.dto import AuditEventDto, AuditFilterDto
 from trace_core.audit.models import AuditChainStateModel, AuditEventModel
-from trace_core.core.database.repository import paginate
+from trace_core.cases.domain import normalize_number
+from trace_core.core.database.repository import ilike_literal, paginate
 from trace_core.core.domain import ensure_utc
 
 
@@ -25,6 +26,8 @@ def _base_fields(m: AuditEventModel) -> dict[str, Any]:
         "payload_hash": m.payload_hash,
         "prev_chain": m.prev_chain,
         "chain_hash": m.chain_hash,
+        "key_id": m.key_id,
+        "signature": m.signature,
     }
 
 
@@ -69,16 +72,17 @@ class SqlAlchemyAuditRepository:
         subject_case_number: str,
         subject_case_id: UUID | None,
         payload_details: dict[str, Any] | None = None,
-        ts: Any | None = None,
     ) -> AuditEventDto:
+        from trace_core.audit.signing import sign_bytes
         from trace_core.core.canonical import canonical_json_str
-        from trace_core.core.clock import default_ts
+        from trace_core.core.clock import now_utc
 
-        ts_val = default_ts(ts)
+        ts_val = now_utc()
         details = dict(payload_details or {})
         payload = build_payload(action, subject_case_number, actor, details, ts_val)
         payload_json_str = canonical_json_str(payload)
         p_hash = payload_hash(payload)
+        key_id, signature = sign_bytes(payload_json_str.encode("utf-8"))
 
         head = self._ensure_head_locked()
         prev = head.last_chain_hash
@@ -96,6 +100,8 @@ class SqlAlchemyAuditRepository:
             payload_hash=p_hash,
             prev_chain=prev,
             chain_hash=c_hash,
+            key_id=key_id,
+            signature=signature,
         )
         self.session.add(model)
         head.last_seq = seq
@@ -115,17 +121,17 @@ class SqlAlchemyAuditRepository:
         filt = f or AuditFilterDto()
         stmt = select(AuditEventModel)
         if filt.case_number:
-            stmt = stmt.where(AuditEventModel.subject_case_number == filt.case_number.strip())
+            stmt = stmt.where(AuditEventModel.subject_case_number == normalize_number(filt.case_number))
         if filt.action:
             stmt = stmt.where(AuditEventModel.action == filt.action.value)
         if filt.actor:
-            stmt = stmt.where(AuditEventModel.actor.ilike(f"%{filt.actor.strip()}%"))
+            stmt = stmt.where(ilike_literal(AuditEventModel.actor, filt.actor.strip()))
         if filt.search and filt.search.strip():
-            pat = f"%{filt.search.strip()}%"
+            term = filt.search.strip()
             stmt = stmt.where(
-                AuditEventModel.subject_case_number.ilike(pat)
-                | AuditEventModel.actor.ilike(pat)
-                | AuditEventModel.action.ilike(pat)
+                ilike_literal(AuditEventModel.subject_case_number, term)
+                | ilike_literal(AuditEventModel.actor, term)
+                | ilike_literal(AuditEventModel.action, term)
             )
         stmt = stmt.order_by(AuditEventModel.seq.desc())
         stmt = paginate(stmt, filt.limit, filt.offset)

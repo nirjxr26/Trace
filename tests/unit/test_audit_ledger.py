@@ -84,8 +84,8 @@ def test_mutate_payload_and_hash_still_chain_fails(session_manager: DatabaseSess
         _enable_audit_triggers(conn)
     res = AuditService(session_manager).verify()
     assert res.is_valid is False
-    assert res.first_mismatch_seq == 2
-    assert res.mismatch_type == "prev_chain"
+    assert res.first_mismatch_seq == 1
+    assert res.mismatch_type == "signature"
 
 
 def test_mutate_chain_hash_detected(session_manager: DatabaseSessionManager) -> None:

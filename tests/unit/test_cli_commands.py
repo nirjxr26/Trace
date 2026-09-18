@@ -65,7 +65,7 @@ def test_cli_case_crud_flow() -> None:
     assert "updated successfully" in res_edit.stdout
 
     # 6. Close case
-    res_close = runner.invoke(app, ["case", "close", "2026-CLI-0001", "--yes"])
+    res_close = runner.invoke(app, ["case", "close", "2026-CLI-0001", "--reason", "CLI flow done", "--yes"])
     assert res_close.exit_code == 0
     assert "CLOSED" in res_close.stdout
 

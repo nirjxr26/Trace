@@ -1,12 +1,42 @@
 """Case domain entity, status enum, and lifecycle state machine."""
 
+import re
+import unicodedata
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from trace_core.core.domain import BaseEntity, InvariantViolationError, now_utc, require_utc
+from trace_core.core.domain import (
+    BaseEntity,
+    InvariantViolationError,
+    now_utc,
+    parse_enum_value,
+    require_utc,
+    strip_controls,
+)
+
+CASE_NUMBER_RE = re.compile(r"^\d{4}-[A-Z]{2,8}-\d{4}$", re.ASCII)
+
+
+def normalize_number(value: str) -> str:
+    """Canonical form (NFKC, stripped, upper) without grammar rejection.
+
+    Lookup paths use this so `2026-cr-0001` finds `2026-CR-0001`; unknown
+    values simply miss. Grammar enforcement stays on the creation path.
+    """
+    return unicodedata.normalize("NFKC", value.strip()).upper()
+
+
+def canonical_number(value: str) -> str:
+    """Normalized form, rejecting anything outside the canonical grammar."""
+    normalized = normalize_number(value)
+    if not normalized:
+        raise InvariantViolationError("Case number cannot be empty.")
+    if not CASE_NUMBER_RE.match(normalized):
+        raise InvariantViolationError("Case number must match YYYY-CODE-XXXX (e.g. 2026-CR-0001).")
+    return normalized
 
 
 class CaseStatus(StrEnum):
@@ -54,10 +84,7 @@ def parse_status_value(raw: str | None) -> CaseStatus | None:
     """Parse CLI status filter. ALL/ARCHIVED/None/invalid map to None (no lifecycle filter)."""
     if not raw or raw.upper() in STATUS_FILTER_KEYWORDS:
         return None
-    try:
-        return CaseStatus(raw.upper())
-    except ValueError:
-        return None
+    return parse_enum_value(CaseStatus, raw)
 
 
 def transition_case(
@@ -81,8 +108,8 @@ def transition_case(
 
     if target == CaseStatus.CLOSED:
         object.__setattr__(case, "closed_at", now)
-        object.__setattr__(case, "closure_reason", reason.strip() if reason else None)
-        object.__setattr__(case, "closed_by", closed_by.strip() if closed_by else None)
+        object.__setattr__(case, "closure_reason", strip_controls(reason).strip() if reason else None)
+        object.__setattr__(case, "closed_by", strip_controls(closed_by).strip() if closed_by else None)
         case.status = CaseStatus.CLOSED
     elif target == CaseStatus.OPEN:
         object.__setattr__(case, "closed_at", None)
@@ -146,15 +173,13 @@ class Case(BaseEntity):
     @field_validator("number")
     @classmethod
     def validate_number(cls, v: str) -> str:
-        stripped = v.strip()
-        if not stripped:
-            raise InvariantViolationError("Case number cannot be empty.")
-        return stripped
+        # Canonical form blocks traversal, glob metachars, homoglyphs, and case twins.
+        return canonical_number(v)
 
     @field_validator("title")
     @classmethod
     def validate_title(cls, v: str) -> str:
-        stripped = v.strip()
+        stripped = strip_controls(v).strip()
         if not stripped:
             raise InvariantViolationError("Case title cannot be empty.")
         return stripped
@@ -162,7 +187,7 @@ class Case(BaseEntity):
     @field_validator("lead_examiner")
     @classmethod
     def validate_examiner(cls, v: str) -> str:
-        stripped = v.strip()
+        stripped = strip_controls(v).strip()
         if not stripped:
             raise InvariantViolationError("Lead examiner cannot be empty.")
         return stripped
@@ -173,7 +198,7 @@ class Case(BaseEntity):
         """Strip whitespace, lowercase, discard empty tags, deduplicate, cap 50 tags ×50 chars."""
         cleaned: list[str] = []
         for tag in v:
-            stripped = tag.strip().lower()
+            stripped = strip_controls(tag).strip().lower()
             if not stripped or stripped in cleaned:
                 continue
             if len(stripped) > 50:
@@ -186,16 +211,22 @@ class Case(BaseEntity):
     @field_validator("description")
     @classmethod
     def validate_description(cls, v: str | None) -> str | None:
-        if v is not None and len(v) > 10000:
+        if v is None:
+            return None
+        cleaned = strip_controls(v, multiline=True)
+        if len(cleaned) > 10000:
             raise InvariantViolationError("description exceeds maximum length of 10000 characters.")
-        return v
+        return cleaned
 
     @field_validator("notes")
     @classmethod
     def validate_notes(cls, v: str | None) -> str | None:
-        if v is not None and len(v) > 50000:
+        if v is None:
+            return None
+        cleaned = strip_controls(v, multiline=True)
+        if len(cleaned) > 50000:
             raise InvariantViolationError("notes exceeds maximum length of 50000 characters.")
-        return v
+        return cleaned
 
 
 CASE_TRACKED_FIELDS = ("title", "lead_examiner", "description", "notes", "tags")

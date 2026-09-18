@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import Field
 
-from trace_core.audit.domain import AuditAction
+from trace_core.audit.domain import ACTION_TITLES, AuditAction
 from trace_core.core.dto import BaseDto, BaseFilterDto
 
 
@@ -20,6 +20,8 @@ class AuditEventDto(BaseDto):
     payload_hash: str
     prev_chain: str
     chain_hash: str
+    key_id: str | None = None
+    signature: str | None = None
 
 
 class AuditFilterDto(BaseFilterDto):
@@ -43,15 +45,14 @@ AUDIT_SHOW_FLAGS = [
     ("--offset", "Offset"),
 ]
 AUDIT_VERIFY_FLAGS = [("--output", _OUTPUT_DESC), ("-o", _OUTPUT_DESC), ("--anchor", "Anchor JSON to check tail")]
-AUDIT_EXPORT_FLAGS = [("--out", "Output file"), ("--format", "jsonl only")]
-ACTION_CHOICES = [
-    ("CASE_CREATED", "Case created"),
-    ("CASE_UPDATED", "Case updated"),
-    ("CASE_CLOSED", "Case closed"),
-    ("CASE_ARCHIVED", "Case archived"),
-    ("CASE_RESTORED", "Case restored"),
-    ("CASE_PURGED", "Case purged"),
+AUDIT_EXPORT_FLAGS = [
+    ("--out", "Output file"),
+    ("--format", "jsonl only"),
+    ("--force", "Overwrite existing bundle"),
+    ("--encrypt", "Seal with a passphrase"),
 ]
+AUDIT_DECRYPT_FLAGS = [("--in", "Sealed bundle"), ("--out", "Output file"), ("--force", "Overwrite existing file")]
+ACTION_CHOICES = list(ACTION_TITLES.items())
 
 
 class VerifyResultDto(BaseDto):
@@ -65,4 +66,6 @@ class VerifyResultDto(BaseDto):
     actual_payload_hash: str | None = None
     expected_chain_hash: str | None = None
     actual_chain_hash: str | None = None
+    expected_signature: str | None = None
+    actual_signature: str | None = None
     sequence_gaps: list[int] = Field(default_factory=list)

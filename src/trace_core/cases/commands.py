@@ -37,7 +37,9 @@ def _confirm_or_exit(prompt: str) -> None:
 def create_case(
     title: str = typer.Option(None, "--title", "-t", help="Descriptive title of the case"),
     examiner: str = typer.Option(None, "--examiner", "-e", help="Lead investigator/examiner name"),
-    number: str = typer.Option(None, "--number", "-n", help="Case number (leave empty to auto-generate)"),
+    number: str = typer.Option(
+        None, "--number", "-n", help="Case number YYYY-CODE-XXXX (leave empty to auto-generate)"
+    ),
     description: str = typer.Option(None, "--desc", "-d", help="Detailed case description"),
     notes: str = typer.Option(None, "--notes", help="Preliminary investigation notes"),
     tags: str = typer.Option(None, "--tags", help="Comma-separated tags (e.g. 'usb,laptop')"),
@@ -176,16 +178,14 @@ def close_case(
                 console.print("[dim]Close cancelled (mismatch).[/dim]")
                 raise typer.Exit(EXIT_SUCCESS)
 
-        from trace_core.audit.anchor import latest_anchor_for
+        from trace_core.audit.anchor import describe_anchor
 
         service = _get_service()
         closed = service.close_case(identifier, reason=reason, closed_by=closed_by, actor=closed_by)
         render_success(f"Case '{closed.number}' has been permanently CLOSED.")
-        anchor = latest_anchor_for(closed.number)
-        if anchor is not None:
-            console.print(
-                f"[dim]Anchor: {anchor} (copy off-host; verify with `trace audit verify --anchor FILE`)[/dim]"
-            )
+        line = describe_anchor(service.session_manager, closed.number)
+        if line is not None:
+            console.print(f"[dim]{line}[/dim]")
         render_case_detail(closed)
 
 

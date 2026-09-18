@@ -7,11 +7,11 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from trace_core.cases.domain import Case, CaseStatus
-from trace_core.cases.models import CaseModel, CaseSequenceModel
+from trace_core.cases.domain import Case, CaseStatus, normalize_number
+from trace_core.cases.models import CaseModel, CaseSequenceModel, PurgedNumberModel
 from trace_core.core.canonical import parse_trailing_seq
 from trace_core.core.clock import now_utc
-from trace_core.core.database.repository import SqlAlchemyBaseRepository, paginate
+from trace_core.core.database.repository import SqlAlchemyBaseRepository, ilike_literal, paginate
 from trace_core.core.domain import ensure_utc
 
 
@@ -107,13 +107,32 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
 
     def get_by_number(self, number: str) -> Case | None:
         """Fetch a case by human-readable case number."""
-        stmt = select(CaseModel).where(CaseModel.number == number.strip())
+        stmt = select(CaseModel).where(CaseModel.number == normalize_number(number))
         model = self.session.scalar(stmt)
         return self._to_domain(model) if model else None
 
+    def is_purged(self, number: str) -> bool:
+        """Check the tombstone without hydrating. Single source for create/allocator guards."""
+        return self.session.get(PurgedNumberModel, normalize_number(number)) is not None
+
+    def record_purge(self, number: str) -> None:
+        """Tombstone a purged number in the same transaction. Never re-register."""
+        self.session.add(PurgedNumberModel(number=normalize_number(number)))
+        self.session.flush()
+
+    def note_manual_number(self, number: str) -> None:
+        """Advance the year counter past a high manual number so autos never collide."""
+        parts = normalize_number(number).split("-")
+        if len(parts) != 3 or not parts[0].isdigit() or not parts[2].isdigit():
+            return
+        row = self.session.scalar(select(CaseSequenceModel).where(CaseSequenceModel.year == int(parts[0])))
+        if row is not None and int(parts[2]) > row.last_sequence:
+            row.last_sequence = int(parts[2])
+            self.session.flush()
+
     def resolve(self, identifier: str) -> Case | None:
-        """Dual-key lookup: resolve by UUID or by case number."""
-        identifier = identifier.strip()
+        """Dual-key lookup: resolve by UUID or by canonical case number."""
+        identifier = normalize_number(identifier)
         try:
             val_uuid = uuid.UUID(identifier)
             case = self.get_by_id(val_uuid)
@@ -146,14 +165,13 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
 
         normalized_search = search.strip() if search and search.strip() else None
         if normalized_search:
-            pattern = f"%{normalized_search}%"
             stmt = stmt.where(
                 or_(
-                    CaseModel.number.ilike(pattern),
-                    CaseModel.title.ilike(pattern),
-                    CaseModel.lead_examiner.ilike(pattern),
-                    CaseModel.description.ilike(pattern),
-                    CaseModel.notes.ilike(pattern),
+                    ilike_literal(CaseModel.number, normalized_search),
+                    ilike_literal(CaseModel.title, normalized_search),
+                    ilike_literal(CaseModel.lead_examiner, normalized_search),
+                    ilike_literal(CaseModel.description, normalized_search),
+                    ilike_literal(CaseModel.notes, normalized_search),
                 )
             )
 
@@ -207,8 +225,10 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
 
         self._guard_version(model, expected_version, "Case", str(model.number))
 
+        purged_number = str(model.number)
         self.session.delete(model)
         self.session.flush()
+        self.record_purge(purged_number)
         return True
 
     def delete(self, entity_id: uuid.UUID, purge: bool = False, expected_version: int | None = None) -> bool:  # type: ignore[override]
@@ -233,41 +253,52 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         self.session.flush()
         return self._to_domain(model)
 
+    def _scan_max_seq(self, current_year: int) -> int:
+        """Max trailing seq among existing numbers of the year. Cold-start helper."""
+        stmt_cases = select(CaseModel.number).where(CaseModel.number.startswith(f"{current_year}-"))
+        existing_numbers = self.session.scalars(stmt_cases).all()
+        max_seq = 0
+        for num in existing_numbers:
+            seq = parse_trailing_seq(num)
+            if seq is not None:
+                max_seq = max(max_seq, seq)
+        return max_seq
+
+    def _ensure_seq_record(self, current_year: int, seq_record: CaseSequenceModel | None) -> CaseSequenceModel:
+        """Return locked sequence row, creating it on cold start with race recovery."""
+        if seq_record is not None:
+            return seq_record
+        max_seq = self._scan_max_seq(current_year)
+        try:
+            with self.session.begin_nested():
+                new_seq = CaseSequenceModel(year=current_year, last_sequence=max_seq)
+                self.session.add(new_seq)
+                self.session.flush()
+            return new_seq
+        except IntegrityError:
+            # Concurrent transaction inserted the initial sequence row for this year; re-query with row lock
+            stmt = select(CaseSequenceModel).where(CaseSequenceModel.year == current_year).with_for_update()
+            seq_record = self.session.scalar(stmt)
+            if seq_record is None:
+                raise
+            return seq_record
+
+    def _is_candidate_free(self, candidate: str) -> bool:
+        """Candidate unused and not tombstoned. Single source for allocator guard."""
+        return self.get_by_number(candidate) is None and not self.is_purged(candidate)
+
     def get_next_sequence_number(self, year: int | None = None) -> str:
         """Atomically allocate the next sequential case number for the year (e.g. '2026-CR-0001')."""
         current_year = year or now_utc().year
         prefix = f"{current_year}-CR-"
 
         stmt = select(CaseSequenceModel).where(CaseSequenceModel.year == current_year).with_for_update()
-        seq_record = self.session.scalar(stmt)
+        seq_record = self._ensure_seq_record(current_year, self.session.scalar(stmt))
 
-        if seq_record is None:
-            stmt_cases = select(CaseModel.number).where(CaseModel.number.startswith(prefix))
-            existing_numbers = self.session.scalars(stmt_cases).all()
-            max_seq = 0
-            for num in existing_numbers:
-                suffix = num[len(prefix) :]
-                seq = parse_trailing_seq(suffix)
-                if seq is not None:
-                    max_seq = max(max_seq, seq)
-
-            try:
-                with self.session.begin_nested():
-                    new_seq = CaseSequenceModel(year=current_year, last_sequence=max_seq)
-                    self.session.add(new_seq)
-                    self.session.flush()
-                seq_record = new_seq
-            except IntegrityError:
-                # Concurrent transaction inserted the initial sequence row for this year; re-query with row lock
-                stmt = select(CaseSequenceModel).where(CaseSequenceModel.year == current_year).with_for_update()
-                seq_record = self.session.scalar(stmt)
-                if seq_record is None:
-                    raise
-
-        for _ in range(100):
+        for _ in range(10000):
             seq_record.last_sequence += 1
             self.session.flush()
             candidate = f"{prefix}{seq_record.last_sequence:04d}"
-            if self.get_by_number(candidate) is None:
+            if self._is_candidate_free(candidate):
                 return candidate
-        raise ValueError(f"Case sequence exhausted for year {current_year}.")
+        raise ValueError(f"Case sequence exhausted for year {current_year} (check for manual number crowding).")

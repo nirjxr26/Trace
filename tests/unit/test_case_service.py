@@ -129,7 +129,7 @@ def test_cannot_update_closed_case(service: CaseService) -> None:
         lead_examiner="Examiner 1",
     )
     service.create_case(dto)
-    service.close_case("2026-SEALED-0001")
+    service.close_case("2026-SEALED-0001", reason="Sealing for test")
 
     update_dto = CaseUpdateDto(title="Illegal Edit")
     with pytest.raises(InvalidCaseStateError, match="permanently sealed"):

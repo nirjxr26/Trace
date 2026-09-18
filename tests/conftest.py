@@ -1,6 +1,7 @@
 """Global pytest test configuration and shared fixtures for Trace."""
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -88,6 +89,51 @@ def sample_cases_batch(service: CaseService) -> list[CaseResponseDto]:
 def make_case(service: CaseService, title: str = "Test Case", examiner: str = "Ex") -> CaseResponseDto:
     """Single source for case creation in tests. Reusable."""
     return service.create_case(CaseCreateDto(title=title, lead_examiner=examiner))
+
+
+@pytest.fixture
+def temp_storage_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the global settings storage root at tmp. Restores after (settings reads it live)."""
+    from trace_core.core.settings import settings
+
+    monkeypatch.setattr(settings, "storage_root", tmp_path)
+    return tmp_path
+
+
+@pytest.fixture
+def as_user(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], None]:
+    """Run subsequent service calls as another OS user. Returns a setter."""
+
+    def _as(name: str) -> None:
+        monkeypatch.setattr("trace_core.core.operators.current_identity", lambda: (name, "workstation"))
+
+    return _as
+
+
+@pytest.fixture
+def detached_event(session_manager: DatabaseSessionManager):  # type: ignore[no-untyped-def]
+    """Transient copy of the seq-1 ledger row for envelope forgery tests (no DB writes)."""
+    from sqlalchemy import select
+
+    from trace_core.audit.models import AuditEventModel
+
+    make_case(CaseService(session_manager))
+    with session_manager.session() as session:
+        m = session.scalars(select(AuditEventModel).where(AuditEventModel.seq == 1)).one()
+        return AuditEventModel(
+            seq=m.seq,
+            ts=m.ts,
+            action=m.action,
+            actor=m.actor,
+            subject_case_number=m.subject_case_number,
+            subject_case_id=m.subject_case_id,
+            payload_json=m.payload_json,
+            payload_hash=m.payload_hash,
+            prev_chain=m.prev_chain,
+            chain_hash=m.chain_hash,
+            key_id=m.key_id,
+            signature=m.signature,
+        )
 
 
 @pytest.fixture

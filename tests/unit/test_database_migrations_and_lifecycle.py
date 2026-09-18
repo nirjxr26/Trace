@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 import sqlalchemy
+import sqlalchemy.exc
 from typer.testing import CliRunner
 
 from trace_core.cli.main import app
@@ -219,7 +220,9 @@ def test_migrations_concurrent_bootstrap_single_ledger(tmp_path) -> None:  # typ
 
     # Exactly-once ledger rows regardless of who won the race.
     versions = sorted(m["version"] for m in get_applied_migrations(DatabaseSessionManager(url).engine))
-    assert versions == [1, 2, 3, 4, 5, 6, 7, 8]
+    from trace_core.core.database.migrations import MIGRATIONS
+
+    assert versions == sorted(version for version, _, _ in MIGRATIONS)
 
 
 def test_audit_head_serializes_under_threads(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -287,7 +290,7 @@ def test_cli_db_commands(monkeypatch: pytest.MonkeyPatch, session_manager: Datab
     assert status_res.exit_code == 0
     assert "Trace Database Status" in status_res.output
     assert "Online" in status_res.output
-    assert "cases" in status_res.output
+    assert "Schema Migrations" in status_res.output
 
     # db migrate (already migrated)
     migrate_res = runner.invoke(app, ["db", "migrate"])

@@ -7,6 +7,7 @@ from trace_core.audit.service import AuditService
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.database.session import DatabaseSessionManager, db_manager
 from trace_core.core.errors import AuditTamperError
+from trace_core.core.ui.renderers import render_success
 
 audit_app = typer.Typer(name="audit", help="Inspect, verify, and export tamper-evident audit ledger.")
 
@@ -16,12 +17,11 @@ def _get_service(mgr: DatabaseSessionManager | None = None) -> AuditService:
 
 
 def _parse_action(action: str | None):  # type: ignore[no-untyped-def]
-    from trace_core.audit.helpers import parse_action_value
+    from trace_core.audit.domain import AuditAction
+    from trace_core.core.domain import parse_enum_value
 
-    if not action:
-        return None
-    act = parse_action_value(action)
-    if act is None:
+    act = parse_enum_value(AuditAction, action)
+    if action and act is None:
         typer.echo(f"Unknown action '{action}'", err=True)
         raise typer.Exit(1)
     return act
@@ -92,13 +92,86 @@ def audit_verify(
 def audit_export(
     out: str = typer.Option(..., "--out", help="Output JSONL file path"),
     fmt: str = typer.Option("jsonl", "--format", help="jsonl only in V1"),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite an existing bundle file"),
+    encrypt: bool = typer.Option(False, "--encrypt", help="Seal with a passphrase (env/prompt, never argv)"),
 ) -> None:
     with capture_cli_errors("Audit Export"):
         if fmt.lower() != "jsonl":
             typer.echo("Only --format jsonl supported in V1", err=True)
             raise typer.Exit(1)
         svc = _get_service()
-        from trace_core.audit.helpers import do_export
+        from trace_core.audit.helpers import check_export_dest, do_export, do_export_encrypted, prompt_passphrase
 
-        path = do_export(svc, out)
+        check_export_dest(out, force)
+        if encrypt:
+            path = do_export_encrypted(svc, out, prompt_passphrase(confirm=True))
+        else:
+            path = do_export(svc, out)
         typer.echo(f"Exported audit bundle to {path}")
+
+
+@audit_app.command("decrypt")
+def audit_decrypt(
+    inp: str = typer.Option(..., "--in", help="Sealed bundle file path"),
+    out: str = typer.Option(..., "--out", help="Output JSONL file path"),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite an existing file"),
+) -> None:
+    with capture_cli_errors("Audit Decrypt"):
+        from trace_core.audit.helpers import check_export_dest, do_decrypt, prompt_passphrase
+
+        check_export_dest(out, force)
+        path = do_decrypt(inp, out, prompt_passphrase())
+        typer.echo(f"Opened bundle to {path}")
+
+
+@audit_app.command("keys-init")
+def audit_keys_init(
+    label: str = typer.Option("default", "--label", help="Human label recorded beside the key id"),
+) -> None:
+    """Generate an Ed25519 ledger signing key (0600 keystore) and select it."""
+    with capture_cli_errors("Key Initialization Failed"):
+        from trace_core.audit.signing import init_key
+        from trace_core.core.operators import require_admin
+
+        with _get_service().session_manager.session() as session:
+            require_admin(session, action="manage signing keys")
+        key_id = init_key(label)
+        render_success(f"Signing key {key_id} created and selected.")
+
+
+@audit_app.command("keys-rotate")
+def audit_keys_rotate(
+    label: str = typer.Option("default", "--label", help="Human label recorded beside the key id"),
+) -> None:
+    """Generate a successor signing key. Retired keys keep verifying old events."""
+    with capture_cli_errors("Key Rotation Failed"):
+        from trace_core.audit.signing import rotate_keys
+        from trace_core.core.operators import require_admin
+
+        with _get_service().session_manager.session() as session:
+            require_admin(session, action="manage signing keys")
+        key_id = rotate_keys(label)
+        render_success(f"Rotated to signing key {key_id}. Old events still verify.")
+
+
+@audit_app.command("keys-list")
+def audit_keys_list(output: str = typer.Option("table", "--output", "-o", help="Output format: table or json")) -> None:
+    """List keystore public keys. No private material is ever displayed."""
+    with capture_cli_errors("Key Listing Failed"):
+        from trace_core.audit.signing import list_keys
+        from trace_core.core.ui.renderers import render_json, render_minimalist_table
+
+        keys = list_keys()
+        if output.lower() == "json":
+            render_json(keys)
+            return
+        render_minimalist_table(
+            "Signing Keys",
+            [
+                ("Key ID", {"style": "bold", "no_wrap": True}),
+                ("Status", {"no_wrap": True, "max_width": 10}),
+                ("Public Key", {"overflow": "ellipsis"}),
+            ],
+            [[k["key_id"], k["status"], k["public_key"]] for k in keys],
+            empty_message="No signing keys. The HMAC envelope is active.",
+        )

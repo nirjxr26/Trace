@@ -2,15 +2,18 @@
 
 from typing import Any
 
+from rich.markup import escape
+
 from trace_core.audit.dto import (
     ACTION_CHOICES,
+    AUDIT_DECRYPT_FLAGS,
     AUDIT_EXPORT_FLAGS,
     AUDIT_SHOW_FLAGS,
     AUDIT_VERIFY_FLAGS,
     AuditFilterDto,
 )
 from trace_core.audit.service import AuditService
-from trace_core.core.cli.args import extract_flag_value
+from trace_core.core.cli.args import extract_flag_value, has_flag
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.output import OUTPUT_CHOICES, parse_output_format
 from trace_core.core.cli.registry import ShellContext
@@ -21,6 +24,7 @@ AUDIT_ACTIONS = [
     ("show", "List audit events"),
     ("verify", "Verify chain integrity"),
     ("export", "Export JSONL bundle"),
+    ("decrypt", "Open a sealed bundle"),
 ]
 
 _AUDIT_VALUE_FLAGS = (
@@ -54,6 +58,7 @@ class AuditShellCommandHandler(BaseShellHandler):
             ("audit show [--case NUM] [--action X]", "", "List audit events"),
             ("audit verify", "", "Verify chain integrity"),
             ("audit export --out FILE", "", "Export JSONL bundle"),
+            ("audit decrypt --in FILE --out FILE", "", "Open a sealed bundle"),
         ]
 
     def get_completions(self, text: str, ctx: ShellContext) -> list[Any]:
@@ -73,6 +78,8 @@ class AuditShellCommandHandler(BaseShellHandler):
                 return self._complete_verify(parts, text)
             if act == "export":
                 return self._complete_export(parts, text)
+            if act == "decrypt":
+                return self._complete_decrypt(parts, text)
         return []
 
     def _complete_show(self, parts: list[str], text: str, ctx: ShellContext) -> list[Any]:
@@ -135,6 +142,10 @@ class AuditShellCommandHandler(BaseShellHandler):
         curr = parts[-1] if not text.endswith(" ") else ""
         return [(f, d) for f, d in AUDIT_EXPORT_FLAGS if f.startswith(curr)]
 
+    def _complete_decrypt(self, parts: list[str], text: str) -> list[Any]:
+        curr = parts[-1] if not text.endswith(" ") else ""
+        return [(f, d) for f, d in AUDIT_DECRYPT_FLAGS if f.startswith(curr)]
+
     def _svc(self, ctx: ShellContext) -> AuditService:
         from trace_core.core.database.session import get_db
 
@@ -152,6 +163,9 @@ class AuditShellCommandHandler(BaseShellHandler):
         if act == "export":
             self._export(svc, args)
             return True
+        if act == "decrypt":
+            self._decrypt(svc, args)
+            return True
         return self.unknown_action(act)
 
     def _show(self, svc: AuditService, args: list[str], ctx: ShellContext | None = None) -> None:
@@ -167,7 +181,7 @@ class AuditShellCommandHandler(BaseShellHandler):
                 args = args + ["--case", positional[0]]
             elif ctx and ctx.active_case and not any(a.startswith("-") for a in args):
                 args = args + ["--case", ctx.active_case.number]
-                console.print(f"[dim]Scoped to active case {ctx.active_case.number}[/dim]")
+                console.print(f"[dim]Scoped to active case {escape(ctx.active_case.number)}[/dim]")
         self._show_list(svc, args)
 
     def _show_seq(self, svc: AuditService, args: list[str], seq_raw: str) -> None:
@@ -182,8 +196,9 @@ class AuditShellCommandHandler(BaseShellHandler):
             show_seq_view(svc, seq, parse_output_format(args))
 
     def _show_list(self, svc: AuditService, args: list[str]) -> None:
-        from trace_core.audit.helpers import parse_action_value
+        from trace_core.audit.domain import AuditAction
         from trace_core.core.cli.args import extract_int_flag
+        from trace_core.core.domain import parse_enum_value
 
         case_number = extract_flag_value(args, "--case")
         action_raw = extract_flag_value(args, "--action")
@@ -194,7 +209,7 @@ class AuditShellCommandHandler(BaseShellHandler):
         offset = extract_int_flag(args, 0, "--offset")
         act = None
         if action_raw:
-            act = parse_action_value(action_raw)
+            act = parse_enum_value(AuditAction, action_raw)
             if act is None:
                 render_error_card("Unknown Action", f"Unknown action '{action_raw}'.")
                 return
@@ -218,8 +233,27 @@ class AuditShellCommandHandler(BaseShellHandler):
             render_error_card("Missing Output", "Pass --out FILE for the export bundle.")
             return
         with capture_cli_errors("Audit Export", exit_on_error=False):
-            from trace_core.audit.helpers import do_export
+            from trace_core.audit.helpers import check_export_dest, do_export, do_export_encrypted, prompt_passphrase
             from trace_core.core.ui.renderers import render_success
 
-            path = do_export(svc, out)
+            check_export_dest(out, has_flag(args, "--force", "-f"))
+            if has_flag(args, "--encrypt"):
+                path = do_export_encrypted(svc, out, prompt_passphrase())
+            else:
+                path = do_export(svc, out)
             render_success(f"Exported to {path}")
+
+    def _decrypt(self, svc: AuditService, args: list[str]) -> None:
+        _ = svc
+        inp = extract_flag_value(args, "--in")
+        out = extract_flag_value(args, "--out")
+        if not inp or not out:
+            render_error_card("Missing Input", "Pass --in FILE --out FILE to open a sealed bundle.")
+            return
+        with capture_cli_errors("Audit Decrypt", exit_on_error=False):
+            from trace_core.audit.helpers import check_export_dest, do_decrypt, prompt_passphrase
+            from trace_core.core.ui.renderers import render_success
+
+            check_export_dest(out, has_flag(args, "--force", "-f"))
+            path = do_decrypt(inp, out, prompt_passphrase())
+            render_success(f"Opened bundle to {path}")

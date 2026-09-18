@@ -10,7 +10,7 @@ from textual.widgets import Button, DataTable, Static
 from trace_core.core.database.health import fetch_db_snapshot, migration_entries
 from trace_core.core.database.migrations import apply_migrations
 from trace_core.core.database.session import DatabaseSessionManager, db_manager
-from trace_core.core.errors import ApplicationError
+from trace_core.tui.actions import run_guarded
 
 MIGRATIONS_TABLE = "db-migrations"
 
@@ -61,7 +61,7 @@ class DbView(Vertical):
         mgr = self._mgr
         try:
             snap = fetch_db_snapshot(mgr)
-        except ApplicationError as exc:
+        except Exception as exc:  # boundary: every service failure becomes a toast, never a crash
             self.app.notify(str(exc), severity="error")
             return
         healthy, message = snap.healthy, snap.message
@@ -88,19 +88,18 @@ class DbView(Vertical):
         """Entry for the palette."""
         if command == "migrate":
             self.action_migrate()
+        else:
+            self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")
 
     @on(Button.Pressed, "#db-migrate")
     def _migrate_pressed(self) -> None:
         self.action_migrate()
 
     def action_migrate(self) -> None:
-        try:
+        def _migrate() -> str:
             applied = apply_migrations(self._mgr.engine)
-        except (ApplicationError, RuntimeError) as exc:
-            self.app.notify(str(exc), severity="error")
-            return
-        if applied:
-            self.app.notify(f"Applied {len(applied)} migration(s).")
-        else:
-            self.app.notify("Already up to date.")
-        self.refresh_data()
+            if applied:
+                return f"Applied {len(applied)} migration(s)."
+            return "Already up to date."
+
+        run_guarded(self, _migrate)

@@ -1,22 +1,15 @@
 """Audit event builder: turns domain mutations into ledger payloads. No hashing here."""
 
-import socket
 from typing import Any
 from uuid import UUID
 
 from trace_core.audit.domain import AuditAction
 from trace_core.audit.events import Context, Subject
+from trace_core.core.operators import process_session_id
 from trace_core.core.settings import settings
 
 _CASE_PREFIX = "case "
 _AUDIT_PREFIX = "audit "
-
-
-def _get_host() -> str:
-    try:
-        return socket.gethostname()
-    except Exception:
-        return "unknown"
 
 
 def _get_argv() -> str:
@@ -37,10 +30,18 @@ def _resolve_command(command: str | None, argv_cmd: str) -> str:
 
 
 def _ctx(command: str | None) -> Context:
-    host = _get_host()
+    from trace_core.core.operators import current_identity
+
+    os_user, host = current_identity()
     argv_cmd = _get_argv()
     resolved = _resolve_command(command, argv_cmd)
-    return Context(host=host, trace_version=settings.version, command=resolved)
+    return Context(
+        host=host,
+        trace_version=settings.version,
+        command=resolved,
+        os_user=os_user,
+        session_id=process_session_id(),
+    )
 
 
 def _subject_case(number: str, sid: UUID | None) -> Subject:
@@ -54,13 +55,18 @@ def _case_event(
 
 
 def for_case_created(
-    number: str, sid: UUID, title: str, lead_examiner: str, command: str | None = None
+    number: str,
+    sid: UUID,
+    title: str,
+    lead_examiner: str,
+    command: str | None = None,
+    number_source: str = "auto",
 ) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
     return _case_event(
         AuditAction.CASE_CREATED,
         number,
         sid,
-        {"title": title, "lead_examiner": lead_examiner},
+        {"title": title, "lead_examiner": lead_examiner, "number_source": number_source},
         command or f"case create {number}",
     )
 
@@ -123,9 +129,11 @@ def for_case_purged(
 
 
 def merge_details_context(details: dict[str, Any], ctx: Context) -> dict[str, Any]:
-    """Flatten Subject/Context into ledger details (no DB change)."""
+    """Flatten Subject/Context into ledger details (no DB change). System provenance wins."""
     out = dict(details)
-    out.setdefault("host", ctx.host)
-    out.setdefault("trace_version", ctx.trace_version)
-    out.setdefault("command", ctx.command)
+    out["host"] = ctx.host
+    out["trace_version"] = ctx.trace_version
+    out["command"] = ctx.command
+    out["os_user"] = ctx.os_user
+    out["session_id"] = ctx.session_id
     return out

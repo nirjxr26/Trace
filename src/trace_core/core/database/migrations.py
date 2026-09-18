@@ -207,6 +207,13 @@ def _migration_008_audit_protection(bind: Engine | Connection) -> None:
             _install_sqlite_audit_triggers(conn)
 
 
+PG_AUDIT_TRUNCATE_TRIGGER_DDL = (
+    "CREATE TRIGGER audit_events_no_truncate "
+    "BEFORE TRUNCATE ON audit_events "
+    "FOR EACH STATEMENT EXECUTE FUNCTION audit_events_block_write()"
+)
+
+
 def _install_pg_audit_trigger(conn: Connection) -> None:
     """Install append-only audit trigger for PostgreSQL connections."""
     if conn.dialect.name != "postgresql":
@@ -225,6 +232,9 @@ def _install_pg_audit_trigger(conn: Connection) -> None:
             "FOR EACH ROW EXECUTE FUNCTION audit_events_block_write()"
         )
     )
+    # TRUNCATE fires no row-level DELETE trigger: statement-level backstop.
+    conn.execute(text("DROP TRIGGER IF EXISTS audit_events_no_truncate ON audit_events"))
+    conn.execute(text(PG_AUDIT_TRUNCATE_TRIGGER_DDL))
 
 
 def _verify_008_audit_protection(conn: Connection) -> bool:
@@ -268,10 +278,55 @@ def _install_sqlite_audit_triggers(conn: Connection) -> None:
 
 
 def _migration_checksum(name: str) -> str:
-    """Compute stable checksum for migration bookkeeping."""
+    """Content checksum: migration name + registered source. Detects post-apply edits."""
+    import hashlib
+    import inspect as pyinspect
+
+    source = ""
+    for _, mname, action in MIGRATIONS:
+        if mname == name:
+            try:
+                # Normalized: CRLF checkouts must hash identically to LF ones.
+                source = pyinspect.getsource(action).replace("\r\n", "\n")
+            except (OSError, TypeError):
+                source = ""
+            break
+    return hashlib.sha256(f"{name}\n{source}".encode()).hexdigest()
+
+
+def _legacy_migration_checksum(name: str) -> str:
+    """Pre-content checksum scheme (name only). Upgrade path, never written fresh."""
     import hashlib
 
     return hashlib.sha256(name.encode("utf-8")).hexdigest()
+
+
+def verify_migration_checksums(engine: Engine) -> list[dict[str, Any]]:
+    """Fail closed when applied migration content drifts from its recorded checksum.
+
+    One-time upgrade: legacy name-only checksums are re-recorded as content
+    checksums (with a warning). Anything else that mismatches raises.
+    Returns the verified records so callers list the ledger once.
+    """
+    import structlog
+
+    records = get_applied_migrations(engine)
+    for record in records:
+        expected = _migration_checksum(record["name"])
+        if record["checksum"] == expected:
+            continue
+        if record["checksum"] == _legacy_migration_checksum(record["name"]) or record["checksum"] is None:
+            structlog.get_logger().warning("Upgrading legacy migration checksum bookkeeping", name=record["name"])
+            with engine.begin() as conn:
+                conn.execute(
+                    schema_migrations.update()
+                    .where(schema_migrations.c.version == record["version"])
+                    .values(checksum=expected)
+                )
+            record["checksum"] = expected
+            continue
+        raise RuntimeError(f"Migration {record['name']} content drift detected; refusing to proceed.")
+    return records
 
 
 def _index_exists(conn: Connection, table: str, index: str) -> bool:
@@ -363,7 +418,9 @@ def _file_lock(path: str):  # type: ignore[no-untyped-def]
     import os
     from pathlib import Path as _Path
 
-    _Path(path).parent.mkdir(parents=True, exist_ok=True)
+    from trace_core.core.fs import ensure_dir
+
+    ensure_dir(_Path(path).parent)
     handle = open(path, "a+b")  # noqa: PTH123
     try:
         if os.name == "nt":
@@ -394,7 +451,7 @@ def apply_migrations(engine: Engine) -> list[str]:
     """Apply all pending migrations sequentially within transaction boundaries."""
     with _migration_lock(engine):
         ensure_migration_table(engine)
-        applied_versions = {m["version"] for m in get_applied_migrations(engine)}
+        applied_versions = {m["version"] for m in verify_migration_checksums(engine)}
         applied_names: list[str] = []
 
         for version, name, action in MIGRATIONS:
@@ -422,3 +479,80 @@ def get_table_names(engine: Engine) -> list[str]:
     """Inspect and return existing database table names."""
     inspector = inspect(engine)
     return inspector.get_table_names()
+
+
+@register_migration(9, "009_create_purged_numbers_tombstone")
+def _migration_009_purged_numbers(bind: Engine | Connection) -> None:
+    """Tombstone purged case numbers so they can never be re-registered."""
+    import trace_core.cases.models  # noqa: F401
+
+    if "purged_numbers" in Base.metadata.tables:
+        Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables["purged_numbers"]])
+
+
+ROLE_DDL: tuple[str, ...] = (
+    # Least privilege, PostgreSQL only. Roles are NOLOGIN: operators grant LOGIN
+    # with their own passwords separately. Safe re-runs (IF NOT EXISTS / NOTICE).
+    "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'trace_app') "
+    "THEN CREATE ROLE trace_app NOLOGIN; END IF; END $$",
+    "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'trace_reader') "
+    "THEN CREATE ROLE trace_reader NOLOGIN; END IF; END $$",
+    "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'trace_migrator') "
+    "THEN CREATE ROLE trace_migrator NOLOGIN; END IF; END $$",
+    "GRANT SELECT, INSERT, UPDATE, DELETE ON cases, case_sequences, purged_numbers TO trace_app",
+    "GRANT SELECT, INSERT ON audit_events, audit_chain_state TO trace_app",
+    "REVOKE UPDATE, DELETE, TRUNCATE ON audit_events, audit_chain_state FROM trace_app",
+    "REVOKE UPDATE, DELETE, TRUNCATE ON schema_migrations FROM trace_app",
+    "GRANT SELECT ON cases, case_sequences, purged_numbers, audit_events, audit_chain_state,"
+    " schema_migrations TO trace_reader",
+)
+
+
+@register_migration(10, "010_add_ledger_signature_columns")
+def _migration_010_signature(bind: Engine | Connection) -> None:
+    """HMAC envelope columns for ledger authenticity (nullable: legacy rows verify chain-only)."""
+    cols = (
+        ("key_id", "ALTER TABLE audit_events ADD COLUMN key_id VARCHAR(64)"),
+        ("signature", "ALTER TABLE audit_events ADD COLUMN signature VARCHAR(128)"),
+    )
+    if isinstance(bind, Connection):
+        for col_name, ddl in cols:
+            _ensure_column(bind, "audit_events", col_name, ddl)
+    else:
+        with bind.begin() as conn:
+            for col_name, ddl in cols:
+                _ensure_column(conn, "audit_events", col_name, ddl)
+
+
+@register_migration(12, "012_create_operators_table")
+def _migration_012_operators(bind: Engine | Connection) -> None:
+    """Operator registry for workstation RBAC (auto-provisioned, first-ever is admin)."""
+    import trace_core.core.operators  # noqa: F401
+
+    if "operators" in Base.metadata.tables:
+        Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables["operators"]])
+
+
+@register_migration(13, "013_create_anchor_intents_outbox")
+def _migration_013_anchor_intents(bind: Engine | Connection) -> None:
+    """Durable anchor outbox so closes never report anchors that were never written."""
+    import trace_core.audit.models  # noqa: F401
+
+    if "anchor_intents" in Base.metadata.tables:
+        Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables["anchor_intents"]])
+
+
+@register_migration(11, "011_create_least_privilege_roles")
+def _migration_011_roles(bind: Engine | Connection) -> None:
+    """Create NOLOGIN app/reader/migrator roles and revoke ledger mutation. PostgreSQL only."""
+    if isinstance(bind, Connection):
+        if bind.dialect.name != "postgresql":
+            return
+        for stmt in ROLE_DDL:
+            bind.execute(text(stmt))
+    else:
+        with bind.begin() as conn:
+            if conn.dialect.name != "postgresql":
+                return
+            for stmt in ROLE_DDL:
+                conn.execute(text(stmt))

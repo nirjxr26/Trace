@@ -15,6 +15,8 @@ from trace_core.core.ui.renderers import (
     render_minimalist_table,
     render_output,
     rule_line,
+    safe_text,
+    sanitize_terminal,
 )
 from trace_core.core.ui.theme import THEME_TOKENS
 
@@ -81,13 +83,14 @@ def _group_cases(cases: list[CaseResponseDto]) -> tuple[dict[str, list[CaseRespo
 
 def _case_table_row(c: CaseResponseDto, bp: str, term_w: int, active_number: str | None) -> list[Any]:
     """One table row for a case. Breakpoint branches mirror _case_table_columns."""
+    # Plain-string cells parse Rich markup: sanitize + escape. Text() cells: sanitize.
     label, style, _ = get_status_style_and_label(c.status, c.is_deleted)
     prefix = "● " if active_number and c.number == active_number else "  "
-    case_cell = Text(f"{prefix}{c.number}", style=THEME_TOKENS["accent"])
+    case_cell = Text(f"{prefix}{sanitize_terminal(c.number)}", style=THEME_TOKENS["accent"])
     if prefix == "● ":
         case_cell.stylize("bold")
-    title = c.title or "Untitled"
-    examiner = c.lead_examiner or "-"
+    title = safe_text(c.title or "Untitled")
+    examiner = safe_text(c.lead_examiner or "-")
     badge = Text(label, style=style)
     if bp == "XS":
         return [case_cell, title, badge]
@@ -99,7 +102,7 @@ def _case_table_row(c: CaseResponseDto, bp: str, term_w: int, active_number: str
             examiner,
             badge,
             format_india_table_time(c.opened_at),
-            Text(tags, style=THEME_TOKENS["tag"]),
+            Text(sanitize_terminal(tags), style=THEME_TOKENS["tag"]),
         ]
     if bp in ("MD", "LG") and term_w < 100:
         return [case_cell, title, examiner, badge]
@@ -136,21 +139,21 @@ def _case_dossier_fields(case: CaseResponseDto, opened: str) -> list[tuple[str, 
 
     tags = "  ".join(f"#{t}" for t in case.tags) if case.tags else "—"
     fields: list[tuple[str, Any]] = [
-        ("Lead Examiner", case.lead_examiner or "None"),
-        ("Tags", Text(tags, style=TOK["tag"] if case.tags else TOK["muted"])),
+        ("Lead Examiner", sanitize_terminal(case.lead_examiner or "None")),
+        ("Tags", Text(sanitize_terminal(tags), style=TOK["tag"] if case.tags else TOK["muted"])),
         ("", ""),
         ("Opened", opened),
         ("Updated", f"{format_india_datetime(case.updated_at)} ({format_utc_zulu(case.updated_at)})"),
         ("Closed", _closed_value(case)),
     ]
     if case.closed_by:
-        fields.append(("Closed By", case.closed_by))
+        fields.append(("Closed By", sanitize_terminal(case.closed_by)))
     if case.closure_reason:
-        fields.append(("Closure Reason", case.closure_reason))
+        fields.append(("Closure Reason", sanitize_terminal(case.closure_reason)))
     if case.archived_at:
         fields.append(("Archived At", format_india_datetime(case.archived_at)))
     if case.archived_by:
-        fields.append(("Archived By", case.archived_by))
+        fields.append(("Archived By", sanitize_terminal(case.archived_by)))
     return fields
 
 
@@ -166,9 +169,13 @@ def _render_case_history(case: CaseResponseDto, events: list[Any] | None) -> Non
     render_section_title(f"HISTORY · {count}")
     console.print("")
     for e in events[:5]:
-        console.print(Text(f"  {format_ledger_time(e.ts)}  {short_action_label(e.action)} · {e.actor}"))
+        console.print(
+            Text(f"  {format_ledger_time(e.ts)}  {short_action_label(e.action)} · {sanitize_terminal(e.actor)}")
+        )
     if len(events) > 5:
-        console.print(Text(f"  … and older in `audit show --case {case.number}`", style=TOK["muted"]))
+        console.print(
+            Text(f"  … and older in `audit show --case {sanitize_terminal(case.number)}`", style=TOK["muted"])
+        )
     console.print("")
 
 
@@ -191,8 +198,8 @@ def render_case_detail(case: CaseResponseDto, events: list[Any] | None = None) -
 
     render_detail_header(
         "CASE",
-        case.number,
-        case.title or "Untitled Case",
+        sanitize_terminal(case.number),
+        sanitize_terminal(case.title or "Untitled Case"),
         Text.assemble((f"  {label} · ", style), (f"Opened {format_india_datetime(case.opened_at)}", TOK["muted"])),
     )
 
@@ -213,13 +220,13 @@ def render_case_detail(case: CaseResponseDto, events: list[Any] | None = None) -
             continue
         render_section_title(section_title)
         console.print("")
-        console.print(Text(f"    {section_body.strip()}", style=TOK["value"]))
+        console.print(Text(f"    {sanitize_terminal(section_body.strip())}", style=TOK["value"]))
         console.print(divider)
         console.print("")
 
     _render_case_history(case, events)
 
-    render_raw_tip(f"case show {case.number} --output json")
+    render_raw_tip(f"case show {sanitize_terminal(case.number)} --output json")
 
 
 def _closed_value(case: CaseResponseDto) -> Any:

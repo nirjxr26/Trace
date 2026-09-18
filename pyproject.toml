@@ -20,8 +20,11 @@ dependencies = [
     "psycopg[binary]>=3.1.18",
     "structlog>=24.1.0",
     "textual>=8.2.8",
+    "cryptography>=44",
 ]
 
+# Floors are compatibility minima only. Production/dev installs MUST use the
+# hash-locked requirements.txt (pyproject -> uv.lock -> requirements.txt chain).
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",

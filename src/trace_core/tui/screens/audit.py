@@ -13,9 +13,9 @@ from trace_core.audit.events import parse_details
 from trace_core.audit.renderers import action_title
 from trace_core.audit.service import AuditService
 from trace_core.core.database.session import DatabaseSessionManager
-from trace_core.core.errors import ApplicationError
-from trace_core.core.ui.renderers import format_india_datetime
+from trace_core.core.ui.renderers import format_india_datetime, sanitize_terminal
 from trace_core.core.ui.theme import THEME_TOKENS
+from trace_core.tui.actions import confirm_overwrite, run_guarded
 from trace_core.tui.forms import RawModal, TextInputModal
 from trace_core.tui.widgets import DossierScroll
 
@@ -73,7 +73,7 @@ class AuditView(Vertical):
         scope_widget.display = bool(scope)
         try:
             self._events = self._svc.list_events(AuditFilterDto(case_number=scope, search=query, limit=100))
-        except ApplicationError as exc:
+        except Exception as exc:  # boundary: every service failure becomes a toast, never a crash
             self.app.notify(str(exc), severity="error")
             return
         from trace_core.audit.renderers import short_action_label
@@ -98,17 +98,25 @@ class AuditView(Vertical):
             self.query_one("#audit-detail", Static).update(Text("No events.", style="dim"))
             return
         details = parse_details(e.payload_json)
-        intact = verify_event(e.payload_json, e.payload_hash, e.prev_chain, e.chain_hash, e.seq)
+        intact = verify_event(
+            e.payload_json,
+            e.payload_hash,
+            e.prev_chain,
+            e.chain_hash,
+            e.seq,
+            signature=e.signature,
+            key_id=e.key_id,
+        )
         pane = self.query_one("#audit-right", DossierScroll)
         rule = pane.divider()
         body = Text()
         body.append(f"#{e.seq}  {action_title(e.action.value)}\n", style=THEME_TOKENS["accent"])
-        body.append(f"{e.subject_case_number} · {format_india_datetime(e.ts)}\n", style="dim")
+        body.append(f"{sanitize_terminal(e.subject_case_number)} · {format_india_datetime(e.ts)}\n", style="dim")
         body.append("\n")
         body.append(rule)
         body.append("\n")
         body.append("Actor   ", style="dim")
-        body.append(f"{e.actor} @ {details.get('host', '-')}\n")
+        body.append(f"{sanitize_terminal(e.actor)} @ {sanitize_terminal(details.get('host', '-'))}\n")
         body.append("When    ", style="dim")
         body.append(f"{format_india_datetime(e.ts)}\n")
         body.append("\n")
@@ -119,7 +127,7 @@ class AuditView(Vertical):
         reason = (details.get("reason") or "").strip()
         if reason:
             body.append("Reason  ", style="dim")
-            body.append(f"{reason}\n")
+            body.append(f"{sanitize_terminal(reason)}\n")
         changed = details.get("changed", [])
         body.append("\n")
         body.append(rule)
@@ -132,9 +140,9 @@ class AuditView(Vertical):
             body.append("\n")
             for field in changed:
                 body.append(f"{field}\n", style="dim")
-                body.append(f"  {format_change_value(before.get(field))}", style="#D06A73")
+                body.append(f"  {sanitize_terminal(format_change_value(before.get(field)))}", style="#D06A73")
                 body.append("  →  ")
-                body.append(f"{format_change_value(after.get(field))}\n", style="#5FD18A")
+                body.append(f"{sanitize_terminal(format_change_value(after.get(field)))}\n", style="#5FD18A")
             body.append("\n")
             body.append(rule)
         body.append("\nINTEGRITY · ", style=THEME_TOKENS["accent"])
@@ -151,6 +159,8 @@ class AuditView(Vertical):
             self.action_export()
         elif command == "anchor":
             self.app.notify("Open the Integrity tab to check an anchor file.")
+        else:
+            self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")
 
     @on(DataTable.RowHighlighted)
     def _highlighted(self, event: DataTable.RowHighlighted) -> None:
@@ -193,8 +203,11 @@ class AuditView(Vertical):
     def _exported(self, path: str | None) -> None:
         if not path:
             return
-        try:
+        confirm_overwrite(self, path, lambda: self._do_export(path))
+
+    def _do_export(self, path: str) -> None:
+        def _export() -> str:
             out = self._svc.export(path)
-            self.app.notify(f"Exported to {out}.")
-        except ApplicationError as exc:
-            self.app.notify(str(exc), severity="error")
+            return f"Exported to {out}."
+
+        run_guarded(self, _export)

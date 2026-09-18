@@ -68,3 +68,7 @@ class AuditTamperError(ApplicationError):
 
     def __init__(self, message: str):
         super().__init__(message)
+
+
+class AuthorizationError(ApplicationError):
+    """Raised when an operator lacks the role for an action."""
