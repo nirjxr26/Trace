@@ -1,5 +1,6 @@
 """Common domain foundations, value objects, and base entities."""
 
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -8,6 +9,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from trace_core.core.canonical import coerce_utc
 from trace_core.core.clock import now_utc
+
+_CONTROLS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def strip_controls(value: str, multiline: bool = False) -> str:
+    """Remove terminal control characters. Newlines survive only when multiline."""
+    text = _CONTROLS_RE.sub("", value).replace("\r", "")
+    return text if multiline else text.replace("\n", "")
 
 
 def ensure_utc(dt: datetime | None) -> datetime | None:
@@ -22,6 +31,16 @@ def require_utc(dt: datetime | None) -> datetime | None:
     if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
         raise InvariantViolationError("All timestamps must be timezone-aware UTC.")
     return dt.astimezone(UTC)
+
+
+def parse_enum_value(enum_cls: Any, raw: str | None) -> Any:
+    """Uppercase name lookup returning the member or None. Single source for enum flag parsing."""
+    if not raw:
+        return None
+    try:
+        return enum_cls(raw.upper())
+    except ValueError:
+        return None
 
 
 class DomainError(ValueError):

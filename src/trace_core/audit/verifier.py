@@ -33,6 +33,7 @@ def _mismatch(
     actual: str,
 ) -> VerifyResultDto:
     is_payload = mismatch_type == "payload_hash"
+    is_signature = mismatch_type == "signature"
     return VerifyResultDto(
         is_valid=False,
         events_verified=events_verified,
@@ -42,21 +43,70 @@ def _mismatch(
         mismatch_type=mismatch_type,
         expected_payload_hash=expected if is_payload else None,
         actual_payload_hash=actual if is_payload else None,
-        expected_chain_hash=None if is_payload else expected,
-        actual_chain_hash=None if is_payload else actual,
+        expected_chain_hash=None if (is_payload or is_signature) else expected,
+        actual_chain_hash=None if (is_payload or is_signature) else actual,
+        expected_signature=expected if is_signature else None,
+        actual_signature=actual if is_signature else None,
         sequence_gaps=list(gaps),
     )
 
 
-def verify_event(payload_json: str, payload_hash: str, prev_chain: str, chain_hash_str: str, seq: int) -> bool:
-    """Row self-check: recompute both hashes for one stored event.
+def verify_event(
+    payload_json: str,
+    payload_hash: str,
+    prev_chain: str,
+    chain_hash_str: str,
+    seq: int,
+    *,
+    signature: str | None = None,
+    key_id: str | None = None,
+) -> bool:
+    """Row self-check: recompute hashes and envelope for one stored event.
 
     True means this row is intact. Cannot detect deletion — that needs a full
-    verify or an external anchor.
+    verify or an external anchor. Legacy rows without a signature skip the check.
     """
+    from trace_core.audit.signing import verify_bytes
+
     if _expected_payload_hash(payload_json) != payload_hash:
         return False
-    return chain_hash(prev_chain, payload_hash, seq) == chain_hash_str
+    if chain_hash(prev_chain, payload_hash, seq) != chain_hash_str:
+        return False
+    if signature is not None and not verify_bytes(key_id, payload_json.encode("utf-8"), signature):
+        return False
+    return True
+
+
+def _signature_mismatch(m: AuditEventModel) -> tuple[str, str] | None:
+    if m.signature is None:
+        return None
+    from trace_core.audit.signing import expected_signature, verify_bytes
+
+    raw = m.payload_json.encode("utf-8")
+    if verify_bytes(m.key_id, raw, m.signature):
+        return None
+    return expected_signature(m.key_id, raw) or f"key:{m.key_id}", m.signature
+
+
+def _row_mismatch(m: AuditEventModel, prev_chain: str) -> tuple[str, str, str] | None:
+    expected_p = _expected_payload_hash(m.payload_json)
+    if expected_p != m.payload_hash:
+        return "payload_hash", expected_p, m.payload_hash
+    if m.prev_chain != prev_chain:
+        return "prev_chain", prev_chain, m.prev_chain
+    expected_c = chain_hash(m.prev_chain, m.payload_hash, m.seq)
+    if expected_c != m.chain_hash:
+        return "chain_hash", expected_c, m.chain_hash
+    signature = _signature_mismatch(m)
+    if signature is not None:
+        expected_s, actual_s = signature
+        return "signature", expected_s, actual_s
+    return None
+
+
+def _retain_first(first_seq: int | None, seq: int) -> int:
+    """First observed seq wins. Single source for ledger range tracking."""
+    return seq if first_seq is None else first_seq
 
 
 def verify_rows(rows: Iterable[AuditEventModel]) -> VerifyResultDto:
@@ -73,19 +123,13 @@ def verify_rows(rows: Iterable[AuditEventModel]) -> VerifyResultDto:
     has_rows = False
     for idx, m in enumerate(rows):
         has_rows = True
-        if first_seq is None:
-            first_seq = m.seq
+        first_seq = _retain_first(first_seq, m.seq)
         last_seq = m.seq
         _collect_gaps(prev_seq, m.seq, gaps)
-        expected_p = _expected_payload_hash(m.payload_json)
-        if expected_p != m.payload_hash:
-            # first_seq is not None here because we have at least one row
-            return _mismatch(m, idx, first_seq, last_seq, gaps, "payload_hash", expected_p, m.payload_hash)  # type: ignore[arg-type]
-        if m.prev_chain != prev_chain:
-            return _mismatch(m, idx, first_seq, last_seq, gaps, "prev_chain", prev_chain, m.prev_chain)  # type: ignore[arg-type]
-        expected_c = chain_hash(m.prev_chain, m.payload_hash, m.seq)
-        if expected_c != m.chain_hash:
-            return _mismatch(m, idx, first_seq, last_seq, gaps, "chain_hash", expected_c, m.chain_hash)  # type: ignore[arg-type]
+        mismatch = _row_mismatch(m, prev_chain)
+        if mismatch is not None:
+            mismatch_type, expected, actual = mismatch
+            return _mismatch(m, idx, first_seq, last_seq, gaps, mismatch_type, expected, actual)  # type: ignore[arg-type]
         prev_chain = m.chain_hash
         prev_seq = m.seq
     if not has_rows:

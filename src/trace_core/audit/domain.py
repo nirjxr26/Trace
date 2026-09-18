@@ -3,13 +3,13 @@
 import hashlib
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Final
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from trace_core.core.canonical import canonical_json, canonical_ts
-from trace_core.core.clock import default_ts
+from trace_core.core.clock import now_utc
 from trace_core.core.domain import InvariantViolationError
 
 GENESIS_CHAIN: str = "0" * 64
@@ -26,6 +26,16 @@ class AuditAction(StrEnum):
     CASE_ARCHIVED = "CASE_ARCHIVED"
     CASE_RESTORED = "CASE_RESTORED"
     CASE_PURGED = "CASE_PURGED"
+
+
+ACTION_TITLES: Final[dict[str, str]] = {
+    "CASE_CREATED": "Case created",
+    "CASE_UPDATED": "Case details updated",
+    "CASE_CLOSED": "Case closed",
+    "CASE_ARCHIVED": "Case archived",
+    "CASE_RESTORED": "Case restored",
+    "CASE_PURGED": "Case purged",
+}
 
 
 def payload_hash(payload: dict[str, Any]) -> str:
@@ -55,6 +65,8 @@ class AuditEvent(BaseModel):
     payload_hash: str = Field(min_length=64, max_length=64)
     prev_chain: str = Field(min_length=64, max_length=64)
     chain_hash_str: str = Field(min_length=64, max_length=64, alias="chain_hash")
+    key_id: str | None = None
+    signature: str | None = None
 
     model_config = ConfigDict(populate_by_name=True, frozen=True)
 
@@ -71,7 +83,7 @@ def build_payload(
     ts: datetime | None = None,
 ) -> dict[str, Any]:
     """Build canonical payload dict for hashing."""
-    ts_val = default_ts(ts)
+    ts_val = ts if ts is not None else now_utc()
     if ts_val.tzinfo is None or ts_val.tzinfo.utcoffset(ts_val) is None:
         raise InvariantViolationError("Audit ts must be timezone-aware UTC.")
     ts_utc = canonical_ts(ts_val)

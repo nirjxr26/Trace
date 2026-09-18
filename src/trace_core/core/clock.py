@@ -40,8 +40,3 @@ def reset_clock() -> None:
 def now_utc() -> datetime:
     """Return current timestamp in timezone-aware UTC using active clock."""
     return get_clock().now()
-
-
-def default_ts(ts: datetime | None) -> datetime:
-    """Supplied timestamp or now. Single source for audit/case defaults."""
-    return ts if ts is not None else now_utc()

@@ -14,18 +14,15 @@ from trace_core.cases.dto import CaseCreateDto, CaseFilterDto, CaseResponseDto, 
 from trace_core.cases.service import CaseService
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.errors import ApplicationError
-from trace_core.core.ui.renderers import format_india_datetime
-from trace_core.tui.forms import CaseForm, RawModal, TypedConfirmModal, YesNoModal
+from trace_core.core.ui.renderers import format_india_datetime, sanitize_terminal
+from trace_core.tui.actions import run_guarded
+from trace_core.tui.forms import CaseForm, RawModal, TextInputModal, TypedConfirmModal, YesNoModal
 from trace_core.tui.theme import STATUS_COLORS, THEME_TOKENS, status_text
 from trace_core.tui.widgets import DossierScroll
 
 TABLE_ID = "case-table"
 _NO_SELECTION = "Select a case first."
 _TITLE_STYLE = "bold #E5EAF0"
-
-
-def _status_text(status: object, is_deleted: bool) -> Text:
-    return status_text(status, is_deleted)
 
 
 class CasesView(Vertical):
@@ -84,7 +81,7 @@ class CasesView(Vertical):
         self._event_cache.clear()
         try:
             self._cases = self._query()
-        except ApplicationError as exc:
+        except Exception as exc:  # boundary: every service failure becomes a toast, never a crash
             self.app.notify(str(exc), severity="error")
             return
         table = self.query_one(f"#{TABLE_ID}", DataTable)
@@ -92,7 +89,7 @@ class CasesView(Vertical):
         for case in self._cases:
             table.add_row(
                 case.number,
-                _status_text(case.status, case.is_deleted),
+                status_text(case.status, case.is_deleted),
                 key=case.number,
             )
         self._render_dossier()
@@ -123,8 +120,8 @@ class CasesView(Vertical):
 
     def _append_head(self, body, case, rule, status_label, status_color) -> None:  # type: ignore[no-untyped-def]
         # Identity + examiner/tags rows.
-        body.append(f"{case.number}\n", style="#72B7D3")
-        body.append(f"{case.title or 'Untitled'}\n", style=_TITLE_STYLE)
+        body.append(f"{sanitize_terminal(case.number)}\n", style="#72B7D3")
+        body.append(f"{sanitize_terminal(case.title or 'Untitled')}\n", style=_TITLE_STYLE)
         body.append("\u25cf ", style=status_color)
         body.append(f"{status_label} ", style=f"bold {status_color}")
         body.append(f"\u00b7 Opened {format_india_datetime(case.opened_at)}\n", style="dim")
@@ -132,10 +129,10 @@ class CasesView(Vertical):
         body.append(rule)
         body.append("\n")
         body.append(f"{'Lead Examiner':<15} ", style="dim")
-        body.append(f"{case.lead_examiner or '\u2014'}\n", style="#E5EAF0")
+        body.append(f"{sanitize_terminal(case.lead_examiner or '\u2014')}\n", style="#E5EAF0")
         body.append(f"{'Tags':<15} ", style="dim")
         if case.tags:
-            body.append(" ".join(f"#{t}" for t in case.tags) + "\n", style="#6FA8B8")
+            body.append(sanitize_terminal(" ".join(f"#{t}" for t in case.tags)) + "\n", style="#6FA8B8")
         else:
             body.append("\u2014\n", style="dim")
         body.append("\n")
@@ -151,19 +148,19 @@ class CasesView(Vertical):
             body.append(f"{format_india_datetime(case.closed_at)}\n")
             if case.closure_reason:
                 body.append(f"{'Reason':<15} ", style="dim")
-                body.append(f"{case.closure_reason}\n")
+                body.append(f"{sanitize_terminal(case.closure_reason)}\n")
         else:
             body.append("\u2014 (active)\n", style="dim")
         body.append("\n")
         body.append(rule)
         if case.description:
             body.append("\nDESCRIPTION\n", style=THEME_TOKENS["accent"])
-            body.append(f"  {case.description}\n")
+            body.append(f"  {sanitize_terminal(case.description)}\n")
             body.append("\n")
             body.append(rule)
         if case.notes:
             body.append("\nNOTES\n", style=THEME_TOKENS["accent"])
-            body.append(f"  {case.notes}\n")
+            body.append(f"  {sanitize_terminal(case.notes)}\n")
             body.append("\n")
             body.append(rule)
 
@@ -192,13 +189,15 @@ class CasesView(Vertical):
         for e in events[:5]:
             body.append(f"{format_ledger_time(e.ts)}  ", style="dim")
             body.append(f"{short_action_label(e.action)}", style=_TITLE_STYLE)
-            body.append(f"  \u00b7  {e.actor}\n", style="dim")
+            body.append(f"  \u00b7  {sanitize_terminal(e.actor)}\n", style="dim")
 
     def run_command(self, command: str) -> None:
-        """Entry for the palette. Unknown ids are ignored."""
+        """Entry for the palette. Unknown ids toast instead of vanishing."""
         action = getattr(self, f"action_{command.replace('case-', '')}", None)
-        if callable(action):
+        if callable(action) and getattr(action, "__name__", "").startswith("action_"):
             action()
+        else:
+            self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")
 
     @on(DataTable.RowHighlighted)
     def _highlighted(self, event: DataTable.RowHighlighted) -> None:
@@ -241,7 +240,7 @@ class CasesView(Vertical):
             return
         from trace_core.cases.dto import parse_tags
 
-        try:
+        def _create() -> str:
             created = self._cases_svc.create_case(
                 CaseCreateDto(
                     title=values["title"],
@@ -253,10 +252,9 @@ class CasesView(Vertical):
                 ),
                 actor=values["examiner"],
             )
-            self.app.notify(f"Case {created.number} created.")
-        except ApplicationError as exc:
-            self.app.notify(str(exc), severity="error")
-        self.refresh_data()
+            return f"Case {created.number} created."
+
+        run_guarded(self, _create)
 
     def action_edit(self) -> None:
         case = self._selected()
@@ -279,7 +277,7 @@ class CasesView(Vertical):
             return
         from trace_core.cases.dto import parse_tags
 
-        try:
+        def _edit() -> str:
             self._cases_svc.update_case(
                 case.number,
                 CaseUpdateDto(
@@ -291,10 +289,9 @@ class CasesView(Vertical):
                 ),
                 reason=values["reason"],
             )
-            self.app.notify(f"Case {case.number} updated.")
-        except ApplicationError as exc:
-            self.app.notify(str(exc), severity="error")
-        self.refresh_data()
+            return f"Case {case.number} updated."
+
+        run_guarded(self, _edit)
 
     def action_seal(self) -> None:
         case = self._selected()
@@ -302,17 +299,28 @@ class CasesView(Vertical):
             self.app.notify(_NO_SELECTION, severity="warning")
             return
         self.app.push_screen(
-            TypedConfirmModal(f"Seal case {case.number} permanently?", case.number),
-            lambda ok: self._sealed(case.number) if ok else None,
+            TextInputModal("Reason for sealing (required)", "why is this case closed?"),
+            lambda reason: self._seal_reason(case.number, reason),
         )
 
-    def _sealed(self, number: str) -> None:
-        try:
-            self._cases_svc.close_case(number, actor=None)
-            self.app.notify(f"Case {number} sealed.")
-        except ApplicationError as exc:
-            self.app.notify(str(exc), severity="error")
-        self.refresh_data()
+    def _seal_reason(self, number: str, reason: str | None) -> None:
+        if not reason:
+            return
+        self.app.push_screen(
+            TypedConfirmModal(f"Seal case {number} permanently?", number),
+            lambda ok: self._sealed(number, reason) if ok else None,
+        )
+
+    def _sealed(self, number: str, reason: str = "") -> None:
+        from trace_core.audit.anchor import latest_intent_status
+
+        def _seal() -> str:
+            self._cases_svc.close_case(number, reason=reason, actor=None)
+            with self._cases_svc.session_manager.session() as session:
+                state = latest_intent_status(session, number)
+            return f"Case {number} sealed. Anchor: {state or 'UNKNOWN'}."
+
+        run_guarded(self, _seal)
 
     def action_archive(self) -> None:
         case = self._selected()
@@ -324,12 +332,11 @@ class CasesView(Vertical):
         )
 
     def _archived(self, number: str) -> None:
-        try:
+        def _apply() -> str:
             self._cases_svc.delete_case(number)
-            self.app.notify(f"Case {number} archived.")
-        except ApplicationError as exc:
-            self.app.notify(str(exc), severity="error")
-        self.refresh_data()
+            return f"Case {number} archived."
+
+        run_guarded(self, _apply)
 
     def action_purge(self) -> None:
         case = self._selected()
@@ -342,12 +349,11 @@ class CasesView(Vertical):
         )
 
     def _purged(self, number: str) -> None:
-        try:
+        def _apply() -> str:
             self._cases_svc.delete_case(number, purge=True)
-            self.app.notify(f"Case {number} purged.")
-        except ApplicationError as exc:
-            self.app.notify(str(exc), severity="error")
-        self.refresh_data()
+            return f"Case {number} purged."
+
+        run_guarded(self, _apply)
 
     def action_restore(self) -> None:
         case = self._selected()
@@ -360,9 +366,8 @@ class CasesView(Vertical):
         )
 
     def _restored(self, number: str) -> None:
-        try:
+        def _apply() -> str:
             self._cases_svc.restore_case(number)
-            self.app.notify(f"Case {number} restored.")
-        except ApplicationError as exc:
-            self.app.notify(str(exc), severity="error")
-        self.refresh_data()
+            return f"Case {number} restored."
+
+        run_guarded(self, _apply)

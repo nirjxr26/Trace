@@ -6,6 +6,7 @@ from datetime import datetime
 from sqlalchemy import JSON, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from trace_core.core.clock import now_utc
 from trace_core.core.database.base import Base, SoftDeleteMixin, TimestampMixin
 
 
@@ -36,3 +37,12 @@ class CaseSequenceModel(Base):
 
     year: Mapped[int] = mapped_column(primary_key=True)
     last_sequence: Mapped[int] = mapped_column(default=0, nullable=False)
+
+
+class PurgedNumberModel(Base):
+    """Permanent tombstone for purged case numbers. Never re-register."""
+
+    __tablename__ = "purged_numbers"
+
+    number: Mapped[str] = mapped_column(String(100), primary_key=True)
+    purged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)

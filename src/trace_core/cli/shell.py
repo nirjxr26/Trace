@@ -293,7 +293,11 @@ class InteractiveShell:
             return
 
         self._ensure_service()
-        tokens = shlex.split(clean_line)
+        try:
+            tokens = shlex.split(clean_line)
+        except ValueError:
+            render_error_card("Invalid Command", f"Command '{clean_line}' has unbalanced quotes.")
+            return
         if not tokens:
             return
 

@@ -22,6 +22,8 @@ class Context:
     host: str
     trace_version: str
     command: str
+    os_user: str = "unknown"
+    session_id: str = ""
 
 
 def parse_details(payload_json: str) -> dict[str, Any]:

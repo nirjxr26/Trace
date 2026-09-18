@@ -1,7 +1,7 @@
 """Generic reusable SQLAlchemy repository implementation."""
 
 from abc import ABC, abstractmethod
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -20,6 +20,12 @@ def paginate(stmt, limit: int | None, offset: int | None):  # type: ignore[no-un
     if limit:
         stmt = stmt.limit(limit)
     return stmt
+
+
+def ilike_literal(col: Any, value: str):  # type: ignore[no-untyped-def]
+    """Literal substring match with wildcards escaped. Single source for search filters."""
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return col.ilike(f"%{escaped}%", escape="\\")
 
 
 class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):

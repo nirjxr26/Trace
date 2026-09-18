@@ -11,10 +11,11 @@ from trace_core.audit.anchor import verify_against_anchor
 from trace_core.audit.dto import VerifyResultDto
 from trace_core.audit.service import AuditService
 from trace_core.core.database.session import DatabaseSessionManager
-from trace_core.core.errors import ApplicationError
+from trace_core.tui.actions import confirm_overwrite, run_guarded
 
 ANCHOR_INPUT = "verify-anchor"
 EXPORT_INPUT = "verify-out"
+VERIFY_RESULT = "verify-result"
 
 
 class VerifyView(Vertical):
@@ -38,7 +39,7 @@ class VerifyView(Vertical):
         with VerticalScroll(id="integrity-scroll"):
             with Vertical(id="integrity-status", classes="card"):
                 yield Static("Chain status", classes="card-title")
-                yield Static("Checking…", id="verify-result")
+                yield Static("Checking…", id=VERIFY_RESULT)
             with Vertical(id="integrity-anchor", classes="card"):
                 yield Static("Anchor check", classes="card-title")
                 yield Static("Compare the live tip against an off-host anchor file.", classes="muted")
@@ -70,16 +71,16 @@ class VerifyView(Vertical):
             key = (head[0], head[1], self._anchor)
             if key == self._last_key and self._last_verdict is not None:
                 # Ledger tip unchanged: full rescan would recompute the same verdict.
-                self.query_one("#verify-result", Static).update(self._last_verdict)
+                self.query_one(f"#{VERIFY_RESULT}", Static).update(self._last_verdict)
                 return
             res = svc.verify()
             if self._anchor:
                 verify_against_anchor(svc, res, self._anchor)
-        except ApplicationError as exc:
-            self.query_one("#verify-result", Static).update(Text(str(exc), style="#D06A73"))
+        except Exception as exc:  # boundary: every service failure becomes a toast, never a crash
+            self.query_one(f"#{VERIFY_RESULT}", Static).update(Text(str(exc), style="#D06A73"))
             return
         self._last_key, self._last_verdict = key, self._verdict(res)
-        self.query_one("#verify-result", Static).update(self._last_verdict)
+        self.query_one(f"#{VERIFY_RESULT}", Static).update(self._last_verdict)
 
     @staticmethod
     def _verdict(res: VerifyResultDto) -> Text:
@@ -104,6 +105,8 @@ class VerifyView(Vertical):
             self.action_anchor()
         elif command == "export":
             self.query_one(f"#{EXPORT_INPUT}", Input).focus()
+        else:
+            self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")
 
     def action_anchor(self) -> None:
         self.query_one(f"#{ANCHOR_INPUT}", Input).focus()
@@ -125,8 +128,11 @@ class VerifyView(Vertical):
         if not path:
             self.app.notify("Enter an export path first.", severity="warning")
             return
-        try:
+        confirm_overwrite(self, path, lambda: self._do_export(path))
+
+    def _do_export(self, path: str) -> None:
+        def _export() -> str:
             out = AuditService(self._manager).export(path)
-            self.app.notify(f"Exported to {out}. Copy it off-host.")
-        except ApplicationError as exc:
-            self.app.notify(str(exc), severity="error")
+            return f"Exported to {out}. Copy it off-host."
+
+        run_guarded(self, _export)

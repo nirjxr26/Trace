@@ -6,6 +6,9 @@
 /docs
 process/
 
+# --- Local Developer Scripts (never committed) ---
+/check-pr.ps1
+
 # --- Environment, Secrets & Credentials ---
 .env
 .env.*

@@ -40,6 +40,9 @@ class Settings(BaseSettings):
         alias="TRACE_STORAGE_ROOT",
     )
 
+    # Deployment environment. Only development tolerates shipped defaults.
+    env: str = Field(default="development", alias="TRACE_ENV")
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -47,14 +50,27 @@ class Settings(BaseSettings):
     )
 
     def model_post_init(self, __context: Any) -> None:
+        from trace_core.core.fs import ensure_dir
+
         try:
-            self.storage_root.mkdir(parents=True, exist_ok=True)
+            ensure_dir(self.storage_root)
         except OSError as exc:
             logger.warning(
                 "Could not initialize storage directory",
                 path=str(self.storage_root),
                 error=str(exc),
             )
+        if self.database_url == Settings.model_fields["database_url"].default:
+            logger.warning(
+                "Using shipped default database credentials; set TRACE_DATABASE_URL "
+                "with a strong password before production use."
+            )
+        if self.env.strip().lower() == "production":
+            # Sentinel duplicated from signing.py by design: settings cannot import it (cycle).
+            if self.database_url == Settings.model_fields["database_url"].default:
+                raise ValueError("Refusing production startup on shipped default database credentials.")
+            if self.secret_key.get_secret_value() == "trace-local-dev-key-change-in-production":
+                raise ValueError("Refusing production startup on shipped default secret key.")
 
 
 settings = Settings()

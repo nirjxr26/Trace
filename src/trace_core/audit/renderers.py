@@ -12,6 +12,8 @@ from trace_core.core.ui.renderers import (
     render_key_value_grid,
     render_minimalist_table,
     render_output,
+    safe_text,
+    sanitize_terminal,
     split_hash,
 )
 from trace_core.core.ui.theme import THEME_TOKENS
@@ -54,24 +56,27 @@ def render_audit_table(events: list[AuditEventDto]) -> None:
     rows: list[list[Any]] = []
     for e in events:
         _, style, _ = get_status_style_and_label(e.action, False)
+        # Plain-string cells parse Rich markup: sanitize + escape. Text() cells: sanitize.
+        number = safe_text(e.subject_case_number)
+        actor = safe_text(fit_text(sanitize_terminal(e.actor), 14))
         if bp == "XS":
             rows.append(
                 [
                     str(e.seq),
                     Text(e.action.value, style=style),
-                    e.subject_case_number,
-                    fit_text(e.actor, 14),
+                    number,
+                    actor,
                 ]
             )
         elif bp in ("LG", "XL"):
             details = parse_details(e.payload_json)
-            cmd = details.get("command") or "-"
+            cmd = safe_text(details.get("command") or "-")
             rows.append(
                 [
                     str(e.seq),
                     Text(e.action.value, style=style),
-                    e.subject_case_number,
-                    fit_text(e.actor, 14),
+                    number,
+                    actor,
                     cmd,
                     format_ledger_time(e.ts),
                 ]
@@ -81,8 +86,8 @@ def render_audit_table(events: list[AuditEventDto]) -> None:
                 [
                     str(e.seq),
                     Text(e.action.value, style=style),
-                    e.subject_case_number,
-                    fit_text(e.actor, 14),
+                    number,
+                    actor,
                     format_ledger_time(e.ts),
                 ]
             )
@@ -129,9 +134,9 @@ def render_case_audit_header(case_number: str, title: str, status: str, events: 
     _, term_w = breakpoint_width()
     rule = rule_line(term_w).strip()
     console.print("")
-    console.print(Text(f"  CASE {case_number}", style=TOK["title"]))
+    console.print(Text(f"  CASE {sanitize_terminal(case_number)}", style=TOK["title"]))
     if title:
-        console.print(Text(f"  {fit_text(title, max(20, term_w - 10))}", style=TOK["value"]))
+        console.print(Text(f"  {fit_text(sanitize_terminal(title), max(20, term_w - 10))}", style=TOK["value"]))
     created = format_ledger_time(events[-1].ts)
     last = format_ledger_time(events[0].ts)
     console.print(
@@ -182,29 +187,21 @@ def render_audit_timeline(events: list[AuditEventDto]) -> None:
         time_str = format_ledger_time(e.ts)
         label = short_action_label(e.action)
         raw_summary = _timeline_summary(e, details)
-        summary = fit_text(raw_summary, max(20, term_w - 14)) if raw_summary else ""
+        summary = fit_text(sanitize_terminal(raw_summary), max(20, term_w - 14)) if raw_summary else ""
         console.print(f"  {time_str}  {label}")
-        console.print(f"           {e.subject_case_number} · {e.actor}")
+        console.print(Text(f"           {sanitize_terminal(e.subject_case_number)} · {sanitize_terminal(e.actor)}"))
         if summary:
-            console.print(f"           {summary}")
+            console.print(Text(f"           {summary}"))
         console.print("")
     console.print(Text(f"  {rule}", style=TOK["border"]))
     console.print(f"[dim] {len(events)} shown · newest first[/dim]\n")
 
 
-_ACTION_TITLES = {
-    "CASE_CREATED": "Case created",
-    "CASE_UPDATED": "Case details updated",
-    "CASE_CLOSED": "Case closed",
-    "CASE_ARCHIVED": "Case archived",
-    "CASE_RESTORED": "Case restored",
-    "CASE_PURGED": "Case purged",
-}
-
-
 def action_title(action: str) -> str:
     """Human title for an audit action enum. Single source for detail headers."""
-    return _ACTION_TITLES.get(action, action.replace("_", " ").title())
+    from trace_core.audit.domain import ACTION_TITLES
+
+    return ACTION_TITLES.get(action, action.replace("_", " ").title())
 
 
 def short_action_label(action: Any) -> str:
@@ -261,7 +258,7 @@ def render_audit_detail(e: AuditEventDto) -> None:
         "AUDIT",
         f"#{e.seq}",
         action_title(e.action.value),
-        f"{e.subject_case_number} · {format_india_datetime(e.ts)}",
+        f"{sanitize_terminal(e.subject_case_number)} · {format_india_datetime(e.ts)}",
     )
     console.print(
         create_key_value_grid(_detail_fields(e, details, utc_display), width=kv_width(bp), padding=table_padding(bp))
@@ -272,8 +269,8 @@ def render_audit_detail(e: AuditEventDto) -> None:
     after = details.get("after", {})
     if changed:
         arrow = get_arrow_char()
-        old_vals = [format_change_value(before.get(field)) for field in changed]
-        new_vals = [format_change_value(after.get(field)) for field in changed]
+        old_vals = [sanitize_terminal(format_change_value(before.get(field))) for field in changed]
+        new_vals = [sanitize_terminal(format_change_value(after.get(field))) for field in changed]
 
         def _fit(values: list[str], minimum: int = 12, maximum: int = 32) -> int:
             return min(maximum, max([minimum] + [len(v) for v in values]))
@@ -310,7 +307,9 @@ def render_audit_detail(e: AuditEventDto) -> None:
     if not changed:
         console.print("")
 
-    intact = verify_event(e.payload_json, e.payload_hash, e.prev_chain, e.chain_hash, e.seq)
+    intact = verify_event(
+        e.payload_json, e.payload_hash, e.prev_chain, e.chain_hash, e.seq, signature=e.signature, key_id=e.key_id
+    )
     seal = "✓ VERIFIED" if intact else "✗ MISMATCH"
     render_section_title(f"INTEGRITY · {seal}", style=TOK["accent"] if intact else TOK["danger"])
     console.print(
@@ -336,13 +335,13 @@ def _detail_fields(e: AuditEventDto, details: dict, utc_display: str) -> list[tu
     host = details.get("host") or "-"
     reason = (details.get("reason") or "").strip()
     rows: list[tuple[str, Any]] = [
-        ("Actor", f"{e.actor} @ {host}"),
+        ("Actor", f"{sanitize_terminal(e.actor)} @ {sanitize_terminal(host)}"),
         ("When", f"{format_india_datetime(e.ts)} ({utc_display})"),
         ("", ""),
         ("Event", e.action.value),
     ]
     if reason:
-        rows.append(("Reason", reason))
+        rows.append(("Reason", sanitize_terminal(reason)))
     return rows
 
 
@@ -351,6 +350,8 @@ def _what_text(mismatch_type: str | None) -> str:
         return "payload_json edited but payload_hash not updated"
     if mismatch_type == "prev_chain":
         return "prev_chain linkage broken"
+    if mismatch_type == "signature":
+        return "signature mismatch (event not signed by trusted key)"
     return "chain_hash mismatch"
 
 
@@ -400,8 +401,14 @@ def _render_tamper(res: VerifyResultDto) -> None:
             ("Where", where),
             ("What", _what_text(res.mismatch_type)),
             ("Type", res.mismatch_type or "-"),
-            ("Expected", (res.expected_payload_hash or res.expected_chain_hash or "-")[:64]),
-            ("Actual", (res.actual_payload_hash or res.actual_chain_hash or "-")[:64]),
+            (
+                "Expected",
+                (res.expected_signature or res.expected_payload_hash or res.expected_chain_hash or "-")[:64],
+            ),
+            (
+                "Actual",
+                (res.actual_signature or res.actual_payload_hash or res.actual_chain_hash or "-")[:64],
+            ),
             ("Checked", f"{res.events_verified} events OK, failing at {res.first_mismatch_seq}"),
             ("Gaps", ", ".join(str(g) for g in res.sequence_gaps) if res.sequence_gaps else "None"),
             ("Result", Text("✗ Ledger broken. Do NOT trust events ≥ mismatch.", style=THEME_TOKENS["danger"])),

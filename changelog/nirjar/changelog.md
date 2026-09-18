@@ -1147,6 +1147,122 @@
 - **Verified**: 112 passed, ruff check + format clean, `mypy src tests` clean (88 files).
 - **Files touched**: `pyproject.toml`, `uv.lock`, `requirements.txt`, `tui/screens/{cases,audit,verify}.py`.
 
+## 2026-09-16 — Authorized white-box security assessment (no source changes)
+
+- **Scope**: full local attack run with owner authorization, throwaway SQLite DBs + temp dirs only. No prod, no network, no source edits. (Strix engine not used — no Docker/keys in this env; manual PoCs instead.)
+- **Confirmed**: (1) HIGH — chain-recompute evasion: with DB-file access, attacker drops triggers and re-hashes with app's own canonical math; `verify()` returns VALID after authorship forgery. Secretless SHA-256 is detection-only. (2) MEDIUM — path traversal via case number (`validate_number` allows `/`): `close_case` writes anchor outside `storage_root` (proven in temp dir). (3) MEDIUM — Rich markup injection at 4 sinks (`audit/helpers.py:28,88`, `audit/shell_handler.py:170`, `cases/shell_handler.py:343`, `:479`): forged `[/dim][bold red]` renders attacker text as trusted output (ANSI evidence captured).
+- **Held**: append-only triggers (UPDATE/DELETE → IntegrityError), no eval/exec/subprocess/pickle sinks, no raw SQL in src (ORM + bound params), `.env` gitignored + no hardcoded secrets, `secret_key` setting exists but is consumed nowhere (natural home for future HMAC).
+- **Full fix checklist delivered in chat; PoCs kept under `Temp/opencode/poc_*.py` (not committed).**
+
+## 2026-09-16 — Security assessment round 2: identity, terminal, identifiers (no source changes)
+
+- **Confirmed**: (A) HIGH — audit authorship fully self-asserted: every action as `alice` by Mallory lands in the ledger as `alice`; no OS-user capture exists; 300-char actor bypasses the 255 model cap on SQLite. (B+C) MEDIUM — control-character injection via title: OSC-8 hyperlink (`\\x1b]8;;`) and forged newline rows survive into dossier bytes. (D) MEDIUM — `latest_anchor_for('*')` resolves to another case's anchor (glob metachars in numbers) → wrong-anchor verification. (E) LOW — `2026-cr-0100` and Cyrillic-homoglyph twins accepted as distinct identities. (F) LOW — `export --out` silently replaces any existing file via `os.replace`.
+- **Checked clean**: no `re` usage (no ReDoS surface); `closed_by`/`closure_reason` columns match domain caps.
+- **Fix checklist delivered in chat; PoCs `poc2*.py` uncommitted in temp.**
+
+## 2026-09-17 — Security assessment round 3: forensic-logic flaws (no source changes)
+
+- **Confirmed**: (G) HIGH — purged-number resurrection: manual reuse of a purged number merges two cases into one audit timeline (auto-allocator verified NOT to reuse). (H) MEDIUM — sequence-squat DoS: 100 pre-registered numbers exhaust the allocator, denying all automatic creation. (I) MEDIUM — bad anchor path crashes the TUI (`typer.echo`/`typer.Exit` escaping Textual); bad export path escapes identically (`FileNotFoundError` vs `ApplicationError`-only handler).
+- **Latent (code-evident)**: caller-supplied `ts` param on `append()` (backdating primitive, no prod caller yet); OS-clock-trusted timestamps; `getattr` command dispatch is safe but allowlist-worthy.
+- **Details + PoCs filed**: `docs/security/assessment-2026-09-17.md` (SEC-10/11/12), `docs/security/pocs/poc3*.py`. Full fix checklist in chat.
+
+## 2026-09-17 — Security assessment round 4: 360 sweep (no source changes)
+
+- **Confirmed**: SEC-13 callers override host/command via `setdefault` merge; SEC-14 unclosed quote escapes `execute_line` as `ValueError`; SEC-15 seal accepted with empty reason; SEC-16 migration checksums hash the name and are never compared (theater); SEC-17 anchor-after-commit crash window + tip imprecision.
+- **Clean**: TUI modals (falsy→no-op), `run()` error cards, `render_error_card` escaping, `append(ts=)` still caller-free.
+- **Details + PoCs filed**: `docs/security/assessment-2026-09-17.md` (SEC-13…17), `docs/security/pocs/poc4_misc.py`.
+
+## 2026-09-18 — Batch 1 input containment implemented (SEC-02/03/06/07/08)
+
+- **Rule followed**: AGENTS.md re-read first; domain-centralized validators (all surfaces inherit); smallest diffs in existing style; no logic change beyond rejecting hostile input.
+- **Domain** (`core/domain.py`, `cases/domain.py`, `cases/service.py`): new `strip_controls()` (C0/DEL always, `\n` only multiline); case numbers canonicalized (NFKC→upper) and held to `^[0-9]{4}-[A-Z]{2,8}-[0-9]{4}$` (covers CR/NR/CLI + fixture codes; rejects traversal, glob, homoglyphs, twins); title/examiner/tags/description/notes/reason/closed_by/actor all control-stripped. `--number` help documents the format.
+- **Filesystem** (`audit/anchor.py`): `anchor_path` resolves + enforces containment (`ValueError` on escape) — backstop behind the grammar.
+- **Output** (`core/ui/renderers.py` + CLI/TUI sinks): new `sanitize_terminal()` (CSI/OSC/C1/DEL + unicode separators) and `safe_text()` (sanitize + escape); applied to every user-content interpolation in case/audit CLI renderers, TUI dossier/detail builders, and the 4 shell markup sinks.
+- **Proof**: new `tests/unit/test_security_regressions.py` (7 tests, written failing-first); original PoCs re-run — traversal rejected at create, markup renders literal, OSC hyperlink gone. Suite: 119 passed, ruff + format + `mypy src tests` clean.
+- **Not in this batch** (brief Batches 2+): export `--force`, search caps, tombstones, merge precedence, shlex guard, reason-required close.
+- **Files touched**: `core/domain`, `core/ui/renderers`, `cases/{domain,service,commands,renderers,shell_handler}`, `audit/{anchor,helpers,renderers,shell_handler}`, `tui/screens/{cases,audit}`, `tests/unit/test_security_regressions.py`.
+
+## 2026-09-18 — Batch 2 lifecycle integrity (SEC-09/10/11/13/15, SEC-04)
+
+- **Tombstones** (migration `009_create_purged_numbers_tombstone` + `PurgedNumberModel`): `repo.purge` tombstones in-txn; `create_case` rejects tombstoned numbers as conflicts; allocator skips them. PoC-G re-run dies at re-registration.
+- **Allocator**: 100→10000 cap with operational message; `note_manual_number` advances the year counter past high manual numbers; `for_case_created` records `number_source` manual/auto for anomaly monitoring.
+- **Export `--force`**: shared `check_export_dest` guard (Typer `--force`/`-f`, shell flag, TUI YesNoModal confirm on both audit + verify screens); refusal is a `ValidationError` card.
+- **Reason-required close** (+2 tests updated, TUI seal now collects reason before typed confirm).
+- **Metadata wins**: system `host/trace_version/command` overwrite caller keys.
+- **Literal search**: shared `ilike_literal` (explicit `ESCAPE`) in case + audit repositories; `search` capped at 200 chars.
+- **Proof**: 12→17 security tests green; full suite 124 passed, ruff + format + `mypy src tests` clean.
+- **Files touched**: `cases/{models,repository,service}`, `core/{dto,database/{migrations,repository}}`, `audit/{builder,helpers,commands,shell_handler,dto}`, `tui/screens/{cases,audit,verify}`, `tests/unit/{test_security_regressions,test_case_service,test_cli_commands,test_database_migrations_and_lifecycle}`.
+
+## 2026-09-18 — Batch 3 error boundaries (SEC-12/14)
+
+- **Anchor split** (`audit/anchor.py`): pure `check_anchor_match` (raises, never prints/exits) + thin `verify_against_anchor` (unreadable file → `ValidationError`, was `typer.echo` + `Exit(1)`). CLI exit for bad anchor file is now 11/1 via typed cards; shell REPL no longer dies on it; TUI notifies. Existing anchor roundtrip test untouched and green.
+- **TUI boundary**: all service-call catches in the 4 screens broadened to `Exception` → toast (never a crash); 3 dead imports removed.
+- **Shell**: unclosed quote → `Invalid Command` card (was `ValueError` traceback out of `execute_line`).
+- **Palette**: wrong-tab ids toast instead of vanishing (`CasesView` allowlisted to `action_*`, others get `else` branches).
+- **Proof**: 4 new regression tests (shlex card, typed anchor errors, pure mismatch, wrong-tab pilot); suite 128 passed, ruff + format + `mypy src tests` clean.
+- **Files touched**: `audit/anchor.py`, `audit/helpers.py` (unchanged callers), `cli/shell.py`, `tui/screens/{cases,audit,db,verify}.py`, `tests/unit/test_security_regressions.py`.
+
+## 2026-09-18 — Batch 4 HMAC ledger envelope (SEC-01 interim)
+
+- **New `audit/signing.py`**: `sign_bytes`/`verify_bytes`/`expected_signature` HMAC-SHA256 backend behind a keyed interface (`key_id="hmac-v1"`, constant-time compare, unknown keys fail closed, one-time structlog warning on the default dev key). Shaped for a future Ed25519 backend under the same `key_id` vocabulary.
+- **Schema** (migration `010_add_ledger_signature_columns` + model): nullable `key_id`/`signature` on `audit_events` (legacy rows verify chain-only); domain + DTO carry both; exporter includes both (offline verification complete).
+- **Repository**: `append()` stamps `now_utc()` internally (caller `ts` param removed — was a backdating primitive with zero callers) and signs every event.
+- **Verifier**: order payload → linkage → chain → envelope; new `signature` mismatch type with dedicated expected/actual fields, `_what_text` + tamper-grid support; `verify_event` takes optional envelope kwargs (old callers unchanged); legacy unsigned rows pass.
+- **Proof**: PoC4 re-run — identical forgery now fails `signature at seq 1` (was VALID); new tests (envelope present, recompute rejected, legacy verifies, unknown key fails closed); updated tribunal expectation (forgery dies at seq 1, not seq 2). Suite 132 passed, ruff + format + `mypy src tests` clean.
+- **Not done (needs decisions/infra)**: Ed25519 + key provisioning/rotation, external key custody (env-held HMAC stops DB-only attackers, not host attackers — documented).
+- **Files touched**: `audit/{signing (new),models,domain,dto,repository,verifier,exporter,renderers}`, `core/database/migrations.py`, `tui/screens/audit.py`, `tests/unit/{test_security_regressions,test_audit_ledger,test_database_migrations_and_lifecycle}`.
+
+## 2026-09-18 — Batch 5 attribution (SEC-05 partial)
+
+- **Context enriched** (`audit/events.py`, `audit/builder.py`): `os_user` (getpass, `"unknown"` fallback) + process-scoped `session_id` on every event, merged system-wins (Batch 2 precedence already flipped). Explicitly metadata, not authentication — documented in helper + file.
+- **Actor length** (`audit/service.py:record`): >255 → `ValidationError` (closes the SQLite over-long bypass; PG errored cryptically before).
+- **Not built**: login/RBAC/roles — no auth infrastructure exists to hang them on; building role checks without authentication would be theater. Scoped as documented follow-up with the operator-entity design already in the security file.
+- **Proof**: 2 new tests (attribution present, length enforced); suite 134 passed, ruff + format + `mypy src tests` clean.
+- **Files touched**: `audit/{events,builder,service}.py`, `tests/unit/test_security_regressions.py`.
+
+## 2026-09-18 — Batch 6 DB + storage (SEC-16/18/20/21/22/23)
+
+- **TRUNCATE backstop**: `PG_AUDIT_TRUNCATE_TRIGGER_DDL` (`FOR EACH STATEMENT`) installed alongside the row trigger; DDL exposed as a constant for tests.
+- **Roles** (migration `011_create_least_privilege_roles`, PG-only): NOLOGIN `trace_app/trace_reader/trace_migrator` if-missing; ledger grants SELECT+INSERT only; explicit REVOKEs on ledger + migrations tables. No secrets in code; LOGIN/passwords stay an operator step (documented).
+- **Content checksums**: `_migration_checksum` hashes name + registered source (newline-normalized for CRLF checkouts); `verify_migration_checksums` runs inside the apply lock — legacy name-only values upgrade once with warning, anything else fails closed. Fail-closed by default on tamper.
+- **Filesystem** (new `core/fs.py`): `ensure_dir` (0o700), `check_contained`, `atomic_write_lines` (unlink-stale + exclusive-create + fsync + rename + 0o600). Adopted by settings storage init, anchor writes, exporter (streaming preserved via generator), migration lockfile parent.
+- **Proof**: 7 new tests (DDL strings, least-privilege asserts, drift fails closed, legacy upgrade, restrictive modes posix-only, stale-tmp recovery); suite 140 passed, ruff + format + `mypy src tests` clean.
+- **Not done**: ownership transfer (operator-run, would break existing deploys if forced); at-rest encryption (needs backend decision + infra); Ed25519 (Batch 4 follow-up).
+- **Files touched**: `core/{fs (new),database/migrations}`, `core/settings.py`, `audit/{models,exporter,anchor}.py`, `tests/unit/{test_security_regressions,test_database_migrations_and_lifecycle}`.
+
+## 2026-09-18 — Batch 7 installer + release + CI (SEC-19/24/25/26/27)
+
+- **Token leak closed** (`install.sh`, `install.ps1`): `GIT_ASKPASS` answers from env (nothing in `.git/config` or process URL); old askpass/env restored in `finally`.
+- **Pinned ref**: `TRACE_REF` (default `main`, `v*` → tags archive) for clone + tarball/zip; signed-release verification documented as needing release infra (not pretended).
+- **Pinned bootstrap**: `pip==26.2.1` (verified resolvable) with rotation note; `.env` creation now warns about default credentials.
+- **App warning**: startup `structlog` warning on shipped-default DB credentials (refusal deferred — breaks password-less dev/test).
+- **CI gates**: `pip-audit` blocking (verified clean on the lock), SBOM fixed to v7 syntax + uploaded as artifact + blocking, `--cov-fail-under=70` wired (measured 75.21%). `mypy --strict` (56 pre-existing gaps) and SAST tools left out deliberately — unverifiable/fragile from here, noted as follow-ups.
+- **Matrix + statuses**: all 27 traceability rows now carry remediation state; 5 OPEN / 5 PARTIAL-in-code remain (SEC-17/21 + partials), each with a named reason.
+- **Proof**: ps1 parses clean (Parser API), sh reviewed by eye (no shell available); suite 142 passed, ruff + format + `mypy src tests` clean.
+- **Files touched**: `install.sh`, `install.ps1`, `core/settings.py`, `.github/workflows/ci.yml`, `pyproject.toml` (lock-only comment), `docs/security/*`, `changelog`.
+
+## 2026-09-18 — Ed25519 + RBAC + anchor outbox + TRACE_ENV + sealed exports
+
+- **Ed25519 ledger signing** (`audit/signing.py`, `audit keys-init/rotate/list`): file keystore (0600 dir, 0600 keys), `ed25519:<fp16>` ids beside `hmac-v1`, rotation with retired-key verification, unknown keys fail closed. Repository signs with the active key automatically. Same PoC4 forgery now dies on signature under either backend.
+- **Workstation RBAC** (new `core/operators.py`, migration `012`, `AuthorizationError`): operators auto-provision (first-ever is admin), `investigator/auditor/admin` enforced in the service layer (mutate/purge/keys gates), explicit claims dual-logged as `claimed_actor`, `--by`/`--closed-by` preserved as the override mechanism. Existing single-user flows unchanged (first operator is admin).
+- **Anchor outbox** (SEC-17; model + migration `013`): `anchor_intents` rows capture exact seq/chain in-transaction; `publish_pending_anchors` signs (envelope now signature-checked on verify), writes atomically, fans out to extra sinks, marks CONFIRMED/PENDING/FAILED loudly. Close output (CLI/shell/TUI) reports the anchor state; no more head re-read, no silent success.
+- **TRACE_ENV refusal** (SEC-19): `production` startup refuses shipped-default DB credentials/secret key; dev/test unaffected; installers warn on template `.env`.
+- **Sealed exports** (SEC-21, code side): `audit/vault.py` (PBKDF2-600k + AES-GCM, single-error decrypt, iteration bounds), `audit export --encrypt` + `audit decrypt` (Typer; shell `decrypt` action + completions), passphrase via env or hidden prompt — never argv. Disk/SQLite encryption stays an ops decision.
+- **Installer verification** (SEC-25): `TRACE_RELEASE_SHA256` digest gate (fail closed) + cosign hook (bundle+identity when provided, loud warning otherwise) on both installers; ps1 parses clean.
+- **Proof**: suite 155 passed (13 new: ed25519 lifecycle/forgery, RBAC roles/claims, outbox exactness/failure loudness, vault roundtrip/wrong/tamper, production refusal), ruff + format + `mypy src tests` clean.
+- **Files touched**: `audit/{signing,vault (new),models,dto,repository,verifier,exporter,anchor,commands,shell_handler}`, `core/{operators (new),errors,database/migrations,settings}`, `cases/service.py`, `cli`/`shell`/`tui` close outputs, `install.{sh,ps1}`, `tests/unit/test_security_regressions.py`.
+
+## 2026-09-17 — Master-brief review: changes required before implementation
+
+- **Reviewed a 26-point master brief against code + filed findings**: adopted almost all; three corrections applied to `docs/security/assessment-2026-09-17.md` (new adjudication section + S-section amendments) because implementing them as written would break things: (1) CR-only number grammar rejected — codebase uses CR/NR/CLI + 7-letter fixture codes, adopted `^[0-9]{4}-[A-Z]{2,8}-[0-9]{4}$` instead; (2) exporter is already tmp→fsync→rename, SEC-09 fix scoped to clobber gate only; (3) my own monotonic-timestamp-reject idea replaced with `CLOCK_REGRESSION` anomaly.
+- **Also adopted**: HMAC-vs-Ed25519 trust distinction, per-state verification vocabulary, anchor outbox (replacing my `before_commit`-write idea), metadata-vs-auth identity model, terminal-boundary sanitizer matrix, NOLOGIN owner + self-computing append procedure, content checksums compared at startup, one-signing-model scoping, 20 agent rules, precise claims language.
+
+## 2026-09-17 — External 26-point review adjudication (no source changes)
+
+- **Verdict**: 25 of 26 claims verified against code (10 become new SEC-18…27; 14 duplicate own earlier findings; 1 advisory claim left to CI `pip-audit`). Zero refuted.
+- **New, highest-signal**: SEC-18 TRUNCATE bypass (`BEFORE UPDATE OR DELETE`, no TRUNCATE trigger); SEC-19/20 default `postgres:postgres` + zero DB role separation; SEC-21 no at-rest encryption; SEC-22 unhardened storage perms; SEC-24 installer token-in-URL (`install.sh:31`, `install.ps1:30`); SEC-25 mutable-`main` pipe-to-shell installs; SEC-16 migration checksums confirmed theater from round 4.
+- **Filed**: `docs/security/assessment-2026-09-17.md` adjudication table + new IDs.
+
 ## 2026-09-16 — CI speed-up (same checks, less redundant work)
 
 - **Caches**: pip was already cached; added `.mypy_cache`/`.ruff_cache` via pinned `actions/cache@v4` (SHA-verified against the repo tag), keyed on OS + Python + `requirements.txt` hash. Both tools self-invalidate on source edits.
@@ -1154,6 +1270,70 @@
 - **Hygiene**: `permissions: contents: read`, `timeout-minutes` 15/20/20, `PIP_DISABLE_PIP_VERSION_CHECK=1`.
 - **Untouched**: gates, matrix, coverage, audit tolerance, postgres service. YAML parses; caches are gitignored.
 - **Files touched**: `.github/workflows/ci.yml`.
+
+## 2026-09-18 — Validator centralization + lookup hardening (grammar decision)
+
+- **Single source**: `cases/domain.py` now exposes `normalize_number()` (NFKC/strip/upper, no rejection) + `canonical_number()` (grammar-enforcing `^[0-9]{4}-[A-Z]{2,8}-[0-9]{4}$`); the `Case` validator delegates. Repository lookups (`resolve`, `get_by_number`, `is_purged`, `record_purge`, `note_manual_number`) and the audit case filter all normalize through it — lowercase input finds canonical rows; unknown input still misses to NotFound exactly as before. CR-only grammar explicitly rejected: NR/CLI grouping + FIXTURE/BATCH fixtures require the wider class.
+- **Glob backstop**: `latest_anchor_for` filters results by literal stem-prefix match + containment, so metacharacters can't widen matches even on direct calls.
+- **Proof**: 2 new tests (canonical lookup, metachar anchor returns None beside a real anchor); suite 144 passed, ruff + format + `mypy src tests` clean.
+- **Files touched**: `cases/{domain,repository}.py`, `audit/{repository,anchor}.py`, `tests/unit/test_security_regressions.py`.
+
+## 2026-09-18 — Reusability pass over old + new code
+
+- **Deleted dead code**: `extract_str_flag` (zero callers), `default_ts` (inlined into `build_payload`), `render_table` + its tests (zero production callers; `render_minimalist_table` is the single table renderer).
+- **New constants**: `INTENT_*` (anchor outbox states), `STATUS_ACTIVE`, vault KDF bounds, `_EMPTY_TIMELINE_HINT`, `ACTION_TITLES` canonical table in `audit/domain.py` (both `action_title` and `ACTION_CHOICES` derive from it), migration version list derived from `MIGRATIONS`.
+- **Shared TUI helpers** (`tui/actions.py`): `run_guarded` (all 10 mutation epilogues across 4 screens), `confirm_overwrite` + per-screen `_do_export` (audit/verify), `describe_anchor` (Typer + shell close outputs).
+- **Unifications**: generic `parse_enum_value` (deleted `parse_action_value`, 3 call sites rewired); `verify_migration_checksums` returns records so `apply_migrations` lists once; `_grouped_rows` counts real rows (headers free); `_status_text` wrapper inlined.
+- **Tests**: `as_user`/`temp_storage_root`/`detached_event` moved to `conftest.py`; 4 storage dances + 3 identity helpers migrated to fixtures.
+- **Left alone deliberately**: help-surface catalog, status-color maps, coerce/ensure pair, `_DEV_KEY_SENTINEL` duplication (import cycle), nested publisher sessions (failure isolation), mismatch-path double hash.
+- **Proof**: suite 155 passed, ruff + format + `mypy src tests` clean, no behavior change (close/message/row output verified identical via tests).
+
+## 2026-09-18 — SonarLint cleanup (S6353/S3776/S1192/S9073)
+
+- **S6353 `cases/domain.py`**: `CASE_NUMBER_RE` `[0-9]` → `\d` with `re.ASCII` (ASCII-only semantics preserved, concise syntax).
+- **S3776 `cases/repository.py`**: `get_next_sequence_number` split into `_scan_max_seq` + `_ensure_seq_record` + `_is_candidate_free`; allocator loop unchanged.
+- **S1192 `tui/screens/verify.py`**: new `VERIFY_RESULT` constant replaces 3× `"#verify-result"` + `id="verify-result"` (matches existing `ANCHOR_INPUT` pattern).
+- **S9073 `tests/unit/test_security_regressions.py`**: split 5 composite asserts (lines 92,218,275,278,487) into single-condition asserts.
+- **Proof**: 155 passed, 3 skipped (PG), 75.59% branch (>70%), 0 Ruff check/format (97 files), 0 Mypy (93 files).
+
+## 2026-09-18 — SonarLint + Pylance cleanup (S3776/Pylance ×2)
+
+- **S3776 `audit/verifier.py`**: `verify_rows` first-seq branch extracted into `_retain_first()` (mirrors existing `_collect_gaps` helper style); loop and tamper semantics unchanged.
+- **Pylance `tests/unit/test_database_migrations_and_lifecycle.py:94`**: added explicit `import sqlalchemy.exc` (runtime already worked; static resolution needed the submodule import).
+- **Pylance `tests/unit/test_ui_renderers.py` (20× `reportCallIssue`)**: 3 hand-built `CaseResponseDto(...)` now go through production's `CaseResponseDto.from_domain(Case(...))` factory (the single source `service.py` uses 7×); `Case(...)` kwargs were already Pylance-clean, runtime output identical, no ignores added.
+- **Proof**: 155 passed, 3 skipped (PG), 75.66% branch (>70%), 0 Ruff check/format (97 files), 0 Mypy (93 files).
+
+## 2026-09-18 — PSScriptAnalyzer cleanup (install.ps1)
+
+- **`install.ps1`**: removed dead `$VenvPip` assignment (PSScriptAnalyzer `PSUseDeclaredVarsMoreThanAssignments`). All pip calls already go through `$VenvPython -m pip` (or `uv ... --python $VenvPython`), so the variable had zero callers; deletion is behavior-identical.
+- **Proof**: PowerShell parser reports 0 errors, 0 remaining `VenvPip` references.
+
+## 2026-09-18 — CI pipeline end-to-end local replication (no repo changes)
+
+- **ci.yml valid**: parses as YAML (3 jobs, expected steps/triggers); all 10 `uses:` pins are full 40-char SHAs and each was verified against the GitHub API to equal its commented tag (`checkout@v4.2.2`, `setup-python@v5.4.0`, `cache@v4`, `upload-artifact@v4.6.1` — all MATCH).
+- **lint-and-types replicated**: `pip-audit --desc --require-hashes -r requirements.txt` → no known vulnerabilities; `cyclonedx-py requirements` → valid SBOM (44 components); `ruff format --check` + `ruff check` clean (97 files); `mypy src tests` clean (93 files).
+- **test-matrix replicated** with CI's exact command + env (`pytest --cov=trace_core --cov-report=term-missing --cov-report=xml --cov-fail-under=70`, sqlite memory): 155 passed, 3 PG-skips, 75.58% branch (>70% gate).
+- **Install steps proven in a scratch venv**: `pip install --require-hashes --only-binary :all: -r requirements.txt` (44 pkgs) + `pip install --no-deps -e .` both succeed from scratch; smoke subset (14 tests) green there too.
+- **postgres-integration replicated against scratch `trace_ci` on local PG16** (fresh DB, since dropped): `trace db init/status/migrate` all exit 0 with all 13 migrations; `pytest tests/integration/ -v` → 3 passed on real PostgreSQL.
+- **Live `trace` db untouched**: residue audit found zero test rows (newest case/event are the developer's own CR-0008 work); scratch db dropped, temp scaffolding deleted.
+- **Local quirk noted (not a CI issue)**: `cmd set VAR=x && ...` appends a trailing space to the value — CI's `env:` block doesn't do this; local replication used in-process env instead.
+
+## 2026-09-18 — Local pre-PR gate script (`check-pr.ps1`)
+
+- **New `check-pr.ps1`** (root, mirrors `install.ps1` style): fast local replication of CI for clean PRs — `.\check-pr.ps1` runs venv/import, offline lockfile hash coherence, `ruff format --check`, `ruff check`, `mypy src tests`, `pytest --cov=trace_core --cov-fail-under=70` with CI env (save/restore vars, fail-fast summary, per-step timing, nonzero exit on failure). `-Full` adds `pip-audit`, SBOM (to TEMP, repo stays clean), and a fresh-venv hashed-install proof (self-deleting temp venv).
+- **Proven**: fast mode green in ~20s, `-Full` green end-to-end (155 passed, audit clean, SBOM 44 components, fresh-venv proof 10 passed). PowerShell parser 0 errors.
+
+## 2026-09-18 — `check-pr.ps1` kept local-only (not for GitHub)
+
+- Per request, the pre-PR gate script stays a local dev tool: added root-anchored `/check-pr.ps1` to `.gitignore` (new "Local Developer Scripts" section, same spirit as ignored `/docs`). Verified via `git status` (no longer listed) + `git check-ignore`.
+- Note: the `.gitignore` edit itself is tracked — required so the rule is shared and nobody commits the script by accident. The script file remains fully usable locally.
+
+## 2026-09-18 — Sonar Blocker + pytest hygiene (signing traversal, S5754 ×3)
+
+- **Blocker `audit/signing.py` (CWE path traversal)**: `_verify_ed25519` and `_load_private` interpolated the `key_id` suffix straight into a keystore path, but suffixes arrive from DB rows and the active-key pointer file (both attacker-writable). New `_key_file()` single source enforces grammar first (`^[\da-f]{16}$`, matching `init_key` output) then `check_contained()` (the existing `core/fs` backstop, same as `anchor_path`). Verify path still fails closed (`ValueError` is already in its caught tuple → `False`); signing path now raises `ValueError` instead of reading an arbitrary path.
+- **S5754 ×3 `tests/unit/test_security_regressions.py`**: hoisted DTO/service/subject setup out of `pytest.raises` blocks (purged-twin DTO, actor-length recorder/action/subject/actor, auditor-reader service + DTO) so each block holds exactly one throwing invocation — same pattern as the prior S5754 pass.
+- **Regression test**: `test_traversal_key_id_fails_closed` (`ed25519:../../../../tmp/pwn` → `verify_bytes False` + `verify_rows` signature-mismatch, fail closed).
+- **Proof**: 156 passed (155 + 1 new), 3 skipped (PG), 75.68% branch (>70%), 0 Ruff check/format (97 files), 0 Mypy (93 files).
 
 
 

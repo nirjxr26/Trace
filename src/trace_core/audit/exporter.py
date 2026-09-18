@@ -1,7 +1,6 @@
 """Isolated bundle exporter: streaming JSONL, no service logic."""
 
 import json
-import os
 from pathlib import Path
 
 from sqlalchemy import select
@@ -9,6 +8,7 @@ from sqlalchemy import select
 from trace_core.audit.domain import CANONICAL_VERSION, HASH_ALGO, SPEC_VERSION
 from trace_core.audit.models import AuditEventModel
 from trace_core.core.canonical import canonical_ts
+from trace_core.core.fs import atomic_write_lines
 
 
 def _header() -> str:
@@ -36,22 +36,17 @@ def _record_dict(m) -> dict:  # type: ignore[no-untyped-def]
         "payload_hash": m.payload_hash,
         "prev_chain": m.prev_chain,
         "chain_hash": m.chain_hash,
+        "key_id": m.key_id,
+        "signature": m.signature,
     }
 
 
 def export_bundle(session, out_path: str | Path) -> Path:  # type: ignore[no-untyped-def]
-    out = Path(out_path)
-    tmp = out.with_suffix(out.suffix + ".tmp")
-    out.parent.mkdir(parents=True, exist_ok=True)
     stmt = select(AuditEventModel).order_by(AuditEventModel.seq.asc())
-    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        f.write(_header())
+
+    def _lines():  # type: ignore[no-untyped-def]
+        yield _header()
         for m in session.scalars(stmt).yield_per(500):
-            f.write(json.dumps(_record_dict(m), ensure_ascii=False) + "\n")
-        f.flush()
-        try:
-            os.fsync(f.fileno())
-        except Exception:
-            pass
-    os.replace(tmp, out)
-    return out
+            yield json.dumps(_record_dict(m), ensure_ascii=False) + "\n"
+
+    return atomic_write_lines(out_path, _lines(), newline="\n")

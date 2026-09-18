@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from rich.text import Text
 
-from trace_core.cases.domain import CaseStatus
+from trace_core.cases.domain import Case, CaseStatus
 from trace_core.cases.dto import CaseResponseDto
 from trace_core.cases.renderers import render_case_detail, render_case_table
 from trace_core.core.cli.error_handler import _resolve_error_details, render_error_card
@@ -20,7 +20,6 @@ from trace_core.core.ui.renderers import (
     get_warning_icon,
     render_entity_panel,
     render_json,
-    render_table,
 )
 
 pytestmark = pytest.mark.unit
@@ -49,23 +48,7 @@ def test_format_status_badge() -> None:
     assert "UNKNOWN STATUS" in badge_custom.plain
 
 
-def test_render_table_and_json(sample_case: CaseResponseDto) -> None:
-    # Test table render with content
-    render_table(
-        title="Active Evidence List",
-        columns=[("Column A", {"style": "cyan"}), ("Column B", {"style": "white"})],
-        rows=[["Row 1", "Value 1"], ["Row 2", "Value 2"]],
-        caption="Sample Table Caption",
-    )
-
-    # Test table render empty
-    render_table(
-        title="Empty Table",
-        columns=[("Col", {})],
-        rows=[],
-        empty_message="Custom empty message",
-    )
-
+def test_render_json(sample_case: CaseResponseDto) -> None:
     # Test JSON render
     render_json([sample_case])
     render_json({"key": "value", "count": 42})
@@ -82,35 +65,39 @@ def test_render_case_table(sample_cases_batch: list[CaseResponseDto]) -> None:
 def test_render_case_detail_open_and_closed(sample_case: CaseResponseDto) -> None:
     render_case_detail(sample_case)
 
-    # Test with closed case
-    closed_case = CaseResponseDto(
-        id=uuid4(),
-        number="2026-CR-9999",
-        title="Closed Investigation",
-        description="Completed analysis",
-        lead_examiner="Chief Investigator",
-        status=CaseStatus.CLOSED,
-        tags=["closed"],
-        opened_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-        closed_at=datetime.now(UTC),
-        is_deleted=False,
+    # Test with closed case (via production from_domain factory)
+    closed_case = CaseResponseDto.from_domain(
+        Case(
+            id=uuid4(),
+            number="2026-CR-9999",
+            title="Closed Investigation",
+            description="Completed analysis",
+            lead_examiner="Chief Investigator",
+            status=CaseStatus.CLOSED,
+            tags=["closed"],
+            opened_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            closed_at=datetime.now(UTC),
+            is_deleted=False,
+        )
     )
     render_case_detail(closed_case)
 
     # Test with deleted/archived case
-    deleted_case = CaseResponseDto(
-        id=uuid4(),
-        number="2026-CR-0000",
-        title="Deleted Case",
-        description=None,
-        lead_examiner="Investigator Archived",
-        status=CaseStatus.OPEN,
-        tags=[],
-        opened_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-        closed_at=None,
-        is_deleted=True,
+    deleted_case = CaseResponseDto.from_domain(
+        Case(
+            id=uuid4(),
+            number="2026-CR-0000",
+            title="Deleted Case",
+            description=None,
+            lead_examiner="Investigator Archived",
+            status=CaseStatus.OPEN,
+            tags=[],
+            opened_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            closed_at=None,
+            is_deleted=True,
+        )
     )
     render_case_detail(deleted_case)
 
@@ -318,16 +305,18 @@ def test_responsive_rendering_across_terminal_sizes(monkeypatch: pytest.MonkeyPa
     from trace_core.cli.shell import InteractiveShell
     from trace_core.core.ui.renderers import console
 
-    case = CaseResponseDto(
-        id=uuid4(),
-        number="2026-CR-0001",
-        title="Forensic Workstation Disk Inspection with Very Long Title For Testing",
-        lead_examiner="Nirjar",
-        status=CaseStatus.OPEN,
-        tags=["laptop", "ssd", "forensic"],
-        opened_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-        is_deleted=False,
+    case = CaseResponseDto.from_domain(
+        Case(
+            id=uuid4(),
+            number="2026-CR-0001",
+            title="Forensic Workstation Disk Inspection with Very Long Title For Testing",
+            lead_examiner="Nirjar",
+            status=CaseStatus.OPEN,
+            tags=["laptop", "ssd", "forensic"],
+            opened_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            is_deleted=False,
+        )
     )
 
     event = AuditEventDto(

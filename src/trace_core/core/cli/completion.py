@@ -32,9 +32,13 @@ def _service_key(service: Any, kind: str, extra: str = "") -> str:
 
 
 def cached_complete(
-    kind: str, service: Any, loader: Callable[[], list[tuple[str, str]]], limit: int = 8, extra: str = ""
+    kind: str,
+    service: Any,
+    loader: Callable[[], list[tuple[str, str]]],
+    limit: int | None = 8,
+    extra: str = "",
 ) -> list[tuple[str, str]]:
-    """Single source for cached completion loaders. try/except→[], slice to limit."""
+    """Single source for cached completion loaders. try/except→[], slice to limit (None: loader bounds)."""
 
     def _safe() -> list[tuple[str, str]]:
         try:
@@ -42,7 +46,8 @@ def cached_complete(
         except Exception:
             return []
 
-    return _cached(_service_key(service, kind, extra), _safe)[:limit]
+    rows = _cached(_service_key(service, kind, extra), _safe)
+    return rows if limit is None else rows[:limit]
 
 
 def _fetch_cases(case_service: Any, include_deleted: bool = False) -> list[Any]:
@@ -152,31 +157,32 @@ def _group_ranked(ranked: list[Any]) -> tuple[dict[str, list[Any]], list[str]]:
     return grouped, order
 
 
-def _grouped_rows(grouped: dict[str, list[Any]], order: list[str], cap: int) -> list[tuple[str, str]]:
-    """Flatten grouped cases to rows with group headers, capped."""
+def _grouped_rows(grouped: dict[str, list[Any]], order: list[str], limit: int) -> list[tuple[str, str]]:
+    """Flatten grouped cases to rows. Headers never consume the limit."""
     out: list[tuple[str, str]] = []
+    shown = 0
     for pref in order:
+        if shown >= limit:
+            break
         # header as non-insertable separator (text="" display="── CR ──")
         if len(order) > 1:
             out.append(("", f"── {pref} ──"))
         for c in grouped[pref]:
-            out.append(preview_case(c))
-            if len(out) >= cap:
+            if shown >= limit:
                 break
-        if len(out) >= cap:
-            break
+            out.append(preview_case(c))
+            shown += 1
     return out
 
 
 def complete_from_cases(case_service: Any, active_number: str | None = None, limit: int = 8) -> list[tuple[str, str]]:
     """Case-number completions ranked active→recent→open, grouped by prefix CR/NR/CLI, cached 2s, limit 8."""
-    cap = limit + 4  # room for group headers
 
     def _load() -> list[tuple[str, str]]:
         ranked = rank_cases(_fetch_cases(case_service, include_deleted=True), active_number)
-        return _grouped_rows(*_group_ranked(ranked), cap)
+        return _grouped_rows(*_group_ranked(ranked), limit)
 
-    return cached_complete("cases", case_service, _load, cap, extra=active_number or "")
+    return cached_complete("cases", case_service, _load, None, extra=active_number or "")
 
 
 def complete_tags(case_service: Any, limit: int = 8) -> list[tuple[str, str]]:

@@ -27,25 +27,73 @@ else
     if [ ! -f "$REPO_ROOT/pyproject.toml" ]; then
         mkdir -p "$TRACE_HOME"
         TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+        # Pinned ref: set TRACE_REF to a signed release tag in production (default tracks main).
+        TRACE_REF="${TRACE_REF:-main}"
+        case "$TRACE_REF" in
+            v*) REF_KIND="tags" ;;
+            *) REF_KIND="heads" ;;
+        esac
         if [ -n "$TOKEN" ]; then
-            CLONE_URL="https://${TOKEN}@github.com/nirjxr26/Trace.git"
             AUTH_HEADER="Authorization: Bearer ${TOKEN}"
         else
-            CLONE_URL="https://github.com/nirjxr26/Trace.git"
             AUTH_HEADER=""
         fi
 
         if command -v git >/dev/null 2>&1; then
-            printf "Cloning repository via git...\n"
-            git clone --depth 1 "$CLONE_URL" "$REPO_ROOT"
+            printf "Cloning repository via git (ref: %s)...\n" "$TRACE_REF"
+            if [ -n "$TOKEN" ]; then
+                # Never put secrets in the remote URL: GIT_ASKPASS answers the
+                # credential prompt from the environment, so nothing is persisted
+                # in .git/config and the token never appears in process listings.
+                ASKPASS_FILE="$(mktemp)"
+                { echo '#!/usr/bin/env sh'; echo 'exec printf "%s" "$TRACE_GIT_TOKEN"'; } > "$ASKPASS_FILE"
+                chmod 700 "$ASKPASS_FILE"
+                TRACE_GIT_TOKEN="$TOKEN" GIT_ASKPASS="$ASKPASS_FILE" GIT_TERMINAL_PROMPT=0 \
+                    git clone --depth 1 --branch "$TRACE_REF" https://github.com/nirjxr26/Trace.git "$REPO_ROOT"
+                rm -f "$ASKPASS_FILE"
+                unset TRACE_GIT_TOKEN
+            else
+                git clone --depth 1 --branch "$TRACE_REF" https://github.com/nirjxr26/Trace.git "$REPO_ROOT"
+            fi
         else
             printf "Downloading repository archive...\n"
-            ARCHIVE_URL="https://github.com/nirjxr26/Trace/archive/refs/heads/main.tar.gz"
+            ARCHIVE_URL="https://github.com/nirjxr26/Trace/archive/refs/${REF_KIND}/${TRACE_REF}.tar.gz"
             mkdir -p "$REPO_ROOT"
-            if [ -n "$AUTH_HEADER" ]; then
-                curl --proto '=https' --proto-redir '=https' -fsSL -H "$AUTH_HEADER" "$ARCHIVE_URL" | tar -xz --strip-components=1 -C "$REPO_ROOT"
+            if [ -n "${TRACE_RELEASE_SHA256:-}" ]; then
+                # Pinned release: verify digest before extraction, fail closed on mismatch.
+                if ! command -v sha256sum >/dev/null 2>&1; then
+                    printf "  [!] sha256sum missing: cannot verify pinned release. Aborting.\n" >&2
+                    exit 1
+                fi
+                ARCHIVE_FILE="$(mktemp)"
+                if [ -n "$AUTH_HEADER" ]; then
+                    curl --proto '=https' --proto-redir '=https' -fsSL -H "$AUTH_HEADER" -o "$ARCHIVE_FILE" "$ARCHIVE_URL"
+                else
+                    curl --proto '=https' --proto-redir '=https' -fsSL -o "$ARCHIVE_FILE" "$ARCHIVE_URL"
+                fi
+                ACTUAL_SHA="$(sha256sum "$ARCHIVE_FILE" | cut -d' ' -f1)"
+                if [ "$ACTUAL_SHA" != "$TRACE_RELEASE_SHA256" ]; then
+                    printf "  [!] Release digest mismatch: refusing to install.\n" >&2
+                    rm -f "$ARCHIVE_FILE"
+                    exit 1
+                fi
+                if [ -n "${TRACE_COSIGN_BUNDLE_URL:-}" ] && command -v cosign >/dev/null 2>&1; then
+                    curl --proto '=https' --proto-redir '=https' -fsSL -o "${ARCHIVE_FILE}.sigstore.json" "$TRACE_COSIGN_BUNDLE_URL"
+                    cosign verify-blob --bundle "${ARCHIVE_FILE}.sigstore.json" \
+                        --certificate-identity "${TRACE_COSIGN_IDENTITY:?set TRACE_COSIGN_IDENTITY}" \
+                        --certificate-oidc-issuer "${TRACE_COSIGN_OIDC_ISSUER:-https://token.actions.githubusercontent.com}" \
+                        "$ARCHIVE_FILE"
+                    rm -f "${ARCHIVE_FILE}.sigstore.json"
+                fi
+                tar -xz --strip-components=1 -C "$REPO_ROOT" -f "$ARCHIVE_FILE"
+                rm -f "$ARCHIVE_FILE"
             else
-                curl --proto '=https' --proto-redir '=https' -fsSL "$ARCHIVE_URL" | tar -xz --strip-components=1 -C "$REPO_ROOT"
+                printf "  [!] No TRACE_RELEASE_SHA256 pinned: installing unverified %s.\n" "$TRACE_REF"
+                if [ -n "$AUTH_HEADER" ]; then
+                    curl --proto '=https' --proto-redir '=https' -fsSL -H "$AUTH_HEADER" "$ARCHIVE_URL" | tar -xz --strip-components=1 -C "$REPO_ROOT"
+                else
+                    curl --proto '=https' --proto-redir '=https' -fsSL "$ARCHIVE_URL" | tar -xz --strip-components=1 -C "$REPO_ROOT"
+                fi
             fi
         fi
     fi
@@ -110,7 +158,8 @@ if command -v uv >/dev/null 2>&1; then
     uv pip install --no-deps -e . --python "$VENV_PYTHON"
 else
     printf "  Using pip with cryptographic hash verification...\n"
-    "$VENV_PYTHON" -m pip install --quiet --upgrade pip
+    # Pinned bootstrap toolchain (rotate with the lockfile, verify with: pip index versions pip)
+    "$VENV_PYTHON" -m pip install --quiet "pip==26.2.1"
     "$VENV_PYTHON" -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
     "$VENV_PYTHON" -m pip install --quiet --no-deps -e .
 fi
@@ -122,6 +171,7 @@ if [ ! -f "$SCRIPT_DIR/.env" ]; then
     if [ -f "$SCRIPT_DIR/.env.example" ]; then
         cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"
         printf "  \033[1;32m[OK] Created .env from template (.env.example).\033[0m\n"
+        printf "  \033[1;33m[!] Set a strong TRACE_DATABASE_URL password and TRACE_SECRET_KEY before production use.\033[0m\n"
     fi
 else
     printf "  \033[1;32m[OK] Existing .env file preserved.\033[0m\n"

@@ -78,7 +78,10 @@ class AuditService(BaseService):
         from trace_core.audit.builder import _ctx as builder_ctx
         from trace_core.audit.builder import merge_details_context
         from trace_core.audit.repository import SqlAlchemyAuditRepository
+        from trace_core.core.errors import ValidationError
 
+        if len(actor) > 255:
+            raise ValidationError("Actor identifier exceeds maximum length of 255 characters.")
         ctx_obj = ctx
         if ctx_obj is None:
             ctx_obj = builder_ctx(None)
@@ -87,6 +90,8 @@ class AuditService(BaseService):
                     host=ctx_obj.host,
                     trace_version=ctx_obj.trace_version,
                     command=f"{action.value} {subject.number}",
+                    os_user=ctx_obj.os_user,
+                    session_id=ctx_obj.session_id,
                 )
         merged = merge_details_context(details or {}, ctx_obj)
         return SqlAlchemyAuditRepository(session).append(action, actor, subject.number, subject.id, merged)
