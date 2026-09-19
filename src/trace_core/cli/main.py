@@ -29,6 +29,14 @@ def launch_tui() -> None:
     run_tui()
 
 
+@app.command("doctor")
+def launch_doctor() -> None:
+    """Run preflight diagnostics (runtime, database, migrations, storage)."""
+    from trace_core.core.cli.doctor import run_doctor
+
+    run_doctor()
+
+
 def version_callback(value: bool) -> None:
     if value:
         typer.echo(f"Trace v{settings.version}")

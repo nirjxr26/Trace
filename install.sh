@@ -185,19 +185,18 @@ else
     printf "  \033[1;32m[OK] Forensic storage directory exists.\033[0m\n"
 fi
 
-# 5. Database Initialization & Schema Migrations
-printf "\033[1;33m[5/6] Initializing database and running schema migrations...\033[0m\n"
+# 5. Database Proof Gate (automatic init + migrate + verify in one run)
+printf "\033[1;33m[5/6] Verifying database (auto-initializes schema on first use)...\033[0m\n"
 if [ "${SKIP_DB_MIGRATION:-0}" != "1" ]; then
     TRACE_BIN="$VENV_DIR/bin/trace"
-    if "$TRACE_BIN" db init >/dev/null 2>&1 && \
-       "$TRACE_BIN" db migrate >/dev/null 2>&1; then
-        printf "  \033[1;32m[OK] Database schema initialized and up to date.\033[0m\n"
+    if "$TRACE_BIN" doctor; then
+        printf "  \033[1;32m[OK] Database verified and up to date.\033[0m\n"
     else
-        printf "  \033[1;33m[!] Database connection failed or database server is offline.\033[0m\n"
-        printf "      You can configure TRACE_DATABASE_URL in .env and run 'trace db init' later.\033[0m\n"
+        printf "  \033[1;33m[!] Database unreachable. Trace will self-initialize on first use once it is reachable.\033[0m\n"
+        printf "      Start PostgreSQL or set TRACE_DATABASE_URL in .env, then run 'trace doctor' to verify.\033[0m\n"
     fi
 else
-    printf "  Skipping database migrations as requested.\n"
+    printf "  Skipping database verification as requested.\n"
 fi
 
 # 6. Expose 'trace' command globally

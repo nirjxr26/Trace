@@ -186,21 +186,20 @@ if (-not (Test-Path $DefaultStorage)) {
     Write-Host "  [OK] Forensic storage directory exists." -ForegroundColor Green
 }
 
-# 5. Database Initialization & Schema Migrations
-Write-Host "[5/6] Initializing database and running schema migrations..." -ForegroundColor Yellow
+# 5. Database Proof Gate (automatic init + migrate + verify in one run)
+Write-Host "[5/6] Verifying database (auto-initializes schema on first use)..." -ForegroundColor Yellow
 $TraceExe = Join-Path $VenvDir "Scripts\trace.exe"
 
 if (-not $SkipDbMigration) {
-    & $TraceExe db init 2>$null
-    & $TraceExe db migrate 2>$null
+    & $TraceExe doctor
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "  [OK] Database schema initialized and up to date." -ForegroundColor Green
+        Write-Host "  [OK] Database verified and up to date." -ForegroundColor Green
     } else {
-        Write-Host "  [!] Database connection failed or database server is offline." -ForegroundColor Yellow
-        Write-Host "      You can configure TRACE_DATABASE_URL in .env and run 'trace db init' later." -ForegroundColor Yellow
+        Write-Host "  [!] Database unreachable. Trace will self-initialize on first use once it is reachable." -ForegroundColor Yellow
+        Write-Host "      Start PostgreSQL or set TRACE_DATABASE_URL in .env, then run 'trace doctor' to verify." -ForegroundColor Yellow
     }
 } else {
-    Write-Host "  Skipping database migrations as requested."
+    Write-Host "  Skipping database verification as requested."
 }
 
 # 6. Expose 'trace' command globally

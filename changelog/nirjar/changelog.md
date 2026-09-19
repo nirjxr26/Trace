@@ -1,9 +1,131 @@
 # Trace — Project Development Log
 
-> Maintained by: **Nirjar Goswami**  
+> Maintained by: **Nirjar Goswami**
 > Scope: Core Architecture, Database, Presentation Layer & Forensic TUI
 
----
+**About this log.** Append-only per-person record (newest at the bottom). Entries are never rewritten; structure lives in the Part dividers and the contents list below. Original record order is preserved — a few entries were recorded out of date order and stay where they were written. A byte-identical backup of the pre-restructure file is kept at `changelog.backup.2026-09-18.md`.
+
+**Legend.** `SEC-NN` = internal security-finding IDs (not CVEs — no CVE has ever been assigned to or found in this project). Each entry ends with its verification proof (tests / ruff / mypy).
+
+# Contents
+
+- **Part 1 — Foundation (cases, CLI, database, installers)** — Subpart 1 core, hardening phases, installers and pre-audit readiness.
+  - [2026-09-10 — Initial Architecture & Database Foundation](#2026-09-10--initial-architecture--database-foundation)
+  - [2026-09-11 — Application Services & CLI Framework](#2026-09-11--application-services--cli-framework)
+  - [2026-09-12 — Forensic TUI System, Quality Refactoring & Aesthetics](#2026-09-12--forensic-tui-system-quality-refactoring--aesthetics)
+  - [2026-09-12 — Transition to `trace` & Modular Feature Architecture](#2026-09-12--transition-to-trace--modular-feature-architecture)
+  - [2026-09-12 — Maximum TUI Reusability Engine & CI/CD Pipeline Fix](#2026-09-12--maximum-tui-reusability-engine--cicd-pipeline-fix)
+  - [2026-09-12 — Subpart 1 Hardening: Phase 1 (Forensic Domain Invariants & State Machine)](#2026-09-12--subpart-1-hardening-phase-1-forensic-domain-invariants--state-machine)
+  - [2026-09-12 — Subpart 1 Hardening: Phase 2 (Concurrency, Sequence Safety & Error Narrowing)](#2026-09-12--subpart-1-hardening-phase-2-concurrency-sequence-safety--error-narrowing)
+  - [2026-09-12 — Subpart 1 Hardening: Phase 3 (Database Decoupling, Migrations & Startup Hygiene)](#2026-09-12--subpart-1-hardening-phase-3-database-decoupling-migrations--startup-hygiene)
+  - [2026-09-12 — Subpart 1 Hardening: Phase 4 (Query Engine, Pagination, Purge Policy & UI/CLI Polish)](#2026-09-12--subpart-1-hardening-phase-4-query-engine-pagination-purge-policy--uicli-polish)
+  - [2026-09-12 — Subpart 1 Hardening: Phase 5 (CI/CD Pipeline, PostgreSQL Integration & Documentation)](#2026-09-12--subpart-1-hardening-phase-5-cicd-pipeline-postgresql-integration--documentation)
+  - [2026-09-12 — Indian Standard Time (IST) Presentation Formatting](#2026-09-12--indian-standard-time-ist-presentation-formatting)
+  - [2026-09-12 — Repository Hygiene: Gitignore & Unused Artifact Removal](#2026-09-12--repository-hygiene-gitignore--unused-artifact-removal)
+  - [2026-09-12 — SonarCloud Issue Remediation & Security Hardening](#2026-09-12--sonarcloud-issue-remediation--security-hardening)
+  - [2026-09-12 — Cross-Platform Automated Installers (`install.ps1` & `install.sh`)](#2026-09-12--cross-platform-automated-installers-installps1--installsh)
+  - [2026-09-12 — Architecture Hardening (changes_need_to_make_2.txt) — Part 1: High-Priority P0 Invariants](#2026-09-12--architecture-hardening-changes_need_to_make_2txt--part-1-high-priority-p0-invariants)
+  - [2026-09-12 — Remote Single-Command Installation (`irm | iex` & `curl | sh`)](#2026-09-12--remote-single-command-installation-irm--iex--curl--sh)
+  - [2026-09-12 — Subpart-2 Readiness: Pre-Audit Hardening (UoW, Actor, Archive, Canonical)](#2026-09-12--subpart-2-readiness-pre-audit-hardening-uow-actor-archive-canonical)
+  - [2026-09-12 — Max Reusability Pass: Zero-Duplication Extraction (Same Branch)](#2026-09-12--max-reusability-pass-zero-duplication-extraction-same-branch)
+  - [2026-09-12 — Deep Reusability Pass 2: Whole-Codebase Deduplication](#2026-09-12--deep-reusability-pass-2-whole-codebase-deduplication)
+  - [2026-09-12 — SonarLint + Pylance Remediation (S1192, S3776, reconfigure)](#2026-09-12--sonarlint--pylance-remediation-s1192-s3776-reconfigure)
+  - [2026-09-12 — Deep Reusability Pass 3: Full-Codebase Sweep](#2026-09-12--deep-reusability-pass-3-full-codebase-sweep)
+  - [2026-09-12 — Fix: `case list` Execution Error on Stale Databases (Migration 004)](#2026-09-12--fix-case-list-execution-error-on-stale-databases-migration-004)
+- **Part 2 — Audit ledger (Subpart 2)** — Tamper-evident ledger, 5W1H enrichment, layered architecture and polish.
+  - [2026-09-13 — Subpart 2: Tamper-Evident Audit Ledger (Production-Grade)](#2026-09-13--subpart-2-tamper-evident-audit-ledger-production-grade)
+  - [2026-09-13 — Audit 5W1H + Human Verify + Compact Table (V1.1)](#2026-09-13--audit-5w1h--human-verify--compact-table-v11)
+  - [2026-09-13 — Audit Layered Architecture (Long-Term, No UX Change)](#2026-09-13--audit-layered-architecture-long-term-no-ux-change)
+  - [2026-09-13 — Subpart-1/2 Final Solidity (No Future-Proofing)](#2026-09-13--subpart-12-final-solidity-no-future-proofing)
+  - [2026-09-13 — Subpart-1/2 Solidity Hardening (No Future-Proofing)](#2026-09-13--subpart-12-solidity-hardening-no-future-proofing)
+  - [2026-09-13 — Ship Now (Indexes, DTO Cap, get_db, Property, pip-audit, make_case)](#2026-09-13--ship-now-indexes-dto-cap-get_db-property-pip-audit-make_case)
+  - [2026-09-13 — Simplicity & Complexity Pass (CCN>15 → ≤12)](#2026-09-13--simplicity--complexity-pass-ccn15--12)
+  - [2026-09-13 — Forensic Polish (1-4 + 5 Anchor + 6-9)](#2026-09-13--forensic-polish-1-4--5-anchor--6-9)
+  - [2026-09-13 — Dropdown & Case List Grouping (Only Preview, CR/NR/CLI)](#2026-09-13--dropdown--case-list-grouping-only-preview-crnrcli)
+  - [2026-09-13 — Docs: Subpart-2 Detailed (like Subpart-1)](#2026-09-13--docs-subpart-2-detailed-like-subpart-1)
+- **Part 3 — Responsive UI, dossiers & fullscreen TUI** — Responsive engine, dossier rhythm passes, Textual console and polish.
+  - [2026-09-13 — Responsive TUI Engine (XS, MD, LG, XL & Height-Aware UX)](#2026-09-13--responsive-tui-engine-xs-md-lg-xl--height-aware-ux)
+  - [2026-09-13 — Responsive Reuse Pass (minimal, no textual)](#2026-09-13--responsive-reuse-pass-minimal-no-textual)
+  - [2026-09-13 — Fix wrapping in case list (width budget)](#2026-09-13--fix-wrapping-in-case-list-width-budget)
+  - [2026-09-13 — Whole-app responsive (every screen)](#2026-09-13--whole-app-responsive-every-screen)
+  - [2026-09-13 — Live resize redraw (no retype)](#2026-09-13--live-resize-redraw-no-retype)
+  - [2026-09-13 — Fix ANSI leak on legacy cmd (`?[2J` garble)](#2026-09-13--fix-ansi-leak-on-legacy-cmd-2j-garble)
+  - [2026-09-13 — Proper polling + invalidation (no thread, no clear-as-primary)](#2026-09-13--proper-polling--invalidation-no-thread-no-clear-as-primary)
+  - [2026-09-13 — Remove toolbar, true live re-render (no Enter, no retype)](#2026-09-13--remove-toolbar-true-live-re-render-no-enter-no-retype)
+  - [2026-09-13 — Cap tables at laptop width, drop live-watch dead code](#2026-09-13--cap-tables-at-laptop-width-drop-live-watch-dead-code)
+  - [2026-09-13 — DB refresh: wipe junk, reseed live demo set](#2026-09-13--db-refresh-wipe-junk-reseed-live-demo-set)
+  - [2026-09-13 — Phase A trust fixes (production-readiness register)](#2026-09-13--phase-a-trust-fixes-production-readiness-register)
+  - [2026-09-13 — Phase B reuse pass (delete + unify)](#2026-09-13--phase-b-reuse-pass-delete--unify)
+  - [2026-09-13 — Phase C UX honesty (say what it does)](#2026-09-13--phase-c-ux-honesty-say-what-it-does)
+  - [2026-09-13 — Leftover sweep (register §F cleared)](#2026-09-13--leftover-sweep-register-f-cleared)
+  - [2026-09-13 — Max-reuse + writing-quality sweep (UX deferred)](#2026-09-13--max-reuse--writing-quality-sweep-ux-deferred)
+  - [2026-09-13 — Max-reuse sweep (one source per behavior)](#2026-09-13--max-reuse-sweep-one-source-per-behavior)
+  - [2026-09-14 — Audit detail to professional dossier (no icons, CHANGES, INTEGRITY)](#2026-09-14--audit-detail-to-professional-dossier-no-icons-changes-integrity)
+  - [2026-09-14 — Audit detail hierarchy pass (20-point review applied)](#2026-09-14--audit-detail-hierarchy-pass-20-point-review-applied)
+  - [2026-09-14 — Case dossier in audit-detail language](#2026-09-14--case-dossier-in-audit-detail-language)
+  - [2026-09-14 — Detail-view max-reuse (one dossier language)](#2026-09-14--detail-view-max-reuse-one-dossier-language)
+  - [2026-09-14 — Alignment fixes (CHANGES indent + tight columns, case status indent)](#2026-09-14--alignment-fixes-changes-indent--tight-columns-case-status-indent)
+  - [2026-09-14 — CHANGES divider breathing room](#2026-09-14--changes-divider-breathing-room)
+  - [2026-09-14 — Case dossier section dividers](#2026-09-14--case-dossier-section-dividers)
+  - [2026-09-14 — Dossier rhythm pass (equal padding everywhere)](#2026-09-14--dossier-rhythm-pass-equal-padding-everywhere)
+  - [2026-09-14 — Tighter dossier rhythm](#2026-09-14--tighter-dossier-rhythm)
+  - [2026-09-14 — CHANGES header indent](#2026-09-14--changes-header-indent)
+  - [2026-09-14 — Textual fullscreen console (pilot built, all four screens)](#2026-09-14--textual-fullscreen-console-pilot-built-all-four-screens)
+  - [2026-09-14 — TUI escape + scroll (unstick every modal)](#2026-09-14--tui-escape--scroll-unstick-every-modal)
+  - [2026-09-14 — Case form focus + Enter flow (typing actually works)](#2026-09-14--case-form-focus--enter-flow-typing-actually-works)
+  - [2026-09-14 — Full-size form inputs (compact was untypeable-feeling)](#2026-09-14--full-size-form-inputs-compact-was-untypeable-feeling)
+  - [2026-09-14 — Prettier case form (round inputs, centered header + buttons)](#2026-09-14--prettier-case-form-round-inputs-centered-header--buttons)
+  - [2026-09-14 — Integrity & Database as structured cards](#2026-09-14--integrity--database-as-structured-cards)
+  - [2026-09-14 — 2-per-row form + dossier section breathing room](#2026-09-14--2-per-row-form--dossier-section-breathing-room)
+  - [2026-09-14 — Audit + form + confirm polish (4-image sweep)](#2026-09-14--audit--form--confirm-polish-4-image-sweep)
+  - [2026-09-14 — Fix clipped form buttons + soften outer border (create/edit reuse)](#2026-09-14--fix-clipped-form-buttons--soften-outer-border-createedit-reuse)
+  - [2026-09-14 — TUI declutter (slim table, cards, dossier hierarchy)](#2026-09-14--tui-declutter-slim-table-cards-dossier-hierarchy)
+  - [2026-09-14 — Audit tab declutter (mirrors Cases)](#2026-09-14--audit-tab-declutter-mirrors-cases)
+  - [2026-09-14 — TUI pure-black background](#2026-09-14--tui-pure-black-background)
+  - [2026-09-14 — Dossier breathing room](#2026-09-14--dossier-breathing-room)
+  - [2026-09-14 — Textual TUI blueprint (plan only, no code)](#2026-09-14--textual-tui-blueprint-plan-only-no-code)
+  - [2026-09-14 — Process decisions recorded (no code change)](#2026-09-14--process-decisions-recorded-no-code-change)
+- **Part 4 — Production hardening & security program** — Trust fixes, reuse passes, assessments (SEC-01…27), remediation batches, Ed25519/RBAC/anchors, tooling, Subpart-3 planning and release hygiene.
+  - [2026-09-13 — Phase D production hardening (database honest at last)](#2026-09-13--phase-d-production-hardening-database-honest-at-last)
+  - [2026-09-16 — Code reusability refactor (pure, no logic/UI change)](#2026-09-16--code-reusability-refactor-pure-no-logicui-change)
+  - [2026-09-16 — SonarQube 45-issue remediation (no logic/UI change)](#2026-09-16--sonarqube-45-issue-remediation-no-logicui-change)
+  - [2026-09-16 — CI mypy `src tests` fix (msvcrt attr-defined)](#2026-09-16--ci-mypy-src-tests-fix-msvcrt-attr-defined)
+  - [2026-09-16 — SonarQube 7-issue follow-up (no logic/UI change)](#2026-09-16--sonarqube-7-issue-follow-up-no-logicui-change)
+  - [2026-09-16 — Pylance diagnostics (3 errors, 2 sites)](#2026-09-16--pylance-diagnostics-3-errors-2-sites)
+  - [2026-09-16 — CI collection failure + TUI speed (no behavior change)](#2026-09-16--ci-collection-failure--tui-speed-no-behavior-change)
+  - [2026-09-16 — Authorized white-box security assessment (no source changes)](#2026-09-16--authorized-white-box-security-assessment-no-source-changes)
+  - [2026-09-16 — Security assessment round 2: identity, terminal, identifiers (no source changes)](#2026-09-16--security-assessment-round-2-identity-terminal-identifiers-no-source-changes)
+  - [2026-09-17 — Security assessment round 3: forensic-logic flaws (no source changes)](#2026-09-17--security-assessment-round-3-forensic-logic-flaws-no-source-changes)
+  - [2026-09-17 — Security assessment round 4: 360 sweep (no source changes)](#2026-09-17--security-assessment-round-4-360-sweep-no-source-changes)
+  - [2026-09-18 — Batch 1 input containment implemented (SEC-02/03/06/07/08)](#2026-09-18--batch-1-input-containment-implemented-sec-0203060708)
+  - [2026-09-18 — Batch 2 lifecycle integrity (SEC-09/10/11/13/15, SEC-04)](#2026-09-18--batch-2-lifecycle-integrity-sec-0910111315-sec-04)
+  - [2026-09-18 — Batch 3 error boundaries (SEC-12/14)](#2026-09-18--batch-3-error-boundaries-sec-1214)
+  - [2026-09-18 — Batch 4 HMAC ledger envelope (SEC-01 interim)](#2026-09-18--batch-4-hmac-ledger-envelope-sec-01-interim)
+  - [2026-09-18 — Batch 5 attribution (SEC-05 partial)](#2026-09-18--batch-5-attribution-sec-05-partial)
+  - [2026-09-18 — Batch 6 DB + storage (SEC-16/18/20/21/22/23)](#2026-09-18--batch-6-db--storage-sec-161820212223)
+  - [2026-09-18 — Batch 7 installer + release + CI (SEC-19/24/25/26/27)](#2026-09-18--batch-7-installer--release--ci-sec-1924252627)
+  - [2026-09-18 — Ed25519 + RBAC + anchor outbox + TRACE_ENV + sealed exports](#2026-09-18--ed25519--rbac--anchor-outbox--trace_env--sealed-exports)
+  - [2026-09-17 — Master-brief review: changes required before implementation](#2026-09-17--master-brief-review-changes-required-before-implementation)
+  - [2026-09-17 — External 26-point review adjudication (no source changes)](#2026-09-17--external-26-point-review-adjudication-no-source-changes)
+  - [2026-09-16 — CI speed-up (same checks, less redundant work)](#2026-09-16--ci-speed-up-same-checks-less-redundant-work)
+  - [2026-09-18 — Validator centralization + lookup hardening (grammar decision)](#2026-09-18--validator-centralization--lookup-hardening-grammar-decision)
+  - [2026-09-18 — Reusability pass over old + new code](#2026-09-18--reusability-pass-over-old--new-code)
+  - [2026-09-18 — SonarLint cleanup (S6353/S3776/S1192/S9073)](#2026-09-18--sonarlint-cleanup-s6353s3776s1192s9073)
+  - [2026-09-18 — SonarLint + Pylance cleanup (S3776/Pylance ×2)](#2026-09-18--sonarlint--pylance-cleanup-s3776pylance-2)
+  - [2026-09-18 — PSScriptAnalyzer cleanup (install.ps1)](#2026-09-18--psscriptanalyzer-cleanup-installps1)
+  - [2026-09-18 — CI pipeline end-to-end local replication (no repo changes)](#2026-09-18--ci-pipeline-end-to-end-local-replication-no-repo-changes)
+  - [2026-09-18 — Local pre-PR gate script (`check-pr.ps1`)](#2026-09-18--local-pre-pr-gate-script-check-prps1)
+  - [2026-09-18 — `check-pr.ps1` kept local-only (not for GitHub)](#2026-09-18--check-prps1-kept-local-only-not-for-github)
+  - [2026-09-18 — Sonar Blocker + pytest hygiene (signing traversal, S5754 ×3)](#2026-09-18--sonar-blocker--pytest-hygiene-signing-traversal-s5754-3)
+  - [2026-09-18 — Subpart 3 build plan (`docs/subparts/subpart-3.md`)](#2026-09-18--subpart-3-build-plan-docssubpartssubpart-3md)
+  - [2026-09-18 — Subpart 3 plan revised per design review (8.7→spec 10/10)](#2026-09-18--subpart-3-plan-revised-per-design-review-87spec-1010)
+  - [2026-09-18 — Subpart 3 plan round 2 (reviewer follow-ups A–F, doc-only)](#2026-09-18--subpart-3-plan-round-2-reviewer-follow-ups-af-doc-only)
+  - [2026-09-18 — Devices TUI blueprint (`docs/blueprints/devices_tui.md`)](#2026-09-18--devices-tui-blueprint-docsblueprintsdevices_tuimd)
+  - [2026-09-18 — Decision: CLI + TUI both permanent (no removal, ever)](#2026-09-18--decision-cli--tui-both-permanent-no-removal-ever)
+
+# Part 1 — Foundation (cases, CLI, database, installers)
+
+>Subpart 1 core, hardening phases, installers and pre-audit readiness.
 
 ## 2026-09-10 — Initial Architecture & Database Foundation
 
@@ -14,6 +136,8 @@
   - Created initial schema migration (`001_initial_schema.sql`) with JSONB tags and soft-delete support.
   - Implemented generic repository pattern in `BaseRepository` with parameterized SQL to prevent SQL injection.
 - **Git Hygiene**: Created production-grade `.gitignore` safeguarding evidence files (`.dd`, `.e01`, `.raw`, `.vmdk`), dumps, credentials, and environment files.
+
+---
 
 ---
 
@@ -28,6 +152,8 @@
   - Added support for natural aliases (`list cases`, `create case`).
 - **Typer Command Group**: Built standalone CLI commands for non-interactive scripting (`trace case create`, `trace case list`, etc.).
 - **Unit & Integration Test Suite**: Implemented 22 comprehensive tests covering models, services, transactions, and CLI commands.
+
+---
 
 ---
 
@@ -59,6 +185,8 @@
 
 ---
 
+---
+
 ## 2026-09-12 — Transition to `trace` & Modular Feature Architecture
 
 - **Project Command Standardized to `trace`**:
@@ -75,6 +203,8 @@
     - Consolidated interactive identifier resolution and user prompting into reusable `_resolve_or_prompt_identifier`, eliminating duplicated prompts across 5 case action handlers.
     - Split composite assertions in `tests/unit/test_shell.py` (SonarLint S9073).
     - Increased test coverage to 73.92% with 100% pass rate (32/32 tests).
+
+---
 
 ---
 
@@ -105,6 +235,8 @@
 
 ---
 
+---
+
 ## 2026-09-12 — Subpart 1 Hardening: Phase 1 (Forensic Domain Invariants & State Machine)
 
 - **Permanently Sealed `CLOSED` State**:
@@ -127,6 +259,8 @@
 
 ---
 
+---
+
 ## 2026-09-12 — Subpart 1 Hardening: Phase 2 (Concurrency, Sequence Safety & Error Narrowing)
 
 - **Optimistic Concurrency Control (OCC)**:
@@ -145,6 +279,8 @@
   - Created `tests/unit/test_case_concurrency.py` covering optimistic lock collisions, sequence allocations, integrity error translation, and custom clocks.
   - Test suite expanded to 43 passing unit tests (100% pass rate).
   - 0 Ruff lint/formatting errors, 0 Mypy type issues across 42 source files.
+
+---
 
 ---
 
@@ -179,6 +315,8 @@
 
 ---
 
+---
+
 ## 2026-09-12 — Subpart 1 Hardening: Phase 4 (Query Engine, Pagination, Purge Policy & UI/CLI Polish)
 
 - **Wired Pagination into Repository & Service (P1-4)**:
@@ -201,6 +339,8 @@
   - Test suite expanded to 54 passing unit tests (100% pass rate).
   - Test branch coverage maintained at 77.82% (exceeding 70% threshold).
   - Clean Ruff linting (0 errors) and strict Mypy typing (0 issues across 46 source files).
+
+---
 
 ---
 
@@ -227,6 +367,8 @@
 
 ---
 
+---
+
 ## 2026-09-12 — Indian Standard Time (IST) Presentation Formatting
 
 - **Indian Datetime Presentation**:
@@ -243,6 +385,8 @@
 
 ---
 
+---
+
 ## 2026-09-12 — Repository Hygiene: Gitignore & Unused Artifact Removal
 
 - **Artifact Deletion**:
@@ -251,6 +395,8 @@
 - **Gitignore Hardening**:
   - Added `alembic.ini` to `.gitignore` under `# --- Local Databases & Transitory State ---`.
   - Added `.uv/` cache directory to `.gitignore`.
+
+---
 
 ---
 
@@ -277,6 +423,8 @@
 
 ---
 
+---
+
 ## 2026-09-12 — Cross-Platform Automated Installers (`install.ps1` & `install.sh`)
 
 - **Single-Command Automated Setup**:
@@ -289,6 +437,8 @@
   - Safely initializes database schema and migrations (`trace db init`, `trace db migrate`).
 - **Documentation**:
   - Updated `README.md` with 1-line installation instructions for Linux and Windows.
+
+---
 
 ---
 
@@ -313,6 +463,8 @@
   - All 59 tests passing (57 unit, 2 PostgreSQL integration).
   - Branch coverage: **77.05%** (exceeds 70% threshold).
   - 0 Ruff lint errors, 0 Mypy static typing issues across 47 source files.
+
+---
 
 ---
 
@@ -341,6 +493,8 @@
   - Cleanly formatted all files via `ruff format` to resolve CI formatting failures.
 - **CI PostgreSQL Service Configuration Fix**:
   - Aligned CI PostgreSQL container database name (`POSTGRES_DB: trace`) and explicitly passed `TRACE_DATABASE_URL` so that `trace db init` connects to the initialized database in CI without error.
+
+---
 
 ---
 
@@ -377,6 +531,8 @@
 
 ---
 
+---
+
 ## 2026-09-12 — Max Reusability Pass: Zero-Duplication Extraction (Same Branch)
 
 - **Render dispatch single source (`cases/renderers.py`)**:
@@ -389,6 +545,8 @@
   - Added `_sync_active_case(ctx, case)` + `_clear_active_if_matches(ctx, id)`. Replaced 5 repeated `if ctx.active_case and ...id ==` blocks (edit/close/delete/restore).
 - **Deliberately not extracted**: shell ghost-text/completer UX copy (pinned by `test_shell.py` string asserts, changes rarely — coupling to registry would add fragility for ~15 strings); `CaseService()` one-line fallbacks (3 sites, extraction adds API for no win).
 - **Verification**: 61 passed, 78.00% branch (up from 77.43%), 0 Ruff, 0 Mypy (50 files).
+
+---
 
 ---
 
@@ -411,6 +569,8 @@
 
 ---
 
+---
+
 ## 2026-09-12 — SonarLint + Pylance Remediation (S1192, S3776, reconfigure)
 
 - **S1192 commands.py (`cases/commands.py`)**:
@@ -422,6 +582,8 @@
 - **S3776 error_handler (`core/cli/error_handler.py`)**:
   - Extracted `_resolve_unexpected_error()` (debug-vs-sanitized tail) out of `_resolve_error_details`, dropping it from 17 to ~14 (limit 15). Typed branches untouched, behavior identical.
 - **Verification**: 61 passed, 78.98% branch, 0 Ruff check/format, 0 Mypy (50 files).
+
+---
 
 ---
 
@@ -441,6 +603,8 @@
 
 ---
 
+---
+
 ## 2026-09-12 — Fix: `case list` Execution Error on Stale Databases (Migration 004)
 
 - **Root cause**: `archived_by` was added to migration 002's backfill list, but databases that had already recorded 002 as applied never received the column. Reads then failed with `OperationalError: no such column: cases.archived_by`, surfaced in the shell as the sanitized `Execution Error → Verify database connectivity` card.
@@ -449,6 +613,12 @@
 - **Verification**: 62 passed, 0 Ruff check/format, 0 Mypy (50 files).
 
 ---
+
+---
+
+# Part 2 — Audit ledger (Subpart 2)
+
+>Tamper-evident ledger, 5W1H enrichment, layered architecture and polish.
 
 ## 2026-09-13 — Subpart 2: Tamper-Evident Audit Ledger (Production-Grade)
 
@@ -480,6 +650,8 @@
 
 ---
 
+---
+
 ## 2026-09-13 — Audit 5W1H + Human Verify + Compact Table (V1.1)
 
 > No schema change. Payload-only enrichment. Keeps `audit show` compact + adds `--seq` dossier; `verify` now easy + efficient.
@@ -495,6 +667,8 @@
 - **Tests & verification**:
   - `tests/unit/test_audit_5w1h.py` (5W1H fields present, `--seq` dossier + 404). Suite: 78 passed (76→78), 75.71% branch (>70%), 0 Ruff, 0 Mypy (62 files).
 - **Files**: `src/trace_core/audit/{repository.py,renderers.py,commands.py,shell_handler.py,service.py}`, `src/trace_core/cases/service.py`, `tests/unit/test_audit_5w1h.py`
+
+---
 
 ---
 
@@ -515,6 +689,8 @@
 
 ---
 
+---
+
 ## 2026-09-13 — Subpart-1/2 Final Solidity (No Future-Proofing)
 
 > Re-scan for solid only — makes Subpart-1/2 forensically solid without adding evidence/report vocabulary.
@@ -530,6 +706,8 @@
   - `service.get_by_seq` validates `seq>=1` at service layer (both CLI/shell already did).
   - `service._check_ledger_error` now also catches `no such column` (covers stale `archived_by` etc).
 - **Verification**: 78 passed, 75.x% branch (>70%), 0 Ruff, 0 Mypy (67 files).
+
+---
 
 ---
 
@@ -554,6 +732,8 @@
 
 ---
 
+---
+
 ## 2026-09-13 — Ship Now (Indexes, DTO Cap, get_db, Property, pip-audit, make_case)
 
 > Cheap, correct, no downside — keeps `notes` searchable for forensic completeness (deferred #2).
@@ -569,6 +749,8 @@
 
 ---
 
+---
+
 ## 2026-09-13 — Simplicity & Complexity Pass (CCN>15 → ≤12)
 
 > Makes every function easy to read, no behavior change. Fixes Sonar S1764/S1192/S7498/S3776/S3358 + lizard CCN>15.
@@ -580,6 +762,8 @@
 - **Shell (`audit/shell_handler.py`, `cases/shell_handler.py`)**: `_complete_show 32→4` via dict handlers, `_interactive_close_case 17→4` via `_confirm_typed`, `TraceAutoSuggest` ghost `case show`/`audit --case active`, `TraceShellCompleter` hide globals when active + limit 8 + fuzzy.
 - **Cases (`cases/commands.py`, `service.py`)**: `list_cases --recent`, `case show` Tags top, `Closed` IST+UTC, `edit --reason` + diff preview, `purge/close` type-number confirm, `recent`/`back` shell commands, `ls/sh/ed` aliases.
 - **Verification**: 84 passed (78→84), 0 Ruff, 0 Mypy (69 files), lizard CCN all ≤15 (was 5 over).
+
+---
 
 ---
 
@@ -599,6 +783,8 @@
 
 ---
 
+---
+
 ## 2026-09-13 — Dropdown & Case List Grouping (Only Preview, CR/NR/CLI)
 
 > `case edit` dropdown showed duplicate `2026-CR-0031 | 2026-CR-0031 · OPEN` and mixed `CR/NR/CLI` order; `case list` table showed `CR/NR/CR/CLI` scattered.
@@ -610,12 +796,20 @@
 
 ---
 
+---
+
 ## 2026-09-13 — Docs: Subpart-2 Detailed (like Subpart-1)
 
 > Previous `docs/subparts/subpart-2.md` was 28-line stub. Rewrote to 130-line `subpart-1.md` style.
 
 - **New `docs/subparts/subpart-2.md`** (13 sections, mirrors `subpart-1.md`): Mission, Stack, Actual layout (`audit/` 10 files), Domain (`AuditAction` 6, `Subject/Context`, `GENESIS`, `payload_hash/chain_hash`, `build_payload`), Persistence (`audit_chain_state` + `audit_events` + `005/006/007`), Builder (`_case_event`), Service (`record` central gate, `verify` streaming `Iterable`, `export` header+JSONL `tmp→fsync→rename`), DTO (`AUDIT_*_FLAGS`), Transactions (`before_commit` atomic), Interfaces (Typer `audit show/verify/export` with `--seq/--case/--anchor`, shell `show/verify/export` with completions `Seq→preview`, TUI `render_audit_table` 5-col + `render_case_audit_header` + `render_audit_timeline` + `render_audit_detail` 5W1H + hashes), Config/Security, Quality (85 passed, tribunal 13 + `completion` + `property`), Limits (tail blind → `anchor`, single global head).
 ---
+
+---
+
+# Part 3 — Responsive UI, dossiers & fullscreen TUI
+
+>Responsive engine, dossier rhythm passes, Textual console and polish.
 
 ## 2026-09-13 — Responsive TUI Engine (XS, MD, LG, XL & Height-Aware UX)
 
@@ -645,6 +839,8 @@
 
 ---
 
+---
+
 ## 2026-09-13 — Responsive Reuse Pass (minimal, no textual)
 
 > No new deps. Stdlib `textwrap` only. Single-source helpers, XS keeps forensic Who.
@@ -659,6 +855,8 @@
 
 ---
 
+---
+
 ## 2026-09-13 — Fix wrapping in case list (width budget)
 
 > `case list` wrapped to 2 lines: 5 cols + `(0,2)` padding needed ~126 cols for 110-col terminal.
@@ -667,6 +865,8 @@
 - **Cases**: headers `Case #` (no leading spaces), `max_width 16/14/10/14`, narrow `MD/LG term_w<100` drops to 4-col (no `Opened`), `Tags :3→:2`.
 - **Audit**: headers `Seq` (no leading spaces), `max_width 6/14/16/14`, rows `str(seq)` no indent.
 - **Verification**: 87 passed, 0 Ruff, 0 Mypy.
+
+---
 
 ---
 
@@ -683,6 +883,8 @@
 
 ---
 
+---
+
 ## 2026-09-13 — Live resize redraw (no retype)
 
 > Scrollback can't reflow. New output can. Auto re-render last read-only view on breakpoint change.
@@ -691,6 +893,8 @@
 - **Shell (`cli/shell.py`)**: `RLock + _last_size/_last_view`, `run()` uses `patch_stdout` + 0.5s daemon watcher, empty-Enter fast path `_redraw_if_resized()`, `execute_line(_from_redraw)` remembers views. Mutations never auto-rerun.
 - **Tests (`tests/unit/test_resize.py`)**: readonly vs mutating, breakpoint change, shell memory.
 - **Verification**: 90 passed, 0 Ruff, 0 Mypy (72 files).
+
+---
 
 ---
 
@@ -705,6 +909,8 @@
 
 ---
 
+---
+
 ## 2026-09-13 — Proper polling + invalidation (no thread, no clear-as-primary)
 
 > Scrollback is immutable. Live parts (toolbar, completions, prompt) poll + invalidate.
@@ -713,6 +919,8 @@
 - **Shell (`cli/shell.py`)**: removed daemon thread + `patch_stdout` + `console.clear()` redraw. `PromptSession(refresh_interval=0.5)` uses prompt_toolkit's `terminal_size_polling_interval` (0.5s default) for Windows. Live `bottom_toolbar` shows `cols x rows · BP` + `resized — Enter to re-render` stale hint. `Enter`/`redraw` re-renders last read-only view in place (append, no clear). Mutations never re-run.
 - **Renderers**: every layout reads `breakpoint_width()` → `console.size` live each render. Verified 80/120/160/200.
 - **Verification**: 93 passed, 0 Ruff, 0 Mypy.
+
+---
 
 ---
 
@@ -726,6 +934,8 @@
 
 ---
 
+---
+
 ## 2026-09-13 — Cap tables at laptop width, drop live-watch dead code
 
 > Yes, understood: tables must never stretch past a comfortable laptop threshold even on 200-col terminals. Live watcher dropped.
@@ -733,6 +943,8 @@
 - **Core (`core/ui/renderers.py`)**: `MAX_TABLE_WIDTH=116`, `render_minimalist_table` + `render_table` cap `width=min(term_w-2, 116)`.
 - **Removed dead code**: `core/cli/resize.py`, `tests/unit/test_resize.py`, shell watcher (`_snapshot/_remember/_redraw/_watcher`, `_last_size/_last_view`, `RLock`, `redraw` command + help entry). `execute_line` back to `(line)`. Each command already reads `console.size` fresh, so breakpoints stay live per render.
 - **Verification**: 87 passed, 0 Ruff, 0 Mypy (70 files).
+
+---
 
 ---
 
@@ -745,6 +957,8 @@
 - **Reseed live via `CaseService` only (no SQL)**: 5 auto-numbered cases (`2026-CR-0001`–`0005`), 1 documented edit with reason (5W1H diff), 1 sealed closure with fresh anchor. Numbering, UTC, audit hashes all produced by live paths.
 - **Result**: 5 cases (4 OPEN, 1 CLOSED), audit VALID 7 events seq 1→7, anchor `anchor-2026-CR-0003-7.json`.
 - **Verification**: 87 passed, 0 Ruff, 0 Mypy. No source files changed (data-only task).
+
+---
 
 ---
 
@@ -767,6 +981,8 @@
 
 ---
 
+---
+
 ## 2026-09-13 — Phase B reuse pass (delete + unify)
 
 > Nine dead helpers deleted, four new single sources. No behavior change except advertised-but-ignored shell flags now working.
@@ -777,6 +993,8 @@
 - **`record()` typed**: `(Session, AuditAction, Subject, str, details, Context|None) → AuditEventDto`; dead `str`-ctx branch deleted (sole caller always passed `Context`).
 - **Tests**: shell parity, anchor write→verify→tamper roundtrip.
 - **Verification**: 93 passed, 0 Ruff, 0 Mypy (71 files). C/D phases queued in the register.
+
+---
 
 ---
 
@@ -798,6 +1016,8 @@
 
 ---
 
+---
+
 ## 2026-09-13 — Leftover sweep (register §F cleared)
 
 > Everything remaining except process decisions. One rule kept: tested surface stays (`count()`, panel/table primitives).
@@ -806,6 +1026,8 @@
 - **Reuse**: badge/pill one source + `border_*` tokens; `number_group`, single completion cap, enum-safe rank; `_show_seq` folded; `ls/sh/ed` help row; filter contract + purge note; version-sync test.
 - **Deleted**: audit `count()`, `build/` dir, `recent_filter` (superseded).
 - **Verification**: 104 passed, 0 Ruff, 0 Mypy (71 files). Register §F closed save process items.
+
+---
 
 ---
 
@@ -819,6 +1041,8 @@
 - **Performance (P-1)**: `head()` one-row tip query; close anchor + tail check use it (was full-table read).
 - **Flake killed**: Windows clock ties made ordering random — parity test now uses a ticking clock.
 - **Verification**: 106 passed (3 consecutive green runs), 0 Ruff, 0 Mypy (72 files).
+
+---
 
 ---
 
@@ -836,6 +1060,8 @@
 
 ---
 
+---
+
 ## 2026-09-14 — Audit detail to professional dossier (no icons, CHANGES, INTEGRITY)
 
 > `audit show --seq N` rebuilt to the approved mockup. Before/After kept as evidence, presented as a table.
@@ -845,6 +1071,8 @@
 - **INTEGRITY section**: Payload/Prev/Chain hashes as labeled rows (real Chain Hash included), split on narrow screens.
 - **Cleanup**: `_detail_sections`/`_dump_json` deleted (superseded); `show_count=False` added for titled tables.
 - **Verification**: 106 passed, 0 Ruff, 0 Mypy (72 files). Rendered against live seq 11 at full + 60-col widths.
+
+---
 
 ---
 
@@ -861,6 +1089,8 @@
 
 ---
 
+---
+
 ## 2026-09-14 — Case dossier in audit-detail language
 
 > `case show` rebuilt to mirror `audit show --seq`: identity block, grouped metadata, sections, proof block.
@@ -874,6 +1104,8 @@
 
 ---
 
+---
+
 ## 2026-09-14 — Detail-view max-reuse (one dossier language)
 
 > Both dossiers now share primitives; no view owns its own header/section/tip code.
@@ -881,6 +1113,8 @@
 - **Core**: `render_detail_header` (Text-aware meta line), `render_section_title` (styled), `render_raw_tip`.
 - **Shared**: `short_action_label` (timeline + HISTORY), `_history_lines` deleted.
 - **Verification**: 108 passed, 0 Ruff, 0 Mypy (72 files). Both live renders byte-identical to approved look.
+
+---
 
 ---
 
@@ -894,10 +1128,14 @@
 
 ---
 
+---
+
 ## 2026-09-14 — CHANGES divider breathing room
 
 > After column carries `min_width + 4` so the header rule extends slightly past content.
 > Verification: 108 passed, 0 Ruff, 0 Mypy (72 files).
+
+---
 
 ---
 
@@ -908,10 +1146,14 @@
 
 ---
 
+---
+
 ## 2026-09-14 — Dossier rhythm pass (equal padding everywhere)
 
 > One blank line on each side of every divider; one blank between every title and its content; HISTORY left open at the bottom (no closing divider).
 > Verification: 108 passed, 0 Ruff, 0 Mypy (72 files). Live-rendered CR-0006 attached above.
+
+---
 
 ---
 
@@ -922,10 +1164,14 @@
 
 ---
 
+---
+
 ## 2026-09-14 — CHANGES header indent
 
 > First column header is now `  Field`, matching its indented cells (same convention as `  Case #`).
 > Verification: 108 passed, 0 Ruff, 0 Mypy (72 files).
+
+---
 
 ---
 
@@ -943,6 +1189,8 @@
 
 ---
 
+---
+
 ## 2026-09-14 — TUI escape + scroll (unstick every modal)
 
 > Every modal backs out on Esc with cancel semantics; the case form scrolls so Save/Cancel stay reachable on short terminals.
@@ -950,6 +1198,8 @@
 - **Shared `ESCAPES` binding** in forms (reused by palette modals): `Esc` → cancel-safe dismiss on CaseForm/Raw/TextInput/TypedConfirm/YesNo/Palette/Keys.
 - **Case form body scrolls** (`VerticalScroll` + max-height); Cancel button renamed `Cancel (Esc)`.
 - **Verification**: 111 passed (escape test pushes every modal, Esc, asserts it popped), 0 Ruff, 0 Mypy.
+
+---
 
 ---
 
@@ -963,6 +1213,8 @@
 
 ---
 
+---
+
 ## 2026-09-14 — Full-size form inputs (compact was untypeable-feeling)
 
 > Compact single-row inputs felt too small to write in. Back to bordered inputs with tight margins; form fits without scrolling, `max-height: 32` keeps short terminals scrolling.
@@ -970,10 +1222,14 @@
 
 ---
 
+---
+
 ## 2026-09-14 — Prettier case form (round inputs, centered header + buttons)
 
 > Round input borders (accent on focus), centered bold-accent heading, centered round buttons.
 > Verification: TUI tests green, 0 Ruff, 0 Mypy, zero CSS errors on mount.
+
+---
 
 ---
 
@@ -985,6 +1241,8 @@
 - **Database** (`tui/screens/db.py`): `Connection` (pill + URL), `Tables` (dim list), `Migrations` (DataTable + button) — same card chrome, `max-height 12` for the table.
 - **Shell** (`tui/app.py`): shared `.card` + `.input-row` CSS, scroll containers `1fr`.
 - **Verification**: 112 passed, 0 Ruff, 0 Mypy.
+
+---
 
 ---
 
@@ -1001,6 +1259,8 @@
 
 ---
 
+---
+
 ## 2026-09-14 — Audit + form + confirm polish (4-image sweep)
 
 > One reusable form, no scroller unless needed, dim labels, centered red/blue modals.
@@ -1009,6 +1269,8 @@
 - **Form** (`tui/forms.py`): `84` wide, grid `2` + `field-full` span, `CREATE CASE` centered `height 3` underline, `max-height 90%` + `22` fields cap → no scrollbar at 100×40, `scrollbar-gutter stable`; same `CaseForm` for create/edit.
 - **Confirms** (`tui/forms.py`): `TypedConfirmModal` `round $error 60%` + `YesNoModal` `round $panel 50%`, both `height auto` + centered `Horizontal` buttons (`min-width 18`, `round`), `Esc` shared.
 - **Verification**: 112 passed, 0 Ruff, 0 Mypy.
+
+---
 
 ---
 
@@ -1022,6 +1284,8 @@
 
 ---
 
+---
+
 ## 2026-09-14 — TUI declutter (slim table, cards, dossier hierarchy)
 
 > Table shows only Case # + Status (dossier carries the rest); panes are rounded bordered cards with a gap; Footer removed (hint bar was duplicating it).
@@ -1032,10 +1296,14 @@
 
 ---
 
+---
+
 ## 2026-09-14 — Audit tab declutter (mirrors Cases)
 
 > Stream slimmed to Seq + human Event; search + scope live inside the left card; both cards full-height; shared `DossierScroll` divider engine for both dossiers.
 > Verification: 111 passed, 0 Ruff, 0 Mypy (84 files).
+
+---
 
 ---
 
@@ -1046,6 +1314,8 @@
 
 ---
 
+---
+
 ## 2026-09-14 — Dossier breathing room
 
 > Right-hand cards (`#cases-right`, `#audit-right`) get `padding: 1 2` — content floats inside the border, structure untouched.
@@ -1053,10 +1323,14 @@
 
 ---
 
+---
+
 ## 2026-09-14 — Textual TUI blueprint (plan only, no code)
 
 > `docs/blueprints/textual_tui.md`: full implementation contract for the building agent — architecture (third adapter, headless core), design language, all four screens, command mapping, subpart fit, testing, build order with pilot gate.
 > Verification: docs only, suite untouched.
+
+---
 
 ---
 
@@ -1071,6 +1345,12 @@
 
 ---
 
+---
+
+# Part 4 — Production hardening & security program
+
+>Trust fixes, reuse passes, assessments (SEC-01…27), remediation batches, Ed25519/RBAC/anchors, tooling, Subpart-3 planning and release hygiene.
+
 ## 2026-09-13 — Phase D production hardening (database honest at last)
 
 > Runbook: `docs/specs/production_operations.md` (three roles, parity table, checklist, close habit).
@@ -1084,6 +1364,8 @@
 - **S5 habit**: close prints "copy off-host"; runbook defines export-per-close.
 - **Tests**: trigger enforcement, bootstrap race, threaded chain contiguity, case-insensitive search, knob decoupling.
 - **Verification**: 103 passed, 0 Ruff, 0 Mypy (71 files). Register Section E complete.
+
+---
 
 ---
 
@@ -1103,6 +1385,8 @@
 
 ---
 
+---
+
 ## 2026-09-16 — SonarQube 45-issue remediation (no logic/UI change)
 
 - **Rule followed**: AGENTS.md + ponytail full. Behavior identical everywhere. Verified: 112 passed, ruff check clean, ruff format clean, mypy clean (68 files), ci.yml parses.
@@ -1114,12 +1398,16 @@
 - **Tests (9)**: DTO/seal setup hoisted out of `raises` blocks; single-invocation `_attempt_tamper_write`/`_attempt_ledger_write` helpers; `Exception` → `DBAPIError` in PG test; split composite assert in completion test. Intent unchanged.
 - **Files touched**: `.github/workflows/ci.yml`, `core/ui/theme/renderers`, `core/database/health`, `core/cli/completion/db_commands/suggest`, `cases/renderers/shell_handler`, `audit/shell_handler/renderers`, `tui/actions/app/theme/screens/{cases,audit,db,verify}`, `tests/{unit,test_completion,test_audit_ledger,test_case_state_machine_property,test_database_migrations_and_lifecycle,integration/test_postgres}`.
 
+---
+
 ## 2026-09-16 — CI mypy `src tests` fix (msvcrt attr-defined)
 
 - **Root cause**: typeshed's `msvcrt` stub lacks `locking`/`LK_LOCK`/`LK_UNLCK`; mypy checks both `os.name` branches, so `mypy src tests` (the CI command) failed with 4 errors in `core/database/migrations.py`.
 - **Fix**: `# type: ignore[attr-defined]` on the two `msvcrt.locking(...)` lines — same convention the file already uses for `fcntl`.
 - **Caught by tests**: first attempt dropped the `else:` and broke Windows file locking (3 sqlite file-lock tests failed); restored immediately. Verified: `mypy src tests` clean (88 files), 112 passed, ruff check + format clean.
 - **Files touched**: `core/database/migrations.py`.
+
+---
 
 ## 2026-09-16 — SonarQube 7-issue follow-up (no logic/UI change)
 
@@ -1130,12 +1418,16 @@
 - **Verified**: 112 passed, ruff check + format clean, `mypy src tests` clean (88 files).
 - **Files touched**: `tui/screens/cases.py`, `tui/app.py`, `core/cli/completion.py`.
 
+---
+
 ## 2026-09-16 — Pylance diagnostics (3 errors, 2 sites)
 
 - **`audit/helpers.py:57` "No parameter named case_number"**: false-ish positive triggered by a redundant function-level re-import (mine, copied from the call sites the helper replaced). Deleted the two local imports — module already imports both names. Same objects, zero behavior change.
 - **`tui/app.py:148` `.get()` overload/Literal mismatch**: `dict.fromkeys` inferred literal keys. Annotated `TAB_HINTS: dict[str, str]`. Same dict at runtime.
 - **Verified**: 112 passed, ruff check + format clean, `mypy src tests` clean (88 files). Pylance itself can't run headless here — confirm the squiggles clear on your side.
 - **Files touched**: `audit/helpers.py`, `tui/app.py`.
+
+---
 
 ## 2026-09-16 — CI collection failure + TUI speed (no behavior change)
 
@@ -1147,6 +1439,8 @@
 - **Verified**: 112 passed, ruff check + format clean, `mypy src tests` clean (88 files).
 - **Files touched**: `pyproject.toml`, `uv.lock`, `requirements.txt`, `tui/screens/{cases,audit,verify}.py`.
 
+---
+
 ## 2026-09-16 — Authorized white-box security assessment (no source changes)
 
 - **Scope**: full local attack run with owner authorization, throwaway SQLite DBs + temp dirs only. No prod, no network, no source edits. (Strix engine not used — no Docker/keys in this env; manual PoCs instead.)
@@ -1154,11 +1448,15 @@
 - **Held**: append-only triggers (UPDATE/DELETE → IntegrityError), no eval/exec/subprocess/pickle sinks, no raw SQL in src (ORM + bound params), `.env` gitignored + no hardcoded secrets, `secret_key` setting exists but is consumed nowhere (natural home for future HMAC).
 - **Full fix checklist delivered in chat; PoCs kept under `Temp/opencode/poc_*.py` (not committed).**
 
+---
+
 ## 2026-09-16 — Security assessment round 2: identity, terminal, identifiers (no source changes)
 
 - **Confirmed**: (A) HIGH — audit authorship fully self-asserted: every action as `alice` by Mallory lands in the ledger as `alice`; no OS-user capture exists; 300-char actor bypasses the 255 model cap on SQLite. (B+C) MEDIUM — control-character injection via title: OSC-8 hyperlink (`\\x1b]8;;`) and forged newline rows survive into dossier bytes. (D) MEDIUM — `latest_anchor_for('*')` resolves to another case's anchor (glob metachars in numbers) → wrong-anchor verification. (E) LOW — `2026-cr-0100` and Cyrillic-homoglyph twins accepted as distinct identities. (F) LOW — `export --out` silently replaces any existing file via `os.replace`.
 - **Checked clean**: no `re` usage (no ReDoS surface); `closed_by`/`closure_reason` columns match domain caps.
 - **Fix checklist delivered in chat; PoCs `poc2*.py` uncommitted in temp.**
+
+---
 
 ## 2026-09-17 — Security assessment round 3: forensic-logic flaws (no source changes)
 
@@ -1166,11 +1464,15 @@
 - **Latent (code-evident)**: caller-supplied `ts` param on `append()` (backdating primitive, no prod caller yet); OS-clock-trusted timestamps; `getattr` command dispatch is safe but allowlist-worthy.
 - **Details + PoCs filed**: `docs/security/assessment-2026-09-17.md` (SEC-10/11/12), `docs/security/pocs/poc3*.py`. Full fix checklist in chat.
 
+---
+
 ## 2026-09-17 — Security assessment round 4: 360 sweep (no source changes)
 
 - **Confirmed**: SEC-13 callers override host/command via `setdefault` merge; SEC-14 unclosed quote escapes `execute_line` as `ValueError`; SEC-15 seal accepted with empty reason; SEC-16 migration checksums hash the name and are never compared (theater); SEC-17 anchor-after-commit crash window + tip imprecision.
 - **Clean**: TUI modals (falsy→no-op), `run()` error cards, `render_error_card` escaping, `append(ts=)` still caller-free.
 - **Details + PoCs filed**: `docs/security/assessment-2026-09-17.md` (SEC-13…17), `docs/security/pocs/poc4_misc.py`.
+
+---
 
 ## 2026-09-18 — Batch 1 input containment implemented (SEC-02/03/06/07/08)
 
@@ -1181,6 +1483,8 @@
 - **Proof**: new `tests/unit/test_security_regressions.py` (7 tests, written failing-first); original PoCs re-run — traversal rejected at create, markup renders literal, OSC hyperlink gone. Suite: 119 passed, ruff + format + `mypy src tests` clean.
 - **Not in this batch** (brief Batches 2+): export `--force`, search caps, tombstones, merge precedence, shlex guard, reason-required close.
 - **Files touched**: `core/domain`, `core/ui/renderers`, `cases/{domain,service,commands,renderers,shell_handler}`, `audit/{anchor,helpers,renderers,shell_handler}`, `tui/screens/{cases,audit}`, `tests/unit/test_security_regressions.py`.
+
+---
 
 ## 2026-09-18 — Batch 2 lifecycle integrity (SEC-09/10/11/13/15, SEC-04)
 
@@ -1193,6 +1497,8 @@
 - **Proof**: 12→17 security tests green; full suite 124 passed, ruff + format + `mypy src tests` clean.
 - **Files touched**: `cases/{models,repository,service}`, `core/{dto,database/{migrations,repository}}`, `audit/{builder,helpers,commands,shell_handler,dto}`, `tui/screens/{cases,audit,verify}`, `tests/unit/{test_security_regressions,test_case_service,test_cli_commands,test_database_migrations_and_lifecycle}`.
 
+---
+
 ## 2026-09-18 — Batch 3 error boundaries (SEC-12/14)
 
 - **Anchor split** (`audit/anchor.py`): pure `check_anchor_match` (raises, never prints/exits) + thin `verify_against_anchor` (unreadable file → `ValidationError`, was `typer.echo` + `Exit(1)`). CLI exit for bad anchor file is now 11/1 via typed cards; shell REPL no longer dies on it; TUI notifies. Existing anchor roundtrip test untouched and green.
@@ -1201,6 +1507,8 @@
 - **Palette**: wrong-tab ids toast instead of vanishing (`CasesView` allowlisted to `action_*`, others get `else` branches).
 - **Proof**: 4 new regression tests (shlex card, typed anchor errors, pure mismatch, wrong-tab pilot); suite 128 passed, ruff + format + `mypy src tests` clean.
 - **Files touched**: `audit/anchor.py`, `audit/helpers.py` (unchanged callers), `cli/shell.py`, `tui/screens/{cases,audit,db,verify}.py`, `tests/unit/test_security_regressions.py`.
+
+---
 
 ## 2026-09-18 — Batch 4 HMAC ledger envelope (SEC-01 interim)
 
@@ -1212,6 +1520,8 @@
 - **Not done (needs decisions/infra)**: Ed25519 + key provisioning/rotation, external key custody (env-held HMAC stops DB-only attackers, not host attackers — documented).
 - **Files touched**: `audit/{signing (new),models,domain,dto,repository,verifier,exporter,renderers}`, `core/database/migrations.py`, `tui/screens/audit.py`, `tests/unit/{test_security_regressions,test_audit_ledger,test_database_migrations_and_lifecycle}`.
 
+---
+
 ## 2026-09-18 — Batch 5 attribution (SEC-05 partial)
 
 - **Context enriched** (`audit/events.py`, `audit/builder.py`): `os_user` (getpass, `"unknown"` fallback) + process-scoped `session_id` on every event, merged system-wins (Batch 2 precedence already flipped). Explicitly metadata, not authentication — documented in helper + file.
@@ -1219,6 +1529,8 @@
 - **Not built**: login/RBAC/roles — no auth infrastructure exists to hang them on; building role checks without authentication would be theater. Scoped as documented follow-up with the operator-entity design already in the security file.
 - **Proof**: 2 new tests (attribution present, length enforced); suite 134 passed, ruff + format + `mypy src tests` clean.
 - **Files touched**: `audit/{events,builder,service}.py`, `tests/unit/test_security_regressions.py`.
+
+---
 
 ## 2026-09-18 — Batch 6 DB + storage (SEC-16/18/20/21/22/23)
 
@@ -1229,6 +1541,8 @@
 - **Proof**: 7 new tests (DDL strings, least-privilege asserts, drift fails closed, legacy upgrade, restrictive modes posix-only, stale-tmp recovery); suite 140 passed, ruff + format + `mypy src tests` clean.
 - **Not done**: ownership transfer (operator-run, would break existing deploys if forced); at-rest encryption (needs backend decision + infra); Ed25519 (Batch 4 follow-up).
 - **Files touched**: `core/{fs (new),database/migrations}`, `core/settings.py`, `audit/{models,exporter,anchor}.py`, `tests/unit/{test_security_regressions,test_database_migrations_and_lifecycle}`.
+
+---
 
 ## 2026-09-18 — Batch 7 installer + release + CI (SEC-19/24/25/26/27)
 
@@ -1241,6 +1555,8 @@
 - **Proof**: ps1 parses clean (Parser API), sh reviewed by eye (no shell available); suite 142 passed, ruff + format + `mypy src tests` clean.
 - **Files touched**: `install.sh`, `install.ps1`, `core/settings.py`, `.github/workflows/ci.yml`, `pyproject.toml` (lock-only comment), `docs/security/*`, `changelog`.
 
+---
+
 ## 2026-09-18 — Ed25519 + RBAC + anchor outbox + TRACE_ENV + sealed exports
 
 - **Ed25519 ledger signing** (`audit/signing.py`, `audit keys-init/rotate/list`): file keystore (0600 dir, 0600 keys), `ed25519:<fp16>` ids beside `hmac-v1`, rotation with retired-key verification, unknown keys fail closed. Repository signs with the active key automatically. Same PoC4 forgery now dies on signature under either backend.
@@ -1252,16 +1568,22 @@
 - **Proof**: suite 155 passed (13 new: ed25519 lifecycle/forgery, RBAC roles/claims, outbox exactness/failure loudness, vault roundtrip/wrong/tamper, production refusal), ruff + format + `mypy src tests` clean.
 - **Files touched**: `audit/{signing,vault (new),models,dto,repository,verifier,exporter,anchor,commands,shell_handler}`, `core/{operators (new),errors,database/migrations,settings}`, `cases/service.py`, `cli`/`shell`/`tui` close outputs, `install.{sh,ps1}`, `tests/unit/test_security_regressions.py`.
 
+---
+
 ## 2026-09-17 — Master-brief review: changes required before implementation
 
 - **Reviewed a 26-point master brief against code + filed findings**: adopted almost all; three corrections applied to `docs/security/assessment-2026-09-17.md` (new adjudication section + S-section amendments) because implementing them as written would break things: (1) CR-only number grammar rejected — codebase uses CR/NR/CLI + 7-letter fixture codes, adopted `^[0-9]{4}-[A-Z]{2,8}-[0-9]{4}$` instead; (2) exporter is already tmp→fsync→rename, SEC-09 fix scoped to clobber gate only; (3) my own monotonic-timestamp-reject idea replaced with `CLOCK_REGRESSION` anomaly.
 - **Also adopted**: HMAC-vs-Ed25519 trust distinction, per-state verification vocabulary, anchor outbox (replacing my `before_commit`-write idea), metadata-vs-auth identity model, terminal-boundary sanitizer matrix, NOLOGIN owner + self-computing append procedure, content checksums compared at startup, one-signing-model scoping, 20 agent rules, precise claims language.
+
+---
 
 ## 2026-09-17 — External 26-point review adjudication (no source changes)
 
 - **Verdict**: 25 of 26 claims verified against code (10 become new SEC-18…27; 14 duplicate own earlier findings; 1 advisory claim left to CI `pip-audit`). Zero refuted.
 - **New, highest-signal**: SEC-18 TRUNCATE bypass (`BEFORE UPDATE OR DELETE`, no TRUNCATE trigger); SEC-19/20 default `postgres:postgres` + zero DB role separation; SEC-21 no at-rest encryption; SEC-22 unhardened storage perms; SEC-24 installer token-in-URL (`install.sh:31`, `install.ps1:30`); SEC-25 mutable-`main` pipe-to-shell installs; SEC-16 migration checksums confirmed theater from round 4.
 - **Filed**: `docs/security/assessment-2026-09-17.md` adjudication table + new IDs.
+
+---
 
 ## 2026-09-16 — CI speed-up (same checks, less redundant work)
 
@@ -1271,12 +1593,16 @@
 - **Untouched**: gates, matrix, coverage, audit tolerance, postgres service. YAML parses; caches are gitignored.
 - **Files touched**: `.github/workflows/ci.yml`.
 
+---
+
 ## 2026-09-18 — Validator centralization + lookup hardening (grammar decision)
 
 - **Single source**: `cases/domain.py` now exposes `normalize_number()` (NFKC/strip/upper, no rejection) + `canonical_number()` (grammar-enforcing `^[0-9]{4}-[A-Z]{2,8}-[0-9]{4}$`); the `Case` validator delegates. Repository lookups (`resolve`, `get_by_number`, `is_purged`, `record_purge`, `note_manual_number`) and the audit case filter all normalize through it — lowercase input finds canonical rows; unknown input still misses to NotFound exactly as before. CR-only grammar explicitly rejected: NR/CLI grouping + FIXTURE/BATCH fixtures require the wider class.
 - **Glob backstop**: `latest_anchor_for` filters results by literal stem-prefix match + containment, so metacharacters can't widen matches even on direct calls.
 - **Proof**: 2 new tests (canonical lookup, metachar anchor returns None beside a real anchor); suite 144 passed, ruff + format + `mypy src tests` clean.
 - **Files touched**: `cases/{domain,repository}.py`, `audit/{repository,anchor}.py`, `tests/unit/test_security_regressions.py`.
+
+---
 
 ## 2026-09-18 — Reusability pass over old + new code
 
@@ -1288,6 +1614,8 @@
 - **Left alone deliberately**: help-surface catalog, status-color maps, coerce/ensure pair, `_DEV_KEY_SENTINEL` duplication (import cycle), nested publisher sessions (failure isolation), mismatch-path double hash.
 - **Proof**: suite 155 passed, ruff + format + `mypy src tests` clean, no behavior change (close/message/row output verified identical via tests).
 
+---
+
 ## 2026-09-18 — SonarLint cleanup (S6353/S3776/S1192/S9073)
 
 - **S6353 `cases/domain.py`**: `CASE_NUMBER_RE` `[0-9]` → `\d` with `re.ASCII` (ASCII-only semantics preserved, concise syntax).
@@ -1296,6 +1624,8 @@
 - **S9073 `tests/unit/test_security_regressions.py`**: split 5 composite asserts (lines 92,218,275,278,487) into single-condition asserts.
 - **Proof**: 155 passed, 3 skipped (PG), 75.59% branch (>70%), 0 Ruff check/format (97 files), 0 Mypy (93 files).
 
+---
+
 ## 2026-09-18 — SonarLint + Pylance cleanup (S3776/Pylance ×2)
 
 - **S3776 `audit/verifier.py`**: `verify_rows` first-seq branch extracted into `_retain_first()` (mirrors existing `_collect_gaps` helper style); loop and tamper semantics unchanged.
@@ -1303,10 +1633,14 @@
 - **Pylance `tests/unit/test_ui_renderers.py` (20× `reportCallIssue`)**: 3 hand-built `CaseResponseDto(...)` now go through production's `CaseResponseDto.from_domain(Case(...))` factory (the single source `service.py` uses 7×); `Case(...)` kwargs were already Pylance-clean, runtime output identical, no ignores added.
 - **Proof**: 155 passed, 3 skipped (PG), 75.66% branch (>70%), 0 Ruff check/format (97 files), 0 Mypy (93 files).
 
+---
+
 ## 2026-09-18 — PSScriptAnalyzer cleanup (install.ps1)
 
 - **`install.ps1`**: removed dead `$VenvPip` assignment (PSScriptAnalyzer `PSUseDeclaredVarsMoreThanAssignments`). All pip calls already go through `$VenvPython -m pip` (or `uv ... --python $VenvPython`), so the variable had zero callers; deletion is behavior-identical.
 - **Proof**: PowerShell parser reports 0 errors, 0 remaining `VenvPip` references.
+
+---
 
 ## 2026-09-18 — CI pipeline end-to-end local replication (no repo changes)
 
@@ -1318,15 +1652,21 @@
 - **Live `trace` db untouched**: residue audit found zero test rows (newest case/event are the developer's own CR-0008 work); scratch db dropped, temp scaffolding deleted.
 - **Local quirk noted (not a CI issue)**: `cmd set VAR=x && ...` appends a trailing space to the value — CI's `env:` block doesn't do this; local replication used in-process env instead.
 
+---
+
 ## 2026-09-18 — Local pre-PR gate script (`check-pr.ps1`)
 
 - **New `check-pr.ps1`** (root, mirrors `install.ps1` style): fast local replication of CI for clean PRs — `.\check-pr.ps1` runs venv/import, offline lockfile hash coherence, `ruff format --check`, `ruff check`, `mypy src tests`, `pytest --cov=trace_core --cov-fail-under=70` with CI env (save/restore vars, fail-fast summary, per-step timing, nonzero exit on failure). `-Full` adds `pip-audit`, SBOM (to TEMP, repo stays clean), and a fresh-venv hashed-install proof (self-deleting temp venv).
 - **Proven**: fast mode green in ~20s, `-Full` green end-to-end (155 passed, audit clean, SBOM 44 components, fresh-venv proof 10 passed). PowerShell parser 0 errors.
 
+---
+
 ## 2026-09-18 — `check-pr.ps1` kept local-only (not for GitHub)
 
 - Per request, the pre-PR gate script stays a local dev tool: added root-anchored `/check-pr.ps1` to `.gitignore` (new "Local Developer Scripts" section, same spirit as ignored `/docs`). Verified via `git status` (no longer listed) + `git check-ignore`.
 - Note: the `.gitignore` edit itself is tracked — required so the rule is shared and nobody commits the script by accident. The script file remains fully usable locally.
+
+---
 
 ## 2026-09-18 — Sonar Blocker + pytest hygiene (signing traversal, S5754 ×3)
 
@@ -1335,11 +1675,121 @@
 - **Regression test**: `test_traversal_key_id_fails_closed` (`ed25519:../../../../tmp/pwn` → `verify_bytes False` + `verify_rows` signature-mismatch, fail closed).
 - **Proof**: 156 passed (155 + 1 new), 3 skipped (PG), 75.68% branch (>70%), 0 Ruff check/format (97 files), 0 Mypy (93 files).
 
+---
 
+## 2026-09-18 — Subpart 3 build plan (`docs/subparts/subpart-3.md`)
 
+- **New 360° plan doc** (local-only `docs/`, mirrors `subpart-2.md` structure): mission + scope lock, ASCII architecture, per-module spec for all 10 new files (`domain/ports/file_device/synthetic/linux/win32/repository/models/service/dto/commands/shell_handler/renderers/helpers` + migration `014` + TUI screen), data-flow sequences, fail-closed matrix, security/reliability/maintainability/test/TUI sections, 8-step build order, acceptance checklist, 360 risk table.
+- **8 decisions locked with rationale, awaiting confirm**: evidence registry deferred to Subpart 4 [D1]; UNKNOWN-override = typed serial confirm + dual-log (no second human in V1) [D2]; immutable-append fingerprint rows [D3]; `EXIT_SOURCE_WRITABLE = 10` [D4]; smartctl optional-only [D5]; `--allow-real-hardware` opt-in [D6]; 3 new audit actions [D7]; new `devices/ports.py` (documented deviation) [D8].
+- **No code touched** — plan only.
 
+---
 
+## 2026-09-18 — Subpart 3 plan revised per design review (8.7→spec 10/10)
 
+- **Verdict: apply** — 11/13 review points adopted outright, 1 partial
+  (operation-state vocabulary yes, coded state machine no — linear flow,
+  YAGNI), 1 detail deviated (`ProtectionEvidence` as frozen Pydantic, not
+  dataclass, per codebase consistency).
+- **Doc completed + revised** (`docs/subparts/subpart-3.md`, 544 lines,
+  §§0–14): the earlier draft was truncated mid-§4.5 on disk — rewrote the
+  tail whole (§§4.5-rest…§14). Key structural changes: `BlockDevice.read_at`
+  deferred to Subpart 4, new `DeviceInspector` port, `DeviceInspection`
+  operation object passed between calls (no adapter/TTL caching),
+  Native→Enrichment smartctl phases with cheap-list invariant,
+  fixed per-command persistence/audit budget, 11-mode fake fault matrix,
+  structured evidence schema, §12 grep-check against scope leak.
+- **Decisions now [D1]–[D13]** (5 new); §14 logs the full 13-point
+  adopt/partial/reject mapping.
 
+---
 
+## 2026-09-18 — Subpart 3 plan round 2 (reviewer follow-ups A–F, doc-only)
 
+- **Verdict: all worth it, all applied.** C fixed a genuine contradiction
+  (`inspect()` returning protection fields while `probe.verify()` owned the
+  verdict) — would have caused day-one implementation thrash. D added the
+  missing admission rule (override ONLY for UNKNOWN; WRITABLE is final) plus
+  `original_verdict`/`authorized_by`/`reason` preservation. F adds a safety
+  decision-coverage table as the stated confidence gate over the global 70%.
+  B deferred explicitly with criterion (repr decided at Subpart-4 preflight);
+  E restated budget as invariant; A concurred with no change.
+- **Doc**: `DeviceInspection`/`GateCheck` split, `verify() → GateCheck`,
+  §2/§5 flows, §6 WRITABLE-final row, §10 safety table, §12 seam + coverage
+  items, §14 round-2 log. 611 lines, no truncation. Architecture frozen per
+  reviewer agreement — build next, no more spec rounds.
+- **No code touched** — plan only.
+
+---
+
+## 2026-09-18 — Devices TUI blueprint (`docs/blueprints/devices_tui.md`)
+
+- **Design-only 5th tab spec** (no code — services don't exist yet; UI never
+  leads, per build order §7): placement/chrome, Cases-mirroring layout sketch
+  (table + dossier + gate block + raw drawer), full CLI↔TUI parity matrix
+  (`list/inspect/check/override/raw` all reachable; exit codes render as
+  cards, `--yes` has no modal equivalent — documented, not missing),
+  re-enumerate-on-tab-switch policy (no polling, reasoned vs Audit),
+  state/styling rules incl. XS collapse, explicit non-goals, headless pilot
+  extension plan. **No code touched** — plan only.
+
+---
+
+## 2026-09-18 — Decision: CLI + TUI both permanent (no removal, ever)
+
+- Asked whether to drop the CLI and go TUI-only. Decision after review:
+  **both stay, permanently**. Typer owns headless/automation/CI/JSON
+  (selftest, db provisioning, piped reports, exit codes — meaningless in a
+  TUI-only world); TUI owns interactive human operation. The 155-test
+  `CliRunner` surface, CI bootstrap, and the §7.2 CLI-first contract all
+  depend on this split.
+- Noted for later (not decided): the REPL shell duplicates the TUI's
+  interactive job and is the actual overlap — *if* a surface is ever cut,
+  that is the candidate, with `trace` launching straight into the TUI.
+  No action taken.
+- **No code touched** — decision only.
+
+---
+
+## 2026-09-18 — Changelog restructure (109 entries → 4 parts, zero loss)
+
+- **Backup first**: byte-identical copy at
+  `changelog/changelog.backup.2026-09-18.md` (verified identical before
+  touching the live file).
+- **New structure, same content**: title block + About/Legend note, grouped
+  **Contents** list (109 linked entries), and four `# Part` dividers —
+  Foundation (22) · Audit ledger (10) · Responsive UI + TUI (41) ·
+  Hardening & security program (36). Every `## ` header and body kept
+  verbatim in original record order; only separators/whitespace normalized.
+- **Proof of zero loss**: scripted round-trip verification — re-parsed the
+  restructured file and asserted all 109 headers + bodies identical and
+  ordered (caught and fixed two real bugs in the script itself: a shifted
+  part-marker list that mislabeled Part 2, and divider lines absorbed into
+  body regions — both now exactly accounted).
+- **No code touched** — log hygiene only.
+
+---
+
+## 2026-09-19 — Automatic DB bootstrap (no manual init/migrate)
+
+- **Leftover fixed**: fresh installs required manual `trace db init` + `trace db migrate`
+  (runtime commands assumed a managed schema; installers swallowed DB failures).
+  Every `session()` now calls `DatabaseSessionManager.ensure_ready()` — first use per
+  database applies pending migrations under the existing lock + checksum + verifier
+  machinery, later uses return on a dict lookup (`:memory:` always runs, each engine
+  owns a private DB). `trace doctor` heals then proves (offline → FAIL card, not a
+  traceback). Installers run one visible `trace doctor` instead of two swallowed
+  `db init`/`db migrate` calls — faster (1 startup vs 2) with an honest proof gate.
+- **Tests updated to the new contract**: pending-schema doctor now expects auto-heal
+  PASS; stale-004 test asserts first read heals (`list_cases() == []`, no manual apply);
+  unreachable paths use a mocked `ensure_ready` refusal (no network wait, no stray
+  `D:\nonexistent` side-effect — created once by the old bad-path URL, deleted).
+- **Proof**: fresh file DB with zero manual commands — `case list` exit 0 (empty),
+  `doctor` all PASS (13 applied), `audit verify` VALID 0 events. Suite 159 passed,
+  3 PG-skipped, 75.68% branch (>70%), 0 Ruff check/format (100 files), 0 Mypy (95 files).
+- **Files touched**: `core/database/session.py` (`_READY_CACHE` + `ensure_ready()` +
+  `session()` hook), `core/cli/doctor.py` (heal-then-prove with offline card),
+  `install.ps1`/`install.sh` (single `trace doctor` proof gate + self-heal wording),
+  `tests/unit/test_doctor.py`, `tests/unit/test_database_migrations_and_lifecycle.py`.
+
+---

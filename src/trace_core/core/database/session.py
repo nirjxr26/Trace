@@ -40,6 +40,9 @@ def create_db_engine(database_url: str | None = None) -> Engine:
     return create_engine(url, connect_args=connect_args, **engine_kwargs)
 
 
+_READY_CACHE: dict[str, bool] = {}
+
+
 class DatabaseSessionManager:
     """Manages database engine, schema creation, and sessions."""
 
@@ -84,9 +87,20 @@ class DatabaseSessionManager:
 
         apply_migrations(self.engine)
 
+    def ensure_ready(self) -> None:
+        memory = ":memory:" in self._url
+        if not memory and _READY_CACHE.get(self._url):
+            return
+        from trace_core.core.database.migrations import apply_migrations
+
+        apply_migrations(self.engine)
+        if not memory:
+            _READY_CACHE[self._url] = True
+
     @contextmanager
     def session(self) -> Generator[Session, None, None]:
         """Context-managed session providing transaction boundary."""
+        self.ensure_ready()
         session = self.session_factory()
         try:
             yield session
