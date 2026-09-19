@@ -10,7 +10,7 @@ from trace_core.tui.theme import TRACE_THEME
 
 _DEFAULT_HINT = "[↑↓] Navigate · [?] Help"
 
-TAB_HINTS: dict[str, str] = dict.fromkeys(("cases", "audit", "integrity", "database"), _DEFAULT_HINT)
+TAB_HINTS: dict[str, str] = dict.fromkeys(("cases", "audit", "integrity", "database", "updates"), _DEFAULT_HINT)
 
 
 class TraceApp(App[None]):
@@ -72,6 +72,7 @@ class TraceApp(App[None]):
         Binding("2", "tab('audit')", "Audit"),
         Binding("3", "tab('integrity')", "Integrity"),
         Binding("4", "tab('database')", "Database"),
+        Binding("5", "tab('updates')", "Updates"),
         Binding("ctrl+p", "palette", "Commands"),
         Binding("question_mark", "keys", "Keys"),
         Binding("q", "quit", "Quit"),
@@ -92,6 +93,7 @@ class TraceApp(App[None]):
         from trace_core.tui.screens.audit import AuditView
         from trace_core.tui.screens.cases import CasesView
         from trace_core.tui.screens.db import DbView
+        from trace_core.tui.screens.updates import UpdatesView
         from trace_core.tui.screens.verify import VerifyView
 
         with TabbedContent(initial="cases"):
@@ -103,6 +105,8 @@ class TraceApp(App[None]):
                 yield VerifyView(self._session_manager)
             with TabPane("Database", id="database"):
                 yield DbView(self._session_manager)
+            with TabPane("Updates", id="updates"):
+                yield UpdatesView(self._session_manager)
         yield Static(TAB_HINTS["cases"], id="hint")
 
     def on_mount(self) -> None:

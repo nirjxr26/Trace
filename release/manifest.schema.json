@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Trace Release Manifest",
+  "type": "object",
+  "required": [
+    "schema",
+    "product",
+    "channel",
+    "version",
+    "release_id",
+    "security_update",
+    "restart_required",
+    "manifest_signature",
+    "signing_key_id",
+    "artifacts"
+  ],
+  "properties": {
+    "schema": { "type": "integer", "const": 1 },
+    "product": { "type": "string", "const": "trace" },
+    "channel": { "type": "string", "enum": ["stable", "beta"] },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+[a-zA-Z0-9._-]*$" },
+    "release_id": { "type": "string" },
+    "published_at": { "type": "string" },
+    "minimum_supported_version": { "type": "string" },
+    "security_update": { "type": "boolean" },
+    "restart_required": { "type": "boolean" },
+    "notes": { "type": "string" },
+    "manifest_signature": { "type": "string", "pattern": "^[0-9a-f]+$" },
+    "signing_key_id": { "type": "string", "pattern": "^ed25519:[0-9a-f]{16}$" },
+    "schema_min": { "type": "integer", "minimum": 1 },
+    "schema_target": { "type": "integer", "minimum": 1 },
+    "backup_required": { "type": "boolean" },
+    "backup_waiver": { "type": "string" },
+    "artifacts": {
+      "type": "object",
+      "minProperties": 1,
+      "patternProperties": {
+        ".*": {
+          "type": "object",
+          "required": ["filename", "sha256", "size", "signature", "signing_key_id"],
+          "properties": {
+            "filename": { "type": "string", "pattern": "^[^/\\\\]+$" },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "size": { "type": "integer", "minimum": 1, "maximum": 10737418240 },
+            "signature": { "type": "string", "pattern": "^[0-9a-f]+$" },
+            "signing_key_id": { "type": "string", "pattern": "^ed25519:[0-9a-f]{16}$" },
+            "platform": { "type": "string", "enum": ["windows", "linux", "macos"] },
+            "arch": { "type": "string", "enum": ["x64", "arm64"] }
+          }
+        }
+      }
+    }
+  }
+}
+

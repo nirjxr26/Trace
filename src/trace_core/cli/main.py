@@ -37,6 +37,13 @@ def launch_doctor() -> None:
     run_doctor()
 
 
+@app.command("recovery")
+def launch_recovery() -> None:
+    from trace_core.core.cli.recovery import run_recovery
+
+    run_recovery()
+
+
 def version_callback(value: bool) -> None:
     if value:
         typer.echo(f"Trace v{settings.version}")

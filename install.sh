@@ -170,11 +170,40 @@ printf "\033[1;33m[4/6] Verifying environment & storage directories...\033[0m\n"
 if [ ! -f "$SCRIPT_DIR/.env" ]; then
     if [ -f "$SCRIPT_DIR/.env.example" ]; then
         cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"
+        printf '%s\n' "TRACE_UPDATE_MANIFEST=https://github.com/nirjxr26/Trace/releases/latest/download/stable.json" >> "$SCRIPT_DIR/.env"
         printf "  \033[1;32m[OK] Created .env from template (.env.example).\033[0m\n"
         printf "  \033[1;33m[!] Set a strong TRACE_DATABASE_URL password and TRACE_SECRET_KEY before production use.\033[0m\n"
     fi
 else
     printf "  \033[1;32m[OK] Existing .env file preserved.\033[0m\n"
+fi
+
+TRUST_DIR="${HOME}/.trace/trust/releases"
+if mkdir -p "$TRUST_DIR" 2>/dev/null; then
+    BUNDLE_FILE="$(mktemp)"
+    if curl --proto '=https' --proto-redir '=https' -fsSL -o "$BUNDLE_FILE" "https://github.com/nirjxr26/Trace/releases/latest/download/trusted-keys.bundle" 2>/dev/null; then
+        while IFS=' ' read -r _fp _hex _rest; do
+            case "$_fp" in
+                ????????????????) ;;
+                *) continue ;;
+            esac
+            case "$_fp" in
+                *[!0-9a-f]*|'') continue ;;
+            esac
+            case "$_hex" in
+                ????????????????????????????????????????????????????????????????) ;;
+                *) continue ;;
+            esac
+            case "$_hex" in
+                *[!0-9a-f]*|'') continue ;;
+            esac
+            printf '%s' "$_hex" > "$TRUST_DIR/${_fp}.pub"
+        done < "$BUNDLE_FILE"
+        printf "  \033[1;32m[OK] Release trust keys provisioned.\033[0m\n"
+    else
+        printf "  \033[1;33m[!] Could not fetch release trust keys (offline or no release yet). Verification stays fail-closed until provisioned.\033[0m\n"
+    fi
+    rm -f "$BUNDLE_FILE"
 fi
 
 DEFAULT_STORAGE="${HOME}/.trace/storage"

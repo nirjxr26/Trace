@@ -8,8 +8,9 @@ def feature_apps() -> list[tuple[str, Any]]:
     from trace_core.audit.commands import audit_app
     from trace_core.cases.commands import case_app
     from trace_core.core.cli.db_commands import db_app
+    from trace_core.updates.commands import update_app
 
-    return [("case", case_app), ("audit", audit_app), ("db", db_app)]
+    return [("case", case_app), ("audit", audit_app), ("db", db_app), ("update", update_app)]
 
 
 def default_handlers() -> list[Any]:
@@ -21,6 +22,12 @@ def default_handlers() -> list[Any]:
         from trace_core.audit.shell_handler import AuditShellCommandHandler
 
         handlers.append(AuditShellCommandHandler())
+    except Exception:
+        pass
+    try:
+        from trace_core.updates.shell_handler import UpdateShellCommandHandler
+
+        handlers.append(UpdateShellCommandHandler())
     except Exception:
         pass
     return handlers

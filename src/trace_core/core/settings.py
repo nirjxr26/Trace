@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     # Deployment environment. Only development tolerates shipped defaults.
     env: str = Field(default="development", alias="TRACE_ENV")
 
+    # Update channel + release manifest location (local path or https URL).
+    # Unset means update checking is unavailable; the app never guesses.
+    update_channel: str = Field(default="stable", alias="TRACE_UPDATE_CHANNEL")
+    update_manifest: str | None = Field(default=None, alias="TRACE_UPDATE_MANIFEST")
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
