@@ -78,7 +78,7 @@ def test_migrations_tracking_and_idempotency() -> None:
 
 
 def test_migration_004_backfills_archived_by_on_old_database() -> None:
-    """Reproduce stale-schema failure: DB migrated before archived_by existed must self-heal."""
+    """Stale schema self-heals on first use: no manual migrate needed."""
 
     from trace_core.cases.service import CaseService
 
@@ -90,15 +90,10 @@ def test_migration_004_backfills_archived_by_on_old_database() -> None:
         conn.execute(sqlalchemy.text("ALTER TABLE cases DROP COLUMN archived_by"))
         conn.execute(sqlalchemy.text("DELETE FROM schema_migrations WHERE version = 4"))
 
-    # Stale schema breaks reads touching the new column (the reported `case list` failure).
+    # First read heals the schema automatically (the old `case list` failure is gone).
     service = CaseService(mgr)
-    with pytest.raises(sqlalchemy.exc.OperationalError):
-        service.list_cases()
-
-    # Pending migration heals the schema; reads work again.
-    assert (4, "004_add_archived_by_column") in get_pending_migrations(mgr.engine)
-    assert apply_migrations(mgr.engine) == ["004_add_archived_by_column"]
     assert service.list_cases() == []
+    assert get_pending_migrations(mgr.engine) == []
 
 
 def test_unit_of_work_transaction_and_hooks() -> None:
