@@ -1793,3 +1793,351 @@
   `tests/unit/test_doctor.py`, `tests/unit/test_database_migrations_and_lifecycle.py`.
 
 ---
+
+## 2026-09-19 — Update module work plan (`docs/UPDATE_PLAN.md`)
+
+- **New plan file** under `docs/` with the full update-module work list:
+  ground rules, reuse inventory, early trust fixes, Phases 0–6 with per-phase
+  tasks and acceptance, prohibitions, and the 22-box program acceptance list.
+  Mirrors the validated target architecture (packaging decision as Phase 0,
+  updater-owned migration, Phase 6 deferred).
+- **No code touched** — plan only.
+
+---
+
+## 2026-09-19 — Update UX review refinements (`docs/UPDATE_PLAN.md`)
+
+- **Applied all five review points, doc-only**: available/installable split
+  (AVAILABLE … ROLLED_BACK states); verification-summary confirm screen
+  before install commits; `restart_required` manifest metadata with a stated
+  restart line; persistent update result marker read by the new process after
+  handoff;   deterministic security-update language (manifest facts only, no
+  "recommended"). Plus: reminder-dismissal as UI preference state, frozen
+  thin-UI contract section, extended acceptance list.
+- **No code touched** — plan only.
+
+---
+
+## 2026-09-19 — Update module implementation (Phases 0–6)
+
+- **Phases 0–6 implemented**: packaging decision `docs/decisions/packaging.md`
+  (source distribution retained, frozen binary deferred); release pipeline
+  `.github/workflows/release.yml` + `release/manifest.schema.json` with sigstore
+  separation; update protocol `updates/manifest.py/verifier.py/policy.py/checker.py`;
+  Update Manager `updates/{domain,models,dto,service,commands,errors}` + migration
+  `014_create_update_history` + CLI `trace update check|history|verify` (table|json,
+  exit 0 on availability, forensic deferral, deterministic security label) +
+  TUI `UpdatesView` as 5th tab wired via `tui/app.py`; standalone updater
+  `trace_updater/updater.py` (staging `.partial→replace`, `atomic_install`,
+  `rollback`, `previous/` preservation); result marker `write/read_result_marker`
+  on `UpdateService` (atomic `tmp→replace`); recovery `trace recovery`
+  (doctor-based diagnostics, migration-pending guidance).
+- **Trust separation**: release trust never touches forensic keystore; update
+  history is a dedicated `update_history` table, never the audit ledger.
+- **Verification**: 159 passed, 3 PG-skipped, 74.5% branch (>70%), ruff check +
+  format clean, mypy clean (88 files), `trace update check --help` and
+  `trace recovery --help` both green. Plan `docs/UPDATE_PLAN.md` checked off
+  per phase.
+
+---
+
+## 2026-09-19 — Update system hardening (Phases A–F fixes)
+
+- **Phase A**: version-owned layout documented in `docs/decisions/packaging.md`
+  (releases/current/previous/staging/updater/state/logs, pointer-swap
+  activation); `updates/trust.py` (release trust store
+  `~/.trace/trust/releases`, separate from forensic `keys/`,
+  `require_trusted_key` fail-closed) + `updates/gate.py`
+  (`ForensicOperationGate` ALLOWED/ACTIVE/UNKNOWN); `updates/domain.py`
+  state machine (`_ALLOWED` + `can_transition`/`assert_transition`,
+  `AVAILABLE_BUT_POLICY_BLOCKED/DOWNLOADING/STAGED/MIGRATING/HEALTH_CHECK/
+  ROLLING_BACK/RECOVERY_REQUIRED`); `updates/models.py` (`transaction_id`,
+  `release_id`, indexed `started_at`, `migration_range`,
+  `health_check_result`, `failure_stage`, `restart_required`);
+  `updates/dto.py` wired (`transaction_id`, `release_id`); `updates/service.py`
+  (`transaction()` + `paginate(limit/offset)` + `atomic_write_lines` +
+  `check_contained` for markers, `marker_schema`); `updates/shell_handler.py`
+  + `catalog.default_handlers` (REPL parity).
+- **Phase B**: `updates/manifest.py` manifest signature fields + bounded
+  1 MB load; `updates/sources.py` (`ManifestSource`/`Local`/`Test`);
+  `updates/verifier.py` (unsafe filename, signature presence, trusted-key
+  check for manifest+artifact); `updates/policy.py` (`packaging.version`
+  semver, no naive `int` split); `updates/trust.py` is release-only;
+  `core/cli/error_handler.py` maps `UpdateVerificationError` → `EXIT_VERIFY_FAILED`.
+- **Phase C**: `updates/lock.py` (file lock, stale-safe, `update.lock`);
+  `updates/service` marker now crash-safe (`atomic_write_lines`);
+  `trace_updater/updater.py` reuse `ensure_dir`/`check_contained`, hash-bound
+  staging, `tmp→replace` per file.
+- **Phase D**: `core/cli/recovery.py` independent `DatabaseSessionManager`
+  per run + last marker diagnostics; no dependency on broken app's manager.
+- **Phase E**: `updates/commands.py` (`update show` with security label +
+  `restart_required` + verification), `tui/screens/updates.py`
+  (sanitized marker/history, `limit=5` pagination), thin-UI preserved.
+- **Phase F**: telemetry guard verified (no `httpx`/`requests` in `updates/`);
+  rollout deferred intentionally (policy extensible via `UpdateChannel`).
+- **Verification**: 159 passed, 3 PG-skipped, ruff + mypy clean, no new deps.
+
+---
+
+## 2026-09-19 — Update remediation round (P0/P1, adversarial audit findings)
+
+- **P0 crypto**: `updates/signing.py` (Ed25519 over `canonical_json` bytes,
+  `ed25519:<fp16>` IDs, `trust/releases/*.pub` + `revoked/`, wrong-algorithm
+  rejection); `verifier.py` full chain with no `if signing_key_id` bypass;
+  manifest requires `security_update`/`restart_required`/`manifest_signature`/
+  `signing_key_id` + `schema_min`/`schema_target`/`backup_required`;
+  `packaging` floor declared in `pyproject.toml`.
+- **P0 install**: `trace_updater/updater.py` rewritten to version-owned
+  `releases/<version>/` + atomic `active-version`/`previous-version`
+  pointers; staged `.partial` resume + hash binding; `stage_release`
+  completeness check + immutability refusal.
+- **P0 lock/staging**: `core/fs.file_lock` single source (migrations +
+  updates delegate, reentrant `update_lock`); `updates/staging.py`
+  (`staged.json` binding + re-hash on promote); marker via
+  `atomic_write_lines` + `check_contained`.
+- **P0 migration**: `updates/migration.py` (active-marker,
+  `run_updater_migration` with backup/compat/verify, sqlite copy +
+  `pg_dump` paths); `ensure_ready()` defers while a marker is active
+  (lazy import, no cycle); backup-failure blocks before apply.
+- **P0 health/rollback/recovery**: `updates/lifecycle.py` (lock-held run:
+  policy→verify→stage→activate→migrate→health→complete/rollback, history
+  rows for FAILED + ROLLED_BACK); `recovery.py` release-aware (active/
+  previous/marker inspection, corrupt-marker fail-closed, restore);
+  `update install` command; `EXIT_UPDATE_BLOCKED=14`/`EXIT_RECOVERY_FAILED=15`.
+- **P1**: dead DTOs removed; gate UNKNOWN fails closed in lifecycle;
+  `update check` TTL cache with stable JSON; release workflow (existence
+  gate, tag==version, manifest generation, client self-verify,
+  reproducibility double-build, immutable publish); `release/` scripts.
+- **Tribunal** `tests/updates/` (58 tests: trust, policy, state machine,
+  staging/install, migration race, lifecycle/recovery, CLI contracts,
+  telemetry guard).
+- **Verification**: 217 passed, 3 PG-skipped, 76.91% branch (>70%), ruff +
+  format + mypy clean, plan checkboxes + acceptance list updated.
+
+---
+
+## 2026-09-19 — Remaining NOT READY gaps closed where provable locally
+
+- **HTTP manifest source**: `updates/sources.py` gained `HttpManifestSource`
+  (stdlib urllib only: https-only outside loopback, JSON content-type gate,
+  1 MB bound, 10 s timeout, no https→http downgrade) + `source_for`
+  routing; `checker.check_for_update` accepts URLs; 8 localhost tribunal
+  tests (ok/non-JSON/oversized/refused/plain-http/redirect/routing/check).
+  Telemetry guard updated to ban third-party HTTP clients while allowing
+  stdlib urllib inside `sources.py` only.
+- **TUI update UX**: `UpdatesView` gained `focus_default` (the missing piece
+  that let `_on_tab_pane_focused` snap focus back to Cases and silently
+  revert tab activation), a wired Check button, verification-summary detail,
+  history rows, and hint-pill update; `TRACE_UPDATE_MANIFEST` /
+  `TRACE_UPDATE_CHANNEL` settings added; 2 Textual pilot tests.
+- **PG backup wiring**: proven via stubbed `pg_dump` argv/timeout/check
+  contract test + missing-binary fail-closed test; live-server proof still
+  requires PostgreSQL (none in this environment).
+- **Reproducibility**: proven in an isolated throwaway venv (repo venv
+  untouched): two `SOURCE_DATE_EPOCH=0` builds → wheels byte-identical,
+  sdists differ; workflow reproducibility step narrowed to `*.whl` with the
+  sdist exclusion documented in `docs/decisions/packaging.md`; `release.yml`
+  validated as well-formed YAML in the same isolated env.
+- **Verification**: local CI gate PASSED — 230 passed, 3 PG-skipped,
+  77.35% branch (>70%), ruff + format + mypy (135 files) clean.
+
+---
+
+## 2026-09-19 — Live PostgreSQL proof (docker pg16 + native pg_dump)
+
+- **Defect found by going live**: `backup_database` passed the SQLAlchemy URL
+  (`postgresql+psycopg://…`) straight to `pg_dump`, which rejects the driver
+  scheme. Fixed to strip `+driver` → plain `postgresql://`, plus empty-dump
+  refusal. Tribunal argv test updated to the converted URL.
+- **Live proof** (Windows PG16 service + container image cached; container
+  removed afterwards): schema 14 on PG; `backup_database` produced a real
+  35 KB dump; dump contains all tables + live case/audit rows; full restore
+  into `trace_restore` verified (`case show 2026-CR-0009` intact);
+  `run_updater_migration` on PG (backup 54 KB → compat → apply →
+  checksums → schema 14); migration race blocked; PG integration suite
+  3 passed. Pre-existing seq-17 ledger mismatch exists identically on
+  source and restore (byte-faithful backup, developer's lived-in dev DB —
+  not caused by this work). Leftovers removed (restore DB, container,
+  temp files); proof case 2026-CR-0009 remains in dev `trace` DB.
+- **Verification**: local CI gate PASSED — 230 passed, 3 skipped,
+  ruff + format + mypy clean.
+
+---
+
+## 2026-09-19 — Business-logic fix round (C/H/M findings → implementation)
+
+- **P0-A**: `marker_state()` tri-state (active/absent/corrupt);
+  `ensure_ready()` fails closed on corrupt; non-blocking `try_file_lock`
+  in `core/fs` + reentrant `try_update_lock`; recovery triages stale
+  markers (prove-no-live-holder → clear → record FAILED/recovery row).
+  Fixed own bug found by tests: `try/except/else` skipped cleanup on
+  `return` (restructured so finish always runs, original error preserved).
+- **P0-B/C**: rollback split from forward-activate (previous pointer
+  preserved, repeat-safe); `release.json` compat metadata staged per
+  release; `rollback_release()` compat-gates + restores backup;
+  `backup_path` + `override_reason` columns via migration 015 (+DTOs,
+  service, lifecycle, marker).
+- **P0-D/E**: `run()` rejects downgrades itself; unified versioned marker
+  module (`marker_schema=2`, validated reads, fail-closed loads);
+  service/TUI/recovery rewired; dead `require_result_marker` removed.
+- **P1**: staged re-verify gate; bound `.partial` sidecars (hash-less branch
+  closed); updater entry points self-lock; health checks pointer +
+  completeness + schema target with post-activate verify + rollback
+  re-health; min-bypass `--bypass-minimum` recorded; contiguity check;
+  backup default-on with waiver + `VACUUM INTO`; content-bound shared check
+  cache (CLI+TUI); install confirm/`--yes`; exact platform selection
+  (schema + model + verifier + lifecycle).
+- **P2**: `started_at` captured; history `--limit/--offset`; channel enum
+  validation; typed loader errors; strict key parsing; UNVERIFIED framing
+  in `show`; retry/backoff + ETag/304 + exact-URL identity; dead DTOs and
+  `signing.ALGORITHM` removed; `forensic_keystore` dead helper removed.
+  M3 decision: no durable VERIFYING state (confirm stays ephemeral UI).
+- **Tribunal**: 98 update tests (+39); full suite 257 passed, 3 PG-skipped,
+  coverage gate held; ruff + format + mypy clean.
+
+---
+
+## 2026-09-19 — Business-logic fix round, completion pass
+
+- **Caught by tests during implementation**: `try/except/else` cleanup skip
+  on `return` (restructured); cross-test shared install-base collisions
+  (isolated per-test storage); suite-masked health-ordering bug (pointer
+  check ran pre-activate — moved post-activate; `started_at` DTO field
+  added); missing `select_artifact` import surfaced by gates.
+- **Closed**: staged re-verify + pointer verify wired with failure rows;
+  whole-run marker ownership with ambient-transaction exemption (owner
+  proceeds, others defer); `override_reason`/`backup_waived` recorded;
+  platform selection exact with ambiguity rejection; cache/TTL/ETag
+  content-bound and shared CLI↔TUI; install confirm/`--yes`/`--bypass-minimum`
+  with recorded overrides; contiguity + require-both-or-neither; WAL-safe
+  default-on backup with waiver.
+- **Tribunal**: 105 update tests; full suite 264 passed, 3 PG-skipped,
+  77.50% branch coverage; ruff + format + mypy clean.
+
+---
+
+## 2026-09-19 — SonarLint & SonarQube Quality Remediation (S1871, S3776, S8513, S1192, S5713, S5958, S9073)
+
+- **`src/trace_updater/updater.py`**: Merged duplicate `tmp.unlink()` condition on size limit exceeding 100MB into primary validation branch, resolving `python:S1871`.
+- **`src/trace_core/updates/sources.py`**:
+  - Extracted URL prefixes `_HTTPS_PREFIX = "https://"`, `_HTTP_PREFIX = "http://"`, and `_LOOPBACK_PREFIXES`, resolving `python:S1192` duplicate string literals.
+  - Replaced chained `startswith` checks with tuple checks, resolving `python:S8513`.
+  - Extracted `_HttpsRedirectGuard`, `_validate_manifest_url()`, and `_is_retryable_url_error()`, reducing `fetch_with_etag` Cognitive Complexity from 21 down to 11 (`python:S3776`).
+- **`src/trace_core/updates/manifest.py`**: Moved `return _validate(parsed)` outside the JSON `try ... except ValueError` block in `load_manifest_bytes`, resolving redundant exception handling (`python:S5713`).
+- **`src/trace_core/updates/checker.py`**:
+  - Extracted `_URL_PREFIXES` tuple for `startswith`, resolving `python:S8513`.
+  - Extracted `_cached_check_http()` helper, reducing `cached_check` Cognitive Complexity from 23 down to 4 (`python:S3776`).
+- **`src/trace_core/updates/commands.py`**:
+  - Replaced duplicate string literals (`"Path to artifact file"` and `"Trace will restart to complete this update."`) with module-level constants `ARTIFACT_PATH_HELP` and `RESTART_REQUIRED_MESSAGE`, resolving `python:S1192`.
+- **`tests/updates/test_lifecycle_gates.py`**:
+  - Replaced broad `pytest.raises(Exception)` with concrete `pytest.raises(UpdateError)` and `pytest.raises(ValidationError)`, resolving `python:S5958`.
+  - Decomposed composite assertions into dedicated atomic assertions (`assert dto.override_reason is not None`, `assert "lab device" in dto.override_reason`, `assert rows`, and `assert rows[0].started_at <= rows[0].completed_at`), resolving `python:S9073`.
+- **Verification Proof**:
+  - Pytest: 266 passed, 3 skipped in 36.6s.
+  - Ruff check: All checks passed (0 errors).
+  - Ruff format: 148 files checked, all formatted cleanly.
+  - Mypy: Success: no issues found in 141 source files (`mypy src tests`).
+
+---
+
+## 2026-09-19 — SonarLint & Pylance Follow-up Remediation (S5713, S9073, OptionalSubscript, OperatorIssue, CallIssue)
+
+- **`src/trace_core/updates/lifecycle.py`**:
+  - Removed redundant `FileNotFoundError` from `except (OSError, UpdateError) as e:` since `FileNotFoundError` inherits from `OSError`, resolving `python:S5713`.
+- **`tests/updates/test_cli_contract.py`**:
+  - Split composite assertion `assert rows and rows[0]["from_version"] == "0.1.0"` into two atomic assertions, resolving `python:S9073`.
+- **`tests/updates/test_lifecycle_recovery.py`**:
+  - Added `assert marker is not None` before accessing `marker[...]`, resolving Pylance `reportOptionalSubscript`.
+- **`tests/updates/test_lifecycle_gates.py`**:
+  - Added `assert rows[0].completed_at is not None` before `< =` comparison with `started_at`, resolving Pylance `reportOperatorIssue`.
+  - Used dictionary unpacking `**kwargs` for `UpdateHistoryCreateDto` unknown field rejection test, resolving Pylance `reportCallIssue`.
+- **`tests/updates/test_policy_versions.py`**:
+  - Added `assert reason is not None` before asserting `"forensic" in reason`, resolving Pylance `reportOperatorIssue`.
+- **Verification Proof**:
+  - Pytest: 266 passed, 3 skipped in 33.1s (100% passing).
+  - Ruff check: All checks passed (0 errors).
+  - Ruff format: 148 files already formatted.
+  - Mypy: Success: no issues found in 141 source files (`mypy src tests`).
+
+---
+
+## 2026-09-19 — Pre-PR Gate Execution & Recovery Fixture Hardening
+
+- **`tests/updates/test_recovery_paths.py`**:
+  - Fixed `test_recovery_restores_previous` release metadata to set `schema_min: 0` for compatibility when running in isolated memory SQLite mode (`TRACE_DATABASE_URL="sqlite:///:memory:"`), preventing false recovery failure on un-migrated ephemeral test instances.
+- **Local Pre-PR Gate (`check-pr.ps1`) Execution**:
+  - Step 1: Virtual environment import check — Passed.
+  - Step 2: Lockfile hash coherence — Passed (all pinned packages verified).
+  - Step 3: Ruff format check & Ruff lint — Passed (0 errors, 148 files checked).
+  - Step 4: Mypy strict type checking — Passed (141 files clean).
+  - Step 5: Pytest + 70% coverage gate — Passed (266 passed, 3 PG skipped, 77.44% branch coverage).
+  - Pre-PR Gate Exit Code: 0 (`PRE-PR GATE PASSED -- safe to open the PR`).
+- **`src/trace_core/updates/commands.py`**:
+  - Made `--manifest` option in `trace update check` optional, seamlessly falling back to `settings.update_manifest` from `.env` (`TRACE_UPDATE_MANIFEST`), so examiners can run bare `trace update check` without needing to pass long manifest URLs manually.
+
+---
+
+## 2026-09-20 — SonarQube findings remediation (Blocker + High + Medium + Low)
+
+- **Blocker — `updates/migration.py` (`restore_backup` path traversal)**:
+  replaced vacuous self-containment checks with `_confine_backup_path()`,
+  confining the marker/DB-sourced backup path to the Trace tree
+  (`storage_root` or its parent); unreadable paths fail closed.
+- **High — `release.yml`**: pinned `softprops/action-gh-release` to full
+  commit SHA `3bb1273…` (# v2.6.2, verified live via `gh api`), matching
+  repo SHA-pin convention.
+- **High — release scripts (`make/sign/verify`)**: all `sys.argv` paths now
+  resolved + contained to repo root; manifest-supplied artifact filenames
+  rejected on `/`, `\`, `..` (same rule as the client verifier). Proven:
+  full make→sign→verify round trip with the production key exits 0, and a
+  `../evil.bin` manifest is refused with exit 1.
+- **High — `install.sh`**: explicit no-op `*)` defaults on the trust-bundle
+  validation cases (behavior unchanged, rule satisfied).
+- **Medium — `release.yml` deps**: `build==1.6.1` + `cyclonedx-bom==7.4.0`
+  moved into the hash-locked chain (`pyproject` dev extra → `uv.lock`
+  purely additive → `requirements.txt` re-exported); release job now
+  installs everything via `--require-hashes`; unpinned install line
+  deleted. Lockfile coherence + hashed-install dry-run verified.
+- **Medium — `fs.check_contained` oracle**: `resolve()` OSError unified
+  into the generic refusal (no behavior change; no test depended on it).
+- **Medium — pytest single-invocation** (`test_http_source` ×4,
+  `test_lifecycle_gates` ×3, `test_lifecycle_recovery` ×2,
+  `test_manifest_trust` ×1): constructors/handlers hoisted out of
+  `pytest.raises` blocks per repo S5754 convention.
+- **Low — `install.sh`**: `CURL_PROTO='=https'` constant replaces all
+  curl `--proto` literals; `sh -n` clean, `install.ps1` parser clean.
+- **Verification (targeted, full gate deferred per plan — CI last)**:
+  updates tribunal 107 passed; ruff + format clean; mypy clean
+  (src + release scripts); release script round trip + traversal
+  rejection proven live. Full `check-pr.ps1` gate reserved for the end.
+- **Final gate (`check-pr.ps1`, run after all fixes)**: PASSED — venv,
+  lockfile coherence, ruff format + lint, mypy strict (all clean);
+  pytest 266 passed, 3 PG-skipped (no local PostgreSQL), coverage gate
+  held. Pre-PR gate exit code 0.
+
+---
+
+## 2026-09-20 — SonarQube 3-finding remediation (High + 2× Medium)
+
+- **High — `release/make_manifest.py` (path traversal, `main`)**:
+  deleted private `_contained` (echoed path, unhandled `OSError`);
+  reuse `trace_core.core.fs.check_contained` like `sign/release_verify`;
+  added `argv` count guard + generic `refusing path outside repository`
+  refusal (no path echo). Proven: valid manifest writes, `../evil.json`
+  exits 1.
+- **Medium — `updates/migration.py` (`_confine_backup_path` oracle)**:
+  unified `OSError` + escape branches into single
+  `backup path refused; cannot restore` (same as `fs.check_contained`
+  convention); moved `roots` resolve inside `try` + `from None`.
+  No path echo preserved. Kills existence/outside distinguisher.
+- **Medium — `tests/updates/test_lifecycle_recovery.py` (S5754)**:
+  hoisted `UnknownGate()` out of `pytest.raises` so block holds only
+  `life.run(...)` (repo single-invocation convention).
+- **Verification**: ruff + format clean (3 files); mypy clean
+  (`migration.py` + `make_manifest.py`); updates tribunal 107 passed;
+  targeted `lifecycle_recovery + migration_race + recovery_paths`
+  22 passed.
+- **Files**: `release/make_manifest.py`, `src/trace_core/updates/migration.py`,
+  `tests/updates/test_lifecycle_recovery.py`.
+
+---

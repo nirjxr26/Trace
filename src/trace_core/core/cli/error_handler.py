@@ -36,6 +36,41 @@ def _resolve_unexpected_error(
     )
 
 
+def _update_error(e: Exception, operation_title: str | None, default_remediation: str | None):  # type: ignore[no-untyped-def]
+    try:
+        from trace_core.core.cli.exit_codes import EXIT_RECOVERY_FAILED, EXIT_UPDATE_BLOCKED
+        from trace_core.updates.errors import (
+            RecoveryError,
+            UpdatePolicyBlockedError,
+            UpdateVerificationError,
+        )
+
+        if isinstance(e, UpdateVerificationError):
+            return (
+                operation_title or "Update Verification Failed",
+                str(e),
+                default_remediation or "Update rejected — verification failed. Installation not performed.",
+                EXIT_VERIFY_FAILED,
+            )
+        if isinstance(e, UpdatePolicyBlockedError):
+            return (
+                operation_title or "Update Blocked",
+                str(e),
+                default_remediation or "Update deferred by policy. See block reason.",
+                EXIT_UPDATE_BLOCKED,
+            )
+        if isinstance(e, RecoveryError):
+            return (
+                operation_title or "Recovery Failed",
+                str(e),
+                default_remediation or "Recovery could not restore a bootable release. Inspect diagnostics.",
+                EXIT_RECOVERY_FAILED,
+            )
+    except Exception:
+        pass
+    return None
+
+
 def _typed_error(e: Exception, operation_title: str | None, default_remediation: str | None):  # type: ignore[no-untyped-def]
     if isinstance(e, NotFoundError):
         return (
@@ -67,6 +102,8 @@ def _typed_error(e: Exception, operation_title: str | None, default_remediation:
             default_remediation or "Inspect audit chain for tampered sequence and restore from backup.",
             EXIT_VERIFY_FAILED,
         )
+    if (r := _update_error(e, operation_title, default_remediation)) is not None:
+        return r
     return None
 
 

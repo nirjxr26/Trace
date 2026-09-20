@@ -171,11 +171,29 @@ $EnvExample = Join-Path $RepoRoot ".env.example"
 if (-not (Test-Path $EnvFile)) {
     if (Test-Path $EnvExample) {
         Copy-Item $EnvExample $EnvFile
+        Add-Content -Path $EnvFile -Value "TRACE_UPDATE_MANIFEST=https://github.com/nirjxr26/Trace/releases/latest/download/stable.json"
         Write-Host "  [OK] Created .env from template (.env.example)." -ForegroundColor Green
         Write-Host "  [!] Set a strong TRACE_DATABASE_URL password and TRACE_SECRET_KEY before production use." -ForegroundColor Yellow
     }
 } else {
     Write-Host "  [OK] Existing .env file preserved." -ForegroundColor Green
+}
+
+$TrustDir = Join-Path $Home ".trace\trust\releases"
+try {
+    New-Item -ItemType Directory -Force -Path $TrustDir | Out-Null
+    $Bundle = Join-Path ([IO.Path]::GetTempPath()) "trace-trusted-keys.bundle"
+    Invoke-WebRequest -Uri "https://github.com/nirjxr26/Trace/releases/latest/download/trusted-keys.bundle" -OutFile $Bundle -UseBasicParsing
+    foreach ($line in (Get-Content -Path $Bundle)) {
+        $parts = $line.Trim() -split "\s+", 2
+        if ($parts.Count -eq 2 -and $parts[0] -match "^[0-9a-f]{16}$" -and $parts[1] -match "^[0-9a-f]{64}$") {
+            Set-Content -Path (Join-Path $TrustDir ($parts[0] + ".pub")) -Value $parts[1] -NoNewline
+        }
+    }
+    Remove-Item -Force $Bundle -ErrorAction SilentlyContinue
+    Write-Host "  [OK] Release trust keys provisioned." -ForegroundColor Green
+} catch {
+    Write-Host "  [!] Could not fetch release trust keys (offline or no release yet). Verification stays fail-closed until provisioned." -ForegroundColor Yellow
 }
 
 $DefaultStorage = Join-Path $Home ".trace\storage"

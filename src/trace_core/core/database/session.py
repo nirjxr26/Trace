@@ -88,6 +88,19 @@ class DatabaseSessionManager:
         apply_migrations(self.engine)
 
     def ensure_ready(self) -> None:
+        from trace_core.updates.migration import is_owner, marker_state
+
+        state, active = marker_state()
+        if state == "corrupt":
+            from trace_core.updates.errors import UpdateInProgressError
+
+            raise UpdateInProgressError("update marker unreadable; run trace recovery before starting")
+        if state == "active" and active is not None and not is_owner(str(active.get("transaction_id"))):
+            from trace_core.updates.errors import UpdateInProgressError
+
+            raise UpdateInProgressError(
+                f"update transaction {active.get('transaction_id')} owns migration; normal startup deferred"
+            )
         memory = ":memory:" in self._url
         if not memory and _READY_CACHE.get(self._url):
             return

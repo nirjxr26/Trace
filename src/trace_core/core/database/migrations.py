@@ -415,36 +415,10 @@ def _sqlite_lock_path(url: str) -> str | None:
 @contextmanager
 def _file_lock(path: str):  # type: ignore[no-untyped-def]
     """Blocking exclusive lockfile. Windows msvcrt, POSIX fcntl."""
-    import os
-    from pathlib import Path as _Path
+    from trace_core.core.fs import file_lock
 
-    from trace_core.core.fs import ensure_dir
-
-    ensure_dir(_Path(path).parent)
-    handle = open(path, "a+b")  # noqa: PTH123
-    try:
-        if os.name == "nt":
-            import msvcrt
-
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
-        else:
-            import fcntl  # type: ignore[import-not-found]
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)  # type: ignore[attr-defined]
+    with file_lock(path):
         yield
-    finally:
-        try:
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
-            else:
-                import fcntl  # type: ignore[import-not-found]
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        handle.close()
 
 
 def apply_migrations(engine: Engine) -> list[str]:
@@ -540,6 +514,29 @@ def _migration_013_anchor_intents(bind: Engine | Connection) -> None:
 
     if "anchor_intents" in Base.metadata.tables:
         Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables["anchor_intents"]])
+
+
+@register_migration(14, "014_create_update_history")
+def _migration_014_update_history(bind: Engine | Connection) -> None:
+    import trace_core.updates.models  # noqa: F401
+
+    if "update_history" in Base.metadata.tables:
+        Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables["update_history"]])
+
+
+@register_migration(15, "015_update_history_provenance")
+def _migration_015_update_provenance(bind: Engine | Connection) -> None:
+    for column, ddl in (
+        ("backup_path", "ALTER TABLE update_history ADD COLUMN backup_path TEXT"),
+        ("override_reason", "ALTER TABLE update_history ADD COLUMN override_reason TEXT"),
+    ):
+        if isinstance(bind, Connection):
+            if "update_history" in inspect(bind).get_table_names():
+                _ensure_column(bind, "update_history", column, ddl)
+        else:
+            with bind.begin() as conn:
+                if "update_history" in inspect(conn).get_table_names():
+                    _ensure_column(conn, "update_history", column, ddl)
 
 
 @register_migration(11, "011_create_least_privilege_roles")

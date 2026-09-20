@@ -6,6 +6,9 @@
 
 set -eu
 
+# Allowed URL protocol for all artifact downloads (HTTPS only, incl. redirects).
+CURL_PROTO='=https'
+
 # Determine repository root (support local execution and remote 'curl ... | sh' execution)
 SCRIPT_DIR=""
 if [ -n "${BASH_SOURCE:-}" ]; then
@@ -67,9 +70,9 @@ else
                 fi
                 ARCHIVE_FILE="$(mktemp)"
                 if [ -n "$AUTH_HEADER" ]; then
-                    curl --proto '=https' --proto-redir '=https' -fsSL -H "$AUTH_HEADER" -o "$ARCHIVE_FILE" "$ARCHIVE_URL"
+                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -H "$AUTH_HEADER" -o "$ARCHIVE_FILE" "$ARCHIVE_URL"
                 else
-                    curl --proto '=https' --proto-redir '=https' -fsSL -o "$ARCHIVE_FILE" "$ARCHIVE_URL"
+                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$ARCHIVE_FILE" "$ARCHIVE_URL"
                 fi
                 ACTUAL_SHA="$(sha256sum "$ARCHIVE_FILE" | cut -d' ' -f1)"
                 if [ "$ACTUAL_SHA" != "$TRACE_RELEASE_SHA256" ]; then
@@ -78,7 +81,7 @@ else
                     exit 1
                 fi
                 if [ -n "${TRACE_COSIGN_BUNDLE_URL:-}" ] && command -v cosign >/dev/null 2>&1; then
-                    curl --proto '=https' --proto-redir '=https' -fsSL -o "${ARCHIVE_FILE}.sigstore.json" "$TRACE_COSIGN_BUNDLE_URL"
+                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "${ARCHIVE_FILE}.sigstore.json" "$TRACE_COSIGN_BUNDLE_URL"
                     cosign verify-blob --bundle "${ARCHIVE_FILE}.sigstore.json" \
                         --certificate-identity "${TRACE_COSIGN_IDENTITY:?set TRACE_COSIGN_IDENTITY}" \
                         --certificate-oidc-issuer "${TRACE_COSIGN_OIDC_ISSUER:-https://token.actions.githubusercontent.com}" \
@@ -90,9 +93,9 @@ else
             else
                 printf "  [!] No TRACE_RELEASE_SHA256 pinned: installing unverified %s.\n" "$TRACE_REF"
                 if [ -n "$AUTH_HEADER" ]; then
-                    curl --proto '=https' --proto-redir '=https' -fsSL -H "$AUTH_HEADER" "$ARCHIVE_URL" | tar -xz --strip-components=1 -C "$REPO_ROOT"
+                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -H "$AUTH_HEADER" "$ARCHIVE_URL" | tar -xz --strip-components=1 -C "$REPO_ROOT"
                 else
-                    curl --proto '=https' --proto-redir '=https' -fsSL "$ARCHIVE_URL" | tar -xz --strip-components=1 -C "$REPO_ROOT"
+                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL "$ARCHIVE_URL" | tar -xz --strip-components=1 -C "$REPO_ROOT"
                 fi
             fi
         fi
@@ -170,11 +173,42 @@ printf "\033[1;33m[4/6] Verifying environment & storage directories...\033[0m\n"
 if [ ! -f "$SCRIPT_DIR/.env" ]; then
     if [ -f "$SCRIPT_DIR/.env.example" ]; then
         cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"
+        printf '%s\n' "TRACE_UPDATE_MANIFEST=https://github.com/nirjxr26/Trace/releases/latest/download/stable.json" >> "$SCRIPT_DIR/.env"
         printf "  \033[1;32m[OK] Created .env from template (.env.example).\033[0m\n"
         printf "  \033[1;33m[!] Set a strong TRACE_DATABASE_URL password and TRACE_SECRET_KEY before production use.\033[0m\n"
     fi
 else
     printf "  \033[1;32m[OK] Existing .env file preserved.\033[0m\n"
+fi
+
+TRUST_DIR="${HOME}/.trace/trust/releases"
+if mkdir -p "$TRUST_DIR" 2>/dev/null; then
+    BUNDLE_FILE="$(mktemp)"
+    if curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$BUNDLE_FILE" "https://github.com/nirjxr26/Trace/releases/latest/download/trusted-keys.bundle" 2>/dev/null; then
+        while IFS=' ' read -r _fp _hex _rest; do
+            case "$_fp" in
+                ????????????????) ;;
+                *) continue ;;
+            esac
+            case "$_fp" in
+                *[!0-9a-f]*|'') continue ;;
+                *) ;;
+            esac
+            case "$_hex" in
+                ????????????????????????????????????????????????????????????????) ;;
+                *) continue ;;
+            esac
+            case "$_hex" in
+                *[!0-9a-f]*|'') continue ;;
+                *) ;;
+            esac
+            printf '%s' "$_hex" > "$TRUST_DIR/${_fp}.pub"
+        done < "$BUNDLE_FILE"
+        printf "  \033[1;32m[OK] Release trust keys provisioned.\033[0m\n"
+    else
+        printf "  \033[1;33m[!] Could not fetch release trust keys (offline or no release yet). Verification stays fail-closed until provisioned.\033[0m\n"
+    fi
+    rm -f "$BUNDLE_FILE"
 fi
 
 DEFAULT_STORAGE="${HOME}/.trace/storage"
