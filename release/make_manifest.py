@@ -3,17 +3,19 @@ import json
 import sys
 from pathlib import Path
 
+sys.path.insert(0, "src")
 
-def _contained(path: Path) -> Path:
-    root = Path.cwd().resolve()
-    resolved = path.resolve()
-    if resolved != root and root not in resolved.parents:
-        raise SystemExit(f"refusing path outside repository: {path}")
-    return resolved
+from trace_core.core.fs import check_contained
 
 
 def main() -> None:
-    tag, channel, release_id, out = sys.argv[1], sys.argv[2], sys.argv[3], _contained(Path(sys.argv[4]))
+    if len(sys.argv) != 5:
+        raise SystemExit("usage: make_manifest.py <tag> <channel> <release_id> <out>")
+    tag, channel, release_id = sys.argv[1], sys.argv[2], sys.argv[3]
+    try:
+        out = check_contained(Path(sys.argv[4]), Path.cwd())
+    except ValueError:
+        raise SystemExit("refusing path outside repository") from None
     version = tag.removeprefix("v")
     artifacts = {}
     for path in sorted(Path("dist").glob("*")):

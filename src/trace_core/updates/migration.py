@@ -104,13 +104,13 @@ def verify_compatibility(manager: DatabaseSessionManager, schema_min: int | None
 def _confine_backup_path(backup_path: str | Path) -> Path:
     from trace_core.core.settings import settings
 
-    roots = [Path(settings.storage_root).resolve(), Path(settings.storage_root).parent.resolve()]
     try:
+        roots = [Path(settings.storage_root).resolve(), Path(settings.storage_root).parent.resolve()]
         resolved = Path(backup_path).resolve()
     except OSError:
-        raise RecoveryError("backup path is not usable; cannot restore")
+        raise RecoveryError("backup path refused; cannot restore") from None
     if not any(resolved == root or root in resolved.parents for root in roots):
-        raise RecoveryError("backup outside trace root; cannot restore")
+        raise RecoveryError("backup path refused; cannot restore")
     return resolved
 
 

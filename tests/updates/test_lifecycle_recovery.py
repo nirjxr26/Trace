@@ -49,8 +49,9 @@ def test_unknown_gate_fails_closed(session_manager, temp_storage_root, signed_re
     manifest, _, art_path, _ = signed_release()
     svc = UpdateService(session_manager)
     life = UpdateLifecycle("tx-life-3", svc)
+    gate = UnknownGate()
     with pytest.raises(UpdateError):
-        life.run(manifest, art_path, gate=UnknownGate())
+        life.run(manifest, art_path, gate=gate)
 
 
 def test_health_failure_rolls_back(

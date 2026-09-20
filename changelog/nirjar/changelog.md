@@ -2116,3 +2116,28 @@
   held. Pre-PR gate exit code 0.
 
 ---
+
+## 2026-09-20 — SonarQube 3-finding remediation (High + 2× Medium)
+
+- **High — `release/make_manifest.py` (path traversal, `main`)**:
+  deleted private `_contained` (echoed path, unhandled `OSError`);
+  reuse `trace_core.core.fs.check_contained` like `sign/release_verify`;
+  added `argv` count guard + generic `refusing path outside repository`
+  refusal (no path echo). Proven: valid manifest writes, `../evil.json`
+  exits 1.
+- **Medium — `updates/migration.py` (`_confine_backup_path` oracle)**:
+  unified `OSError` + escape branches into single
+  `backup path refused; cannot restore` (same as `fs.check_contained`
+  convention); moved `roots` resolve inside `try` + `from None`.
+  No path echo preserved. Kills existence/outside distinguisher.
+- **Medium — `tests/updates/test_lifecycle_recovery.py` (S5754)**:
+  hoisted `UnknownGate()` out of `pytest.raises` so block holds only
+  `life.run(...)` (repo single-invocation convention).
+- **Verification**: ruff + format clean (3 files); mypy clean
+  (`migration.py` + `make_manifest.py`); updates tribunal 107 passed;
+  targeted `lifecycle_recovery + migration_race + recovery_paths`
+  22 passed.
+- **Files**: `release/make_manifest.py`, `src/trace_core/updates/migration.py`,
+  `tests/updates/test_lifecycle_recovery.py`.
+
+---
