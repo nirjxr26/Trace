@@ -9,12 +9,16 @@ from trace_core.updates.manifest import load_manifest_dict
 
 def main() -> None:
     from trace_core.core.fs import check_contained
+    from trace_core.updates.verifier import assert_safe_filename
 
     def _safe_filename(name: str) -> str:
-        if not name or "/" in name or "\\" in name or ".." in name:
-            raise SystemExit(f"refusing unsafe artifact filename: {name!r}")
-        return name
+        try:
+            return assert_safe_filename(name)
+        except Exception as e:
+            raise SystemExit(f"refusing unsafe artifact filename: {name!r} ({e})") from None
 
+    if len(sys.argv) != 3:
+        raise SystemExit("usage: verify_release.py <manifest> <tag>")
     manifest_path, tag = check_contained(Path(sys.argv[1]), Path.cwd()), sys.argv[2]
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest = load_manifest_dict(data)
@@ -42,6 +46,9 @@ def main() -> None:
     from trace_core.updates.verifier import verify_manifest
 
     for pub in Path("release/trusted-keys").glob("*.pub"):
+        # revoked/ is runtime-only; source-of-truth keys that were revoked must not be re-trusted.
+        if (trust_root() / "revoked" / pub.stem).exists():
+            continue
         shutil.copy2(pub, trust_root() / pub.name)
     for key in manifest.artifacts:
         verify_manifest(

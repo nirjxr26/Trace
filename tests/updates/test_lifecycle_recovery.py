@@ -43,7 +43,7 @@ def test_unknown_gate_fails_closed(session_manager, temp_storage_root, signed_re
     from trace_core.updates.gate import ForensicOperationGate
 
     class UnknownGate(ForensicOperationGate):
-        def can_install_update(self):
+        def can_install_update(self, context=None):
             return GateDecision.UNKNOWN
 
     manifest, _, art_path, _ = signed_release()

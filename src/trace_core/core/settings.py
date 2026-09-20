@@ -44,12 +44,16 @@ class Settings(BaseSettings):
     env: str = Field(default="development", alias="TRACE_ENV")
 
     # Update channel + release manifest location (local path or https URL).
-    # Unset means update checking is unavailable; the app never guesses.
+    # Defaults to the official Trace release manifest. Can be overridden via
+    # TRACE_UPDATE_MANIFEST or .env, or disabled by setting TRACE_UPDATE_MANIFEST="".
     update_channel: str = Field(default="stable", alias="TRACE_UPDATE_CHANNEL")
-    update_manifest: str | None = Field(default=None, alias="TRACE_UPDATE_MANIFEST")
+    update_manifest: str | None = Field(
+        default="https://github.com/nirjxr26/Trace/releases/latest/download/stable.json",
+        alias="TRACE_UPDATE_MANIFEST",
+    )
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(".env", str(Path.home() / ".trace" / ".env")),
         env_file_encoding="utf-8",
         extra="ignore",
     )

@@ -277,11 +277,16 @@ def _install_sqlite_audit_triggers(conn: Connection) -> None:
             pass
 
 
+_MIGRATION_CHECKSUM_CACHE: dict[str, str] = {}
+
+
 def _migration_checksum(name: str) -> str:
     """Content checksum: migration name + registered source. Detects post-apply edits."""
     import hashlib
     import inspect as pyinspect
 
+    if name in _MIGRATION_CHECKSUM_CACHE:
+        return _MIGRATION_CHECKSUM_CACHE[name]
     source = ""
     for _, mname, action in MIGRATIONS:
         if mname == name:
@@ -291,7 +296,9 @@ def _migration_checksum(name: str) -> str:
             except (OSError, TypeError):
                 source = ""
             break
-    return hashlib.sha256(f"{name}\n{source}".encode()).hexdigest()
+    digest = hashlib.sha256(f"{name}\n{source}".encode()).hexdigest()
+    _MIGRATION_CHECKSUM_CACHE[name] = digest
+    return digest
 
 
 def _legacy_migration_checksum(name: str) -> str:
@@ -498,6 +505,22 @@ def _migration_010_signature(bind: Engine | Connection) -> None:
                 _ensure_column(conn, "audit_events", col_name, ddl)
 
 
+@register_migration(11, "011_create_least_privilege_roles")
+def _migration_011_roles(bind: Engine | Connection) -> None:
+    """Create NOLOGIN app/reader/migrator roles and revoke ledger mutation. PostgreSQL only."""
+    if isinstance(bind, Connection):
+        if bind.dialect.name != "postgresql":
+            return
+        for stmt in ROLE_DDL:
+            bind.execute(text(stmt))
+    else:
+        with bind.begin() as conn:
+            if conn.dialect.name != "postgresql":
+                return
+            for stmt in ROLE_DDL:
+                conn.execute(text(stmt))
+
+
 @register_migration(12, "012_create_operators_table")
 def _migration_012_operators(bind: Engine | Connection) -> None:
     """Operator registry for workstation RBAC (auto-provisioned, first-ever is admin)."""
@@ -539,17 +562,56 @@ def _migration_015_update_provenance(bind: Engine | Connection) -> None:
                     _ensure_column(conn, "update_history", column, ddl)
 
 
-@register_migration(11, "011_create_least_privilege_roles")
-def _migration_011_roles(bind: Engine | Connection) -> None:
-    """Create NOLOGIN app/reader/migrator roles and revoke ledger mutation. PostgreSQL only."""
-    if isinstance(bind, Connection):
-        if bind.dialect.name != "postgresql":
+@register_migration(16, "016_update_history_roundtrip")
+def _migration_016_update_roundtrip(bind: Engine | Connection) -> None:
+    """History round-trip: transaction index + provenance columns for read DTO parity."""
+
+    def _run(conn: Connection) -> None:
+        if "update_history" not in inspect(conn).get_table_names():
             return
-        for stmt in ROLE_DDL:
-            bind.execute(text(stmt))
+        cols = _column_names(conn, "update_history")
+        bool_default = "FALSE" if conn.dialect.name == "postgresql" else "0"
+        for column, ddl in (
+            ("artifact_sha256", "ALTER TABLE update_history ADD COLUMN artifact_sha256 VARCHAR(64)"),
+            ("signing_key_id", "ALTER TABLE update_history ADD COLUMN signing_key_id VARCHAR(64)"),
+            ("failure_reason", "ALTER TABLE update_history ADD COLUMN failure_reason TEXT"),
+            (
+                "restart_required",
+                f"ALTER TABLE update_history ADD COLUMN restart_required BOOLEAN DEFAULT {bool_default}",
+            ),
+        ):
+            if column not in cols:
+                try:
+                    with conn.begin_nested():
+                        conn.execute(text(ddl))
+                except Exception:
+                    pass
+        bool_lit = "FALSE" if conn.dialect.name == "postgresql" else "0"
+        try:
+            with conn.begin_nested():
+                conn.execute(
+                    text(f"UPDATE update_history SET restart_required={bool_lit} WHERE restart_required IS NULL")
+                )
+                conn.execute(text(f"UPDATE update_history SET rollback={bool_lit} WHERE rollback IS NULL"))
+        except Exception:
+            pass
+        if not _index_exists(conn, "update_history", "ix_update_history_transaction_id"):
+            try:
+                with conn.begin_nested():
+                    conn.execute(
+                        text("CREATE INDEX ix_update_history_transaction_id ON update_history (transaction_id)")
+                    )
+            except Exception:
+                pass
+        if not _index_exists(conn, "update_history", "ix_update_history_started_at"):
+            try:
+                with conn.begin_nested():
+                    conn.execute(text("CREATE INDEX ix_update_history_started_at ON update_history (started_at)"))
+            except Exception:
+                pass
+
+    if isinstance(bind, Connection):
+        _run(bind)
     else:
         with bind.begin() as conn:
-            if conn.dialect.name != "postgresql":
-                return
-            for stmt in ROLE_DDL:
-                conn.execute(text(stmt))
+            _run(conn)

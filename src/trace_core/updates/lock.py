@@ -14,6 +14,11 @@ def lock_path() -> Path:
 
 @contextmanager
 def update_lock():  # type: ignore[no-untyped-def]
+    """Reentrant file lock. Thread-local depth only; cross-process authority is the lock file.
+
+    storage_root must be on a local filesystem for fcntl/msvcrt correctness (NFS may not honor locks).
+    Must be called from sync update paths; TUI async tasks must use anyio.to_thread.
+    """
     depth = getattr(_local, "depth", 0)
     if depth:
         _local.depth = depth + 1

@@ -10,3 +10,4 @@ EXIT_NOT_FOUND: Final[int] = 12
 EXIT_CONFLICT: Final[int] = 13
 EXIT_UPDATE_BLOCKED: Final[int] = 14
 EXIT_RECOVERY_FAILED: Final[int] = 15
+EXIT_RECOVERY_RETRY: Final[int] = 16

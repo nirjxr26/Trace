@@ -38,9 +38,16 @@ def _resolve_unexpected_error(
 
 def _update_error(e: Exception, operation_title: str | None, default_remediation: str | None):  # type: ignore[no-untyped-def]
     try:
-        from trace_core.core.cli.exit_codes import EXIT_RECOVERY_FAILED, EXIT_UPDATE_BLOCKED
+        from trace_core.core.cli.exit_codes import (
+            EXIT_ERROR,
+            EXIT_RECOVERY_FAILED,
+            EXIT_RECOVERY_RETRY,
+            EXIT_UPDATE_BLOCKED,
+        )
         from trace_core.updates.errors import (
+            RecoveryBlockedError,
             RecoveryError,
+            UpdateNetworkError,
             UpdatePolicyBlockedError,
             UpdateVerificationError,
         )
@@ -58,6 +65,20 @@ def _update_error(e: Exception, operation_title: str | None, default_remediation
                 str(e),
                 default_remediation or "Update deferred by policy. See block reason.",
                 EXIT_UPDATE_BLOCKED,
+            )
+        if isinstance(e, UpdateNetworkError):
+            return (
+                operation_title or "Update Check Failed",
+                str(e),
+                default_remediation or "Check network connectivity and manifest URL, then retry.",
+                EXIT_ERROR,
+            )
+        if isinstance(e, RecoveryBlockedError):
+            return (
+                operation_title or "Recovery Blocked",
+                str(e),
+                default_remediation or "A live updater owns migration. Retry after it finishes.",
+                EXIT_RECOVERY_RETRY,
             )
         if isinstance(e, RecoveryError):
             return (

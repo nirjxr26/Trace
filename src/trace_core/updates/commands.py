@@ -9,6 +9,12 @@ update_app = typer.Typer(name="update", help="Check, stage, and record updates."
 MANIFEST_PATH_HELP = "Path to release manifest JSON"
 ARTIFACT_PATH_HELP = "Path to artifact file"
 RESTART_REQUIRED_MESSAGE = "Trace will restart to complete this update."
+HISTORY_COLUMNS: list[tuple[str, dict]] = [("From", {}), ("To", {}), ("Channel", {}), ("Result", {}), ("Rollback", {})]
+
+
+def history_table_rows(rows: list) -> list[list[str]]:  # type: ignore[no-untyped-def]
+    """Single source for history table rows. Shared by CLI and REPL shell."""
+    return [[r.from_version, r.to_version, r.channel, r.result, str(r.rollback)] for r in rows]
 
 
 @update_app.command("check")
@@ -64,16 +70,16 @@ def update_history(
             return
         render_minimalist_table(
             "Update History",
-            [("From", {}), ("To", {}), ("Channel", {}), ("Result", {}), ("Rollback", {})],
-            [[r.from_version, r.to_version, r.channel, r.result, str(r.rollback)] for r in rows],
-            empty_message="No updates recorded.",
+            HISTORY_COLUMNS,
+            history_table_rows(rows),
+            empty_message="No updates recorded." if offset == 0 else f"No updates at offset {offset}.",
         )
 
 
 @update_app.command("show")
 def update_show(
     manifest: str = typer.Option(..., "--manifest", help=MANIFEST_PATH_HELP),
-    artifact: str = typer.Option(None, "--artifact", help=ARTIFACT_PATH_HELP),
+    artifact: str | None = typer.Option(None, "--artifact", help=ARTIFACT_PATH_HELP),
 ) -> None:
     with capture_cli_errors("Update Show"):
         from pathlib import Path
@@ -134,13 +140,13 @@ def update_install(
         from trace_core.updates.errors import UpdateError, UpdateNotAvailableError
         from trace_core.updates.lifecycle import UpdateLifecycle
         from trace_core.updates.manifest import load_manifest
-        from trace_core.updates.policy import is_update_available, select_artifact
-        from trace_core.updates.verifier import verify_manifest
+        from trace_core.updates.policy import is_update_available
+        from trace_core.updates.verifier import resolve_artifact, verify_manifest
 
         m = load_manifest(manifest)
         if not is_update_available(settings.version, m):
             raise UpdateNotAvailableError(f"no update available (current {settings.version})")
-        artifact_entry = select_artifact(m)
+        artifact_entry = resolve_artifact(m, Path(artifact))
         verify_manifest(m, Path(artifact))
         bypass_note = ""
         if bypass_minimum:
@@ -167,5 +173,7 @@ def update_install(
             if not Confirm.ask("Install update?"):
                 console.print("[dim]Install cancelled.[/dim]")
                 raise typer.Exit(0)
-        dto = UpdateLifecycle(str(uuid.uuid4())).run(m, Path(artifact), channel, allow_minimum_bypass=bypass_minimum)
+        dto = UpdateLifecycle(str(uuid.uuid4())).run(
+            m, Path(artifact), channel=channel, allow_minimum_bypass=bypass_minimum
+        )
         console.print(f"[green]Update {dto.result}: {dto.from_version} -> {dto.to_version}[/green]")

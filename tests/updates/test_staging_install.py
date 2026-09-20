@@ -16,10 +16,12 @@ def test_partial_resume_and_promote(tmp_path):
 
 
 def test_hash_mismatch_discards_partial(tmp_path):
+    from trace_core.updates.errors import UpdateVerificationError
+
     src = tmp_path / "payload.bin"
     src.write_bytes(b"good-bytes")
     staging = tmp_path / "staging"
-    with pytest.raises(ValueError):
+    with pytest.raises(UpdateVerificationError):
         updater_mod.stage_artifact(src, staging, expected_sha256="0" * 64)
     assert not (staging / "payload.bin").exists()
 

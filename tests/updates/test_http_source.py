@@ -42,6 +42,7 @@ def _handler(body, content_type="application/json", code=200, location=None):
                 self.end_headers()
                 return
             raw = body() if callable(body) else body
+            assert isinstance(raw, bytes)
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(raw)))
@@ -65,6 +66,12 @@ def test_non_json_rejected(serve):
     source = HttpManifestSource(base, timeout=5)
     with pytest.raises(UpdateError):
         source.fetch("stable")
+
+
+def test_octet_stream_accepted_for_github_release_assets(serve, manifest_bytes):
+    base = serve(_handler(manifest_bytes, content_type="application/octet-stream"))
+    data = HttpManifestSource(base, timeout=5).fetch("stable")
+    assert json.loads(data)["product"] == "trace"
 
 
 def test_oversized_rejected(serve):

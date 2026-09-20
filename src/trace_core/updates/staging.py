@@ -14,9 +14,11 @@ REQUIRED_KEYS = (
     "verification",
 )
 
+STAGED_RECORD_FILENAME = "staged.json"
+
 
 def staged_record_path(staging_dir: str | Path) -> Path:
-    return Path(staging_dir) / "staged.json"
+    return Path(staging_dir) / STAGED_RECORD_FILENAME
 
 
 def write_staged_record(staging_dir: str | Path, record: dict[str, Any]) -> Path:
@@ -46,11 +48,9 @@ def is_verified_stage(staging_dir: str | Path, artifact_path: str | Path) -> boo
     record = read_staged_record(staging_dir)
     if not record or record.get("verification") != "passed":
         return False
+    if record.get("actual_sha256") != record.get("expected_sha256"):
+        return False
     try:
-        if sha256_file(artifact_path) != record["actual_sha256"]:
-            return False
-        if sha256_file(artifact_path) != record["expected_sha256"]:
-            return False
+        return sha256_file(artifact_path) == record["actual_sha256"]
     except OSError:
         return False
-    return True

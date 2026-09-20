@@ -3,11 +3,19 @@ import shutil
 from pathlib import Path
 
 from trace_core.core.fs import atomic_write_lines, check_contained, ensure_dir, sha256_file
+from trace_core.updates.errors import UpdateVerificationError
 from trace_core.updates.lock import update_lock
 
 
 def releases_root(base: str | Path) -> Path:
     return ensure_dir(Path(base) / "releases")
+
+
+def install_root() -> Path:
+    """Single source for on-disk install tree. Sibling of storage_root so wipes preserve releases."""
+    from trace_core.core.settings import settings
+
+    return Path(settings.storage_root).parent / "install"
 
 
 def staging_root(base: str | Path) -> Path:
@@ -37,7 +45,11 @@ def read_previous(base: str | Path) -> str | None:
 
 
 def _binding_path(staging_dir: Path, name: str) -> Path:
-    return staging_dir / f"{name}.partial.json"
+    from trace_core.core.fs import check_contained
+    from trace_core.updates.verifier import assert_safe_filename
+
+    assert_safe_filename(name)
+    return check_contained(staging_dir / f"{name}.partial.json", staging_dir)
 
 
 def _read_binding(staging_dir: Path, name: str) -> dict | None:
@@ -76,7 +88,7 @@ def _stage_artifact_locked(
     tmp = staging_dir / f"{src.name}.partial"
     check_contained(tmp, staging_dir)
     if expected_sha256 is None:
-        raise ValueError("staging requires an expected hash")
+        raise UpdateVerificationError("staging requires an expected hash")
     offset = _stage_copy(src, staging_dir, dst, tmp, expected_sha256, binding)
     return offset
 
@@ -89,6 +101,7 @@ def _stage_copy(  # type: ignore[no-untyped-def]
     offset = 0
     if tmp.exists():
         prior = _read_binding(staging_dir, src.name)
+        # Resume only when binding matches; >100MiB partials restart to bound disk use.
         if (
             prior is None
             or binding is None
@@ -117,7 +130,7 @@ def _stage_copy(  # type: ignore[no-untyped-def]
     if sha256_file(tmp) != expected_sha256:
         tmp.unlink(missing_ok=True)
         _binding_path(staging_dir, src.name).unlink(missing_ok=True)
-        raise ValueError("staged artifact hash mismatch")
+        raise UpdateVerificationError("staged artifact hash mismatch")
     tmp.replace(dst)
     _binding_path(staging_dir, src.name).unlink(missing_ok=True)
     return dst
@@ -148,10 +161,12 @@ def _stage_release_locked(
     check_contained(target, root)
     if target.exists():
         raise FileExistsError(f"release {version} already staged; releases are immutable")
-    tmp = root / f".staging-{version}"
+    tmp = check_contained(root / f".staging-{version}", root)
     if tmp.exists():
         shutil.rmtree(tmp)
-    shutil.copytree(src_dir, tmp)
+    from trace_core.updates.staging import STAGED_RECORD_FILENAME
+
+    shutil.copytree(src_dir, tmp, ignore=shutil.ignore_patterns("*.partial", "*.partial.json", STAGED_RECORD_FILENAME))
     if expected:
         missing = [f for f in expected if not (tmp / f).exists()]
         if missing:

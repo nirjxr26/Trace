@@ -29,9 +29,15 @@ def read_check_cache(max_age: int = TTL_SECONDS) -> dict[str, Any] | None:
 
 
 def write_check_cache(data: dict[str, Any]) -> Path:
+    from trace_core.updates.errors import UpdateError
+
     target = cache_path()
     check_contained(target, settings.storage_root)
-    return atomic_write_lines(target, [json.dumps({**data, "checked_at": time.time()}, indent=2)])
+    try:
+        payload = json.dumps({**data, "checked_at": time.time()}, indent=2)
+    except (TypeError, ValueError) as e:
+        raise UpdateError(f"unserializable check cache: {e}") from e
+    return atomic_write_lines(target, [payload])
 
 
 def manifest_identity(target: str) -> dict[str, Any] | None:
@@ -48,11 +54,11 @@ def manifest_identity(target: str) -> dict[str, Any] | None:
         return None
 
 
-def cache_valid_for(cached: dict[str, Any], target: str, channel: str) -> bool:
+def cache_valid_for(cached: dict[str, Any], target: str, channel: str, identity: dict[str, Any] | None = None) -> bool:
     if cached.get("manifest_path") != str(target) or cached.get("channel") != channel:
         return False
-    identity = manifest_identity(target)
-    if identity is None:
+    current = identity if identity is not None else manifest_identity(target)
+    if current is None:
         return False
     stored = cached.get("manifest_identity") or {}
-    return all(stored.get(k) == v for k, v in identity.items())
+    return all(stored.get(k) == v for k, v in current.items())

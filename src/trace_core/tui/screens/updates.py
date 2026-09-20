@@ -30,17 +30,17 @@ class UpdatesView(Vertical):
         svc = UpdateService(self._manager)
         marker = svc.read_result_marker()
         if marker:
+            prev = marker.get("previous_version") or "unknown"
+            target = marker.get("target_version") or "unknown"
             lines = [
-                f"{marker.get('previous_version', '')} → {marker.get('target_version', '')}",
-                f"result: {marker.get('result', '')}",
-                f"release: {marker.get('release_id', '')}",
-                f"migration: {marker.get('migration_range', '')}",
-                f"health: {marker.get('health_check_result', '')}",
+                f"{prev} → {target}",
+                f"result: {marker.get('result') or '—'}",
+                f"release: {marker.get('release_id') or '—'}",
+                f"migration: {marker.get('migration_range') or '—'}",
+                f"health: {marker.get('health_check_result') or '—'}",
             ]
             self.query_one(UPDATES_DETAIL_SELECTOR, Static).update(sanitize_terminal("\n".join(lines)))
-            self.query_one(UPDATES_STATUS_SELECTOR, Static).update(
-                sanitize_terminal(f"{marker.get('previous_version', '')} → {marker.get('target_version', '')}")
-            )
+            self.query_one(UPDATES_STATUS_SELECTOR, Static).update(sanitize_terminal(f"{prev} → {target}"))
             return
         history = svc.list_history(limit=5)
         if history:
@@ -50,6 +50,7 @@ class UpdatesView(Vertical):
         self._maybe_refresh_hint()
 
     def _maybe_refresh_hint(self) -> None:
+        # Local-only hint pill: remote manifests need network I/O, use `trace update check` for those.
         from trace_core.core.settings import settings
         from trace_core.updates.checker import cached_check
 
@@ -96,7 +97,7 @@ class UpdatesView(Vertical):
         try:
             text = self._check_text()
         except Exception as exc:
-            self.app.notify(str(exc), severity="error")
+            self.app.notify(str(exc)[:500], severity="error")
             return
         self.query_one(UPDATES_DETAIL_SELECTOR, Static).update(sanitize_terminal(text))
         self.query_one(UPDATES_STATUS_SELECTOR, Static).update(sanitize_terminal(text.splitlines()[0]))

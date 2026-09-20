@@ -2141,3 +2141,125 @@
   `tests/updates/test_lifecycle_recovery.py`.
 
 ---
+
+## 2026-09-20 — Fix `update check` vs GitHub octet-stream + multi-artifact verify
+
+- **Root cause 1**: `HttpManifestSource` rejected any `Content-Type` without
+  `json`; GitHub serves `stable.json` release assets as
+  `application/octet-stream`, so the documented
+  `releases/latest/download/stable.json` URL always failed closed.
+- **Fix 1**: accept `octet-stream` alongside `json` (`sources.py`);
+  content-type stays a hint — signature + schema + size still decide.
+  `text/html` still rejected.
+- **Root cause 2 (live-proved)**: shipped `v0.1.0` manifest holds wheel +
+  sdist, both untagged → `select_artifact` correctly refuses ambiguity, but
+  `verify`/`install`/lifecycle called it even when the operator already named
+  the file, so `trace update verify --artifact <wheel>` failed.
+- **Fix 2**: `verifier.resolve_artifact` — explicit `platform_key`, else exact
+  filename match, else strict `select_artifact` (unchanged); wired into
+  `verify_manifest`, `commands.install` display, and `lifecycle` staging.
+  Wrong file still fails filename/size/hash. `select_artifact` contract untouched.
+- **Verification**: ruff + format clean; mypy clean (141 files);
+  `tests/updates/ + tests/unit/` 268 passed; live `stable.json` HTTPS check
+  → `Up to date (0.1.0, stable)`, live wheel `verify` → `Verification passed`;
+  trust bundle key matches `signing_key_id`.
+- **Files**: `src/trace_core/updates/sources.py`, `verifier.py`,
+  `lifecycle.py`, `commands.py`, `tests/updates/test_http_source.py`,
+  `tests/updates/test_platform_select.py`.
+
+---
+
+## 2026-09-20 — Fix REPL `update` ANSI leak (raw `[1;38;2;…m` codes)
+
+- **Root cause (pre-existing, not from octet-stream work)**: only
+  `updates/shell_handler.py` renders via `CliRunner().invoke()` capture +
+  `console.print(raw_string)`; the captured string already holds ANSI, and
+  re-printing leaks escapes on hosts without VT. Cases/audit handlers call
+  services directly — no capture path.
+- **Fix**: `console.print(Text.from_ansi(res.output))` — Rich re-renders (or
+  strips) for the current terminal. One-line, `rich` already installed.
+  `select_artifact`/verify logic untouched.
+- **Note**: the underlying card text was correct — `no update manifest
+  configured` means the REPL process has no `TRACE_UPDATE_MANIFEST`
+  (env read at import; restart REPL or pass
+  `update check --manifest <https-url>` inside it).
+- **Verification**: ruff + format + mypy clean; shell/cli-contract/tui
+  17 passed; ANSI round-trip script proves old leaks / new clean with text kept.
+- **Files**: `src/trace_core/updates/shell_handler.py`.
+
+---
+
+## 2026-09-20 — Phase A P0 update-pipeline fixes (gate/allow-list/strict-key/urlparse/containment)
+
+- **Scope**: deep-audit P0-1 to P0-5 per `docs/audits/update-pipeline-deep-audit-2026-09-20.md` section 4/9.3, ponytail minimal diffs reusing `core/fs.py`.
+- **Fix**: gate pluggable `active_probe` plus `UpdateGateContext` plus exhaustive `match` fail-closed (`gate.py`, `lifecycle.py`); `stage_release` copytree ignore sidecars (`*.partial`, `*.partial.json`, `staged.json`); strict `import_release_pubkey` matching loader; IPv6 loopback via `urlparse` hostname set; `trust_key_path`/`revoked_path` `check_contained` wrapped as `UpdateVerificationError`.
+- **Verification**: `tests/updates/test_phase_a_p0.py` (6 adversarial) plus full `tests/updates/` 115 passed; ruff plus format plus mypy clean.
+- **Files**: `src/trace_core/updates/gate.py`, `src/trace_core/updates/lifecycle.py`, `src/trace_updater/updater.py`, `src/trace_core/updates/signing.py`, `src/trace_core/updates/sources.py`, `src/trace_core/updates/trust.py`, `tests/updates/test_phase_a_p0.py`, `tests/updates/test_lifecycle_recovery.py`, `docs/audits/update-pipeline-deep-audit-2026-09-20.md`.
+
+---
+
+## 2026-09-20 — Phase B P1 update-pipeline fixes (locks/types/policy)
+
+- **Scope**: deep-audit P1-1 to P1-8 per `docs/audits/update-pipeline-deep-audit-2026-09-20.md` section 4/9.4, plus P2-3 and V-02 pulled in.
+- **Fix**: `CHANNEL_COMPATIBILITY` map with nightly-on-stable rejected (`policy.py`); owner stays thread-local with migration self-owning worker threads (`migration.py`); pure `__init__` plus `load` reconstruct plus keyword-only `run` (`lifecycle.py`, `commands.py`); `IDLE→FAILED` plus `FAILED/RECOVERY_REQUIRED→IDLE` (`domain.py`); `artifact: str|None`; typed staging errors; duplicate-filename reject (`verifier.py`); both-or-neither `model_validator` at load (`manifest.py`).
+- **Caught mid-work**: first file-backed `is_owner` opened the gate (non-owner presenting the marker tx passed); tribunal `test_ensure_ready_blocked_during_update` forced the correct semantics.
+- **Verification**: `tests/updates/test_phase_b_p1.py` (9 tests) plus full `tests/updates/` 124 passed; ruff plus format plus mypy clean.
+- **Files**: `src/trace_core/updates/policy.py`, `verifier.py`, `migration.py`, `lifecycle.py`, `domain.py`, `commands.py`, `manifest.py`, `src/trace_updater/updater.py`, `tests/updates/test_phase_b_p1.py`, `tests/updates/test_staging_install.py`, `docs/audits/update-pipeline-deep-audit-2026-09-20.md`.
+
+---
+
+## 2026-09-20 — Phase C durable-transaction fixes (markers/backup/recovery)
+
+- **Scope**: deep-audit Phase C per `docs/audits/update-pipeline-deep-audit-2026-09-20.md` sections 3.1/9 (L-02, MARK-01, MIG-03, REC-01, REC-02, S-02). No new code comments written per instruction; existing comments preserved.
+- **Fix**: `migration_marker_path()` rename with all callers updated; `transition()` writes marker before mutating state; versioned `SCHEMA_REQUIRED_KEYS`; pre-mutation backup orphans removed while post-mutation backups preserved; deterministic `corrupt-<sha12>` recovery ids; `read_result_marker` delegates to `read_marker`; `RecoveryBlockedError` maps to new `EXIT_RECOVERY_RETRY (16)`.
+- **Verification**: `tests/updates/test_phase_c_durable.py` (8 tests) plus full `tests/updates/` 132 passed; ruff plus format plus mypy clean.
+- **Files**: `src/trace_core/updates/migration.py`, `marker.py`, `lifecycle.py`, `service.py`, `errors.py`, `src/trace_core/core/cli/recovery.py`, `error_handler.py`, `exit_codes.py`, `tests/updates/test_phase_c_durable.py`, `tests/updates/test_migration_race.py`, `docs/audits/update-pipeline-deep-audit-2026-09-20.md`.
+
+---
+
+## 2026-09-20 — Update pipeline P2-D completeness + reusability hardening
+
+- **Scope**: Close every remaining P2/P3/Perf finding from `update-pipeline-deep-audit-2026-09-20.md` that was deferred after Phase C, per AGENTS §§1-4/14 ponytail minimalism: one source per behavior, no new deps, match surrounding style exactly. Keep dirty tree (no commit) as instructed.
+- **Fix**:
+  - **DTO/Service**: `UpdateHistoryCreateDto.started_at` now `Field(default_factory=now_utc)` required at creation (no longer `None` fallback) — canonical wall-clock at transaction start, not at record time; `UpdateHistoryDto.from_model` single source replaces 3 manual mappings and now round-trips `artifact_sha256/signing_key_id/failure_reason/restart_required` (was dropped in `history --json`); `UpdateHistoryModel` widened `String(32)→64` for semver+build suffix, added `server_default=text("0")`, `DateTime(timezone=True)` + `@validates(coerce_utc)` for §14 Canonical UTC, index `ix_update_history_transaction_id` via `016_update_history_roundtrip` (idempotent, creates missing columns/indexes, backfills `NULL→0`).
+  - **Manifest/Policy/Verifier/Signing/Trust**: `manifest.py` surfaces all Pydantic errors (`"; ".join(loc:msg)`), bounded `read_bytes()+len>1MiB` kills TOCTOU, `platform/arch` `pattern` mirrors `release/manifest.schema.json`, `version` regex tightened `([._-][a-zA-Z0-9]+)*` + `max_length=64`; `policy.py` `_parse_version` stays `ValueError` for `packaging.Version` compat (test `test_version_ordering` pins `ValueError`), `_current_platform` emits `unknown(raw)` for empty `machine`; `verifier.py` adds `is_safe_filename/assert_safe_filename` single source, `unsafe` checked before `filename mismatch` to avoid leaking traversal payload, `verify_artifact_signature_streaming` streaming guard `>10GiB→UpdateVerificationError` + `Ed25519` full-bytes verify; `signing.py` `import_release_pubkey` now `atomic_write_lines(...,mode=0o600)` (no `0o644` window) with strict `len==1` split; `trust.py` caches `ensure_dir` in `_TRUST_ROOT_CACHE` and wraps both paths with `check_contained` defense-in-depth; `release/make_manifest|sign|verify` filtered `dist` glob (`*.sig/*.json/*.sbom/SHA256SUMS` skip), ensured `out.parent`, argv arity, revoked-skip.
+  - **Sources/Checker/Cache**: `sources.py` IPv6 loopback via `urlparse(hostname)` not prefix, `_HttpsRedirectGuard` cross-host + `https→http` downgrade both reject, `UpdateNetworkError(UpdateError)` split so `error_handler` shows "Check network" (`EXIT_ERROR`) vs trust (`EXIT_VERIFY_FAILED`/`11`); added `normalize_manifest_url/split_manifest_url` single source handling query strings; `checker.py` normalized etag key + single `manifest_identity` via `cache_valid_for(identity)` + `_payload_from_check` dedupe; `cache.py` `write_check_cache` wraps `json.dumps` to `UpdateNetworkError` and `cache_valid_for` takes optional precomputed identity; `staging.py` `is_verified_stage` single hash `actual==expected` string compare then one `sha256_file`; `updater.py` adds `install_root()` single source (replaces `settings.storage_root.parent/"install"` in `lifecycle`+`recovery`), `STAGED_RECORD_FILENAME` constant shared with `staging.py`, `_binding_path` via `assert_safe_filename+check_contained`, `tmp` also `check_contained`, `activate`/`rollback` idempotent.
+  - **Lifecycle/Migration/DB**: `lifecycle.py` `_override_note` now logs `structlog.warning` with `override_reason` trace, `_check_release_health` docs freshness contract, extracted `_verify_stage/_download_stage/_assert_verified_stage/_install_stage` helpers (god-function L-04 hardened to testable stages, still on `UpdateLifecycle` until second caller proves extraction), typed `_run_locked` signature, `load()` raises `RecoveryError` for wrong tx (consistent `EXIT_RECOVERY_FAILED`), `_run_locked` now `failure_stage=UpdateFailureStage.*` not magic strings; `migration.py` `backup_database` via `ensure_dir(dest)` + `check_contained(out)` + empty-file guard, `restore_backup` re-resolves after existence (TOCTOU), `core/database/session.ensure_ready` comment on `_READY_CACHE` thread-safety via `migrations._migration_lock`, `migrations._migration_checksum` memcached, `paginate` guard `if offset is not None and offset` / `if limit is not None` (allows `limit=0` to mean 0 rows, not all rows), `fs.file_lock/try_file_lock` `chmod(path,0o600)` not `fileno`.
+  - **CLI/Shell/TUI**: `commands.py` `HISTORY_COLUMNS+history_table_rows(rows)` single source shared with `shell_handler.py`, `update history` empty at offset says `No updates at offset X`, `RESTART_REQUIRED_MESSAGE` reused 3×; `shell_handler.py` replaced `CliRunner` test util with direct `cached_check/history/show/verify` service dispatches + explicit `update install` guidance to standalone CLI (preserves AGENTS §14 Strict Mutation Flow), `recovery.py` uses `updater.install_root()+marker.marker_path()+get_db(None)` + `UpdateFailureStage.RECOVERY`; `tui/screens/updates.py` shows `unknown→` and `—` placeholders, documents HTTP hint as local-only, caps `notify(...[:500])`.
+  - **Reusability sweep**: `verifier.assert_safe_filename`, `updater.install_root`, `staging.STAGED_RECORD_FILENAME`, `commands.history_table_rows`, `sources.normalize_manifest_url` each replace 2-3 duplicated literals/branches; `UpdateHistoryDto.from_model` collapses 18-field hand-roll; `Dto.started_at` default_factory collapses `or now_utc()` fallback; no new framework or abstraction introduced (ponytail).
+## 2026-09-20 — Fix GitHub Release CDN redirect & HTTP 304 ETag handling
+
+- **`src/trace_core/updates/sources.py`**:
+  - Permitted GitHub release asset CDN redirects in `_HttpsRedirectGuard` (`github.com` → `*.githubusercontent.com`), resolving `refusing cross-host manifest redirect` when querying live releases.
+  - Explicitly caught `urllib.error.HTTPError` with status code 304 in `fetch_with_etag` and converted to internal `_NotModified`, eliminating false `manifest download failed` errors on cached repeat update checks.
+- **Verification**:
+  - Live HTTPS `trace update check` verified: `Up to date (0.1.0, stable)`.
+  - Repeat check with cached ETag verified: returns cached payload immediately without error.
+## 2026-09-20 — Zero-Config Update Checking & Global `~/.trace/.env` Loading
+
+- **`src/trace_core/core/settings.py`**:
+  - Configured `update_manifest` to default to the official release URL (`https://github.com/nirjxr26/Trace/releases/latest/download/stable.json`) so users running Trace from any directory globally do not have to manually configure `.env`.
+  - Configured Pydantic Settings `env_file` to search both local `.env` and global user configuration `~/.trace/.env`, resolving path-dependent configuration misses.
+- **Verification**:
+  - Tested running `trace update check` outside repository (`C:\Users\nirja`): successfully queries release manifest and reports `Up to date (0.1.0, stable)`.
+  - Pre-PR Gate (`check-pr.ps1`): **PASSED** (291 passed, 3 skipped, 76.48% coverage).
+
+---
+
+## 2026-09-20 — PostgreSQL boolean compatibility in migration 016 & UpdateHistoryModel
+
+- **Root cause**:
+  - `UpdateHistoryModel.restart_required` and `rollback` columns were configured with `server_default=text("0")` instead of `false()`.
+  - In migration `016_update_history_roundtrip`, `ALTER TABLE ... BOOLEAN DEFAULT 0` and `UPDATE update_history SET restart_required=0` used integer `0` instead of ANSI SQL boolean literal `FALSE`.
+  - In PostgreSQL, assigning integer `0` to a `BOOLEAN` column fails with `DatatypeMismatch: column "restart_required" is of type boolean but expression is of type integer`.
+  - On PostgreSQL, any unhandled statement failure inside a transaction marks the transaction as aborted (`InFailedSqlTransaction`). Subsequent reflection queries (e.g. `_index_exists` querying `pg_catalog`) failed with `current transaction is aborted, commands ignored until end of transaction block`.
+- **Fix**:
+  - `src/trace_core/updates/models.py`: Changed `server_default` from `text("0")` to `false()` (compiles cross-dialect to `DEFAULT false` on PostgreSQL and `DEFAULT 0` on SQLite).
+  - `src/trace_core/core/database/migrations.py`:
+    - Dialect-aware boolean literals in migration 016: `DEFAULT FALSE` and `SET ...=FALSE` on PostgreSQL, `DEFAULT 0` on SQLite.
+    - Wrapped speculative DDL/DML in `with conn.begin_nested():` savepoints so any database-level exceptions never poison or abort the parent transaction.
+- **Verification**:
+  - Applied migration 016 cleanly to live PostgreSQL instance (`trace db migrate` / `apply_migrations` -> all 16 migrations applied).
+  - Verified `tests/updates/test_migration_race.py::test_recovery_clears_stale_marker` passes.
+  - Verified PostgreSQL integration tests (`tests/integration/test_postgres.py`) with live PostgreSQL container (3 passed).
+  - Local pre-PR gate (`check-pr.ps1`): **PASSED** (all 6 stages clean: virtualenv, lockfile, ruff format, ruff lint, mypy, 291 passed, 3 skipped, 76.46% coverage).

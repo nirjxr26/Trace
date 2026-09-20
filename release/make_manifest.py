@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 
-from trace_core.core.fs import check_contained
+from trace_core.core.fs import check_contained, ensure_dir
 
 
 def main() -> None:
@@ -20,6 +20,12 @@ def main() -> None:
     artifacts = {}
     for path in sorted(Path("dist").glob("*")):
         if not path.is_file():
+            continue
+        if path.suffix in (".sig", ".json", ".sbom") or path.name in ("SHA256SUMS", "SHA256SUMS.sig"):
+            continue
+        if path.suffixes[-2:] == [".tar", ".gz"] or path.suffix == ".whl":
+            pass
+        elif path.suffix not in (".whl", ".gz", ".zip", ".bin", ".exe"):
             continue
         h = hashlib.sha256()
         with path.open("rb") as handle:
@@ -44,6 +50,7 @@ def main() -> None:
         "signing_key_id": "",
         "artifacts": artifacts,
     }
+    ensure_dir(out.parent)
     out.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 

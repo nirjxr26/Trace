@@ -36,6 +36,26 @@ def test_verify_manifest_pins_key(signed_release):
         verify_manifest(manifest, art_path, platform_key="nope")
 
 
+def test_explicit_filename_resolves_despite_ambiguity(signed_release, release_keys, tmp_path):
+    from trace_core.updates import signing
+    from trace_core.updates.manifest import ManifestArtifact
+    from trace_core.updates.verifier import verify_manifest
+
+    manifest, _, art_path, _ = signed_release()
+    base = manifest.artifacts["default"]
+    manifest.artifacts["second"] = ManifestArtifact(
+        filename="other.bin",
+        sha256=base.sha256,
+        size=base.size,
+        signature=base.signature,
+        signing_key_id=base.signing_key_id,
+    )
+    manifest.manifest_signature = release_keys["private"].sign(signing.canonical_manifest_bytes(manifest)).hex()
+    verify_manifest(manifest, art_path)
+    with pytest.raises(UpdateVerificationError):
+        verify_manifest(manifest, tmp_path / "unknown.bin")
+
+
 def test_platform_match_selected(signed_release, monkeypatch):
     import sys
 
