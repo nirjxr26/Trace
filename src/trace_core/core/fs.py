@@ -15,10 +15,13 @@ def ensure_dir(path: str | Path, mode: int = 0o700) -> Path:
 
 def check_contained(path: str | Path, root: str | Path, *, what: str = "path") -> Path:
     """Resolve and refuse paths escaping root. Backstop behind input validation."""
-    base = Path(root).resolve()
-    resolved = Path(path).resolve()
+    try:
+        base = Path(root).resolve()
+        resolved = Path(path).resolve()
+    except OSError:
+        raise ValueError(f"Refusing {what} escaping storage root")
     if not resolved.is_relative_to(base):
-        raise ValueError(f"Refusing {what} escaping storage root: {path!r}")
+        raise ValueError(f"Refusing {what} escaping storage root")
     return resolved
 
 

@@ -7,13 +7,19 @@ sys.path.insert(0, "src")
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from trace_core.core.fs import sha256_file
+from trace_core.core.fs import check_contained, sha256_file
 from trace_core.updates.manifest import load_manifest_dict
 from trace_core.updates.signing import canonical_manifest_bytes, key_id_for_pubkey
 
 
+def _safe_filename(name: str) -> str:
+    if not name or "/" in name or "\\" in name or ".." in name:
+        raise SystemExit(f"refusing unsafe artifact filename: {name!r}")
+    return name
+
+
 def main() -> None:
-    manifest_path = Path(sys.argv[1])
+    manifest_path = check_contained(Path(sys.argv[1]), Path.cwd())
     from cryptography.hazmat.primitives import serialization
 
     try:
@@ -27,7 +33,7 @@ def main() -> None:
     key_id = key_id_for_pubkey(raw_pub)
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
     for artifact in data["artifacts"].values():
-        path = Path("dist") / artifact["filename"]
+        path = check_contained(Path("dist") / _safe_filename(artifact["filename"]), Path.cwd())
         digest = sha256_file(path)
         if digest != artifact["sha256"]:
             raise SystemExit(f"artifact drift before signing: {artifact['filename']}")

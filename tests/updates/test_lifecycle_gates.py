@@ -11,16 +11,18 @@ pytestmark = pytest.mark.unit
 def test_run_rejects_downgrade_directly(session_manager, temp_storage_root, signed_release):
     manifest, _, art_path, _ = signed_release(version="0.0.1")
     svc = UpdateService(session_manager)
+    life = UpdateLifecycle("tx-gate-1", svc)
     with pytest.raises(UpdateNotAvailableError):
-        UpdateLifecycle("tx-gate-1", svc).run(manifest, art_path)
+        life.run(manifest, art_path)
     assert svc.list_history() == []
 
 
 def test_run_rejects_same_version(session_manager, temp_storage_root, signed_release):
     manifest, _, art_path, _ = signed_release(version="0.1.0")
     svc = UpdateService(session_manager)
+    life = UpdateLifecycle("tx-gate-2", svc)
     with pytest.raises(UpdateNotAvailableError):
-        UpdateLifecycle("tx-gate-2", svc).run(manifest, art_path)
+        life.run(manifest, art_path)
 
 
 def test_bypass_override_recorded(
@@ -52,8 +54,9 @@ def test_staged_reverify_failure(
     manifest, _, art_path, _ = signed_release()
     svc = UpdateService(session_manager)
     monkeypatch.setattr(staging_mod, "is_verified_stage", lambda *a: False)
+    life = UpdateLifecycle("tx-gate-4", svc)
     with pytest.raises(UpdateVerificationError):
-        UpdateLifecycle("tx-gate-4", svc).run(manifest, art_path)
+        life.run(manifest, art_path)
     rows = svc.list_history()
     assert any(r.transaction_id == "tx-gate-4" and r.failure_stage == "staging" for r in rows)
 
@@ -73,8 +76,9 @@ def test_activation_mismatch_recorded(
     monkeypatch.setattr(updater_mod, "activate", lambda base, version: None)
     from trace_core.updates.errors import UpdateError
 
+    life = UpdateLifecycle("tx-gate-5", svc)
     with pytest.raises(UpdateError, match="activation not reflected"):
-        UpdateLifecycle("tx-gate-5", svc).run(manifest, art_path)
+        life.run(manifest, art_path)
     rows = svc.list_history()
     assert any(r.transaction_id == "tx-gate-5" and r.result == "FAILED" for r in rows)
 

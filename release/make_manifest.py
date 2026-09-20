@@ -4,8 +4,16 @@ import sys
 from pathlib import Path
 
 
+def _contained(path: Path) -> Path:
+    root = Path.cwd().resolve()
+    resolved = path.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise SystemExit(f"refusing path outside repository: {path}")
+    return resolved
+
+
 def main() -> None:
-    tag, channel, release_id, out = sys.argv[1], sys.argv[2], sys.argv[3], Path(sys.argv[4])
+    tag, channel, release_id, out = sys.argv[1], sys.argv[2], sys.argv[3], _contained(Path(sys.argv[4]))
     version = tag.removeprefix("v")
     artifacts = {}
     for path in sorted(Path("dist").glob("*")):

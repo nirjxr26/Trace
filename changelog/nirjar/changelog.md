@@ -2077,6 +2077,42 @@
 
 ---
 
+## 2026-09-20 — SonarQube findings remediation (Blocker + High + Medium + Low)
 
+- **Blocker — `updates/migration.py` (`restore_backup` path traversal)**:
+  replaced vacuous self-containment checks with `_confine_backup_path()`,
+  confining the marker/DB-sourced backup path to the Trace tree
+  (`storage_root` or its parent); unreadable paths fail closed.
+- **High — `release.yml`**: pinned `softprops/action-gh-release` to full
+  commit SHA `3bb1273…` (# v2.6.2, verified live via `gh api`), matching
+  repo SHA-pin convention.
+- **High — release scripts (`make/sign/verify`)**: all `sys.argv` paths now
+  resolved + contained to repo root; manifest-supplied artifact filenames
+  rejected on `/`, `\`, `..` (same rule as the client verifier). Proven:
+  full make→sign→verify round trip with the production key exits 0, and a
+  `../evil.bin` manifest is refused with exit 1.
+- **High — `install.sh`**: explicit no-op `*)` defaults on the trust-bundle
+  validation cases (behavior unchanged, rule satisfied).
+- **Medium — `release.yml` deps**: `build==1.6.1` + `cyclonedx-bom==7.4.0`
+  moved into the hash-locked chain (`pyproject` dev extra → `uv.lock`
+  purely additive → `requirements.txt` re-exported); release job now
+  installs everything via `--require-hashes`; unpinned install line
+  deleted. Lockfile coherence + hashed-install dry-run verified.
+- **Medium — `fs.check_contained` oracle**: `resolve()` OSError unified
+  into the generic refusal (no behavior change; no test depended on it).
+- **Medium — pytest single-invocation** (`test_http_source` ×4,
+  `test_lifecycle_gates` ×3, `test_lifecycle_recovery` ×2,
+  `test_manifest_trust` ×1): constructors/handlers hoisted out of
+  `pytest.raises` blocks per repo S5754 convention.
+- **Low — `install.sh`**: `CURL_PROTO='=https'` constant replaces all
+  curl `--proto` literals; `sh -n` clean, `install.ps1` parser clean.
+- **Verification (targeted, full gate deferred per plan — CI last)**:
+  updates tribunal 107 passed; ruff + format clean; mypy clean
+  (src + release scripts); release script round trip + traversal
+  rejection proven live. Full `check-pr.ps1` gate reserved for the end.
+- **Final gate (`check-pr.ps1`, run after all fixes)**: PASSED — venv,
+  lockfile coherence, ruff format + lint, mypy strict (all clean);
+  pytest 266 passed, 3 PG-skipped (no local PostgreSQL), coverage gate
+  held. Pre-PR gate exit code 0.
 
-
+---

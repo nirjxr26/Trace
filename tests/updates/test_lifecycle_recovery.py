@@ -32,8 +32,9 @@ def test_full_lifecycle_success(
 def test_policy_blocked_records_and_raises(session_manager, temp_storage_root, signed_release):
     manifest, _, art_path, _ = signed_release(minimum_supported_version="9.9.9")
     svc = UpdateService(session_manager)
+    life = UpdateLifecycle("tx-life-2", svc)
     with pytest.raises(UpdatePolicyBlockedError):
-        UpdateLifecycle("tx-life-2", svc).run(manifest, art_path)
+        life.run(manifest, art_path)
     rows = svc.list_history()
     assert any(r.transaction_id == "tx-life-2" and r.result == "FAILED" for r in rows)
 
@@ -47,8 +48,9 @@ def test_unknown_gate_fails_closed(session_manager, temp_storage_root, signed_re
 
     manifest, _, art_path, _ = signed_release()
     svc = UpdateService(session_manager)
+    life = UpdateLifecycle("tx-life-3", svc)
     with pytest.raises(UpdateError):
-        UpdateLifecycle("tx-life-3", svc).run(manifest, art_path, gate=UnknownGate())
+        life.run(manifest, art_path, gate=UnknownGate())
 
 
 def test_health_failure_rolls_back(

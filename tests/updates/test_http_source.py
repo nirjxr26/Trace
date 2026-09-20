@@ -62,24 +62,28 @@ def test_http_fetch_ok(serve, manifest_bytes):
 
 def test_non_json_rejected(serve):
     base = serve(_handler(b"<html>nope</html>", content_type="text/html"))
+    source = HttpManifestSource(base, timeout=5)
     with pytest.raises(UpdateError):
-        HttpManifestSource(base, timeout=5).fetch("stable")
+        source.fetch("stable")
 
 
 def test_oversized_rejected(serve):
     base = serve(_handler(b"x" * 100))
+    source = HttpManifestSource(base, timeout=5, max_bytes=10)
     with pytest.raises(UpdateError):
-        HttpManifestSource(base, timeout=5, max_bytes=10).fetch("stable")
+        source.fetch("stable")
 
 
 def test_connection_failure_fails_closed():
+    source = HttpManifestSource("http://127.0.0.1:1", timeout=2)
     with pytest.raises(UpdateError):
-        HttpManifestSource("http://127.0.0.1:1", timeout=2).fetch("stable")
+        source.fetch("stable")
 
 
 def test_non_https_production_refused():
+    source = HttpManifestSource("http://updates.example.com", timeout=2)
     with pytest.raises(UpdateError):
-        HttpManifestSource("http://updates.example.com", timeout=2).fetch("stable")
+        source.fetch("stable")
 
 
 def test_redirect_to_same_host_ok(serve, manifest_bytes):

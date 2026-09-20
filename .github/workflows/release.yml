@@ -37,7 +37,6 @@ jobs:
       - run: |
           pip install --require-hashes --only-binary :all: -r requirements.txt
           pip install --no-deps -e .
-          pip install --only-binary :all: build cyclonedx-bom --quiet
       - name: Tag equals package version
         run: |
           test "$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')" = "${GITHUB_REF_NAME#v}"
@@ -76,7 +75,7 @@ jobs:
             trusted-keys.bundle
       - name: Publish immutable release
         if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
             dist/*

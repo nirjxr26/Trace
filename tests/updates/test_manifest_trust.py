@@ -22,8 +22,9 @@ def test_modified_manifest_rejected(signed_release):
     data["version"] = "9.9.9"
     from trace_core.updates.manifest import load_manifest_dict
 
+    tampered = load_manifest_dict(data)
     with pytest.raises(UpdateVerificationError):
-        verify_manifest(load_manifest_dict(data), art_path)
+        verify_manifest(tampered, art_path)
 
 
 def test_invalid_signature_rejected(signed_release):

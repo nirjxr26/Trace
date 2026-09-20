@@ -101,15 +101,26 @@ def verify_compatibility(manager: DatabaseSessionManager, schema_min: int | None
         raise MigrationCompatibilityError(f"schema {current} above target {schema_target}")
 
 
+def _confine_backup_path(backup_path: str | Path) -> Path:
+    from trace_core.core.settings import settings
+
+    roots = [Path(settings.storage_root).resolve(), Path(settings.storage_root).parent.resolve()]
+    try:
+        resolved = Path(backup_path).resolve()
+    except OSError:
+        raise RecoveryError("backup path is not usable; cannot restore")
+    if not any(resolved == root or root in resolved.parents for root in roots):
+        raise RecoveryError("backup outside trace root; cannot restore")
+    return resolved
+
+
 def restore_backup(backup_path: str | Path, manager: DatabaseSessionManager) -> None:
-    src = Path(backup_path)
+    src = _confine_backup_path(backup_path)
     url = manager._url
-    if not src.exists() or src.stat().st_size == 0:
-        raise RecoveryError(f"backup {src} missing or empty; cannot restore")
+    if not src.is_file() or src.stat().st_size == 0:
+        raise RecoveryError("backup missing or empty; cannot restore")
     if url.startswith("sqlite") and ":memory:" not in url:
         live = Path(url.split("sqlite:///", 1)[1].split("?", 1)[0])
-        check_contained(src, src.parent)
-        check_contained(live, live.parent)
         if manager._engine is not None:
             manager._engine.dispose()
         shutil.copy2(src, live)
