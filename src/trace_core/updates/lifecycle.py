@@ -1,33 +1,40 @@
 from pathlib import Path
 
-from trace_core.updates.domain import UpdateResult, UpdateState, assert_transition
+from trace_core.updates.domain import UpdateFailureStage, UpdateResult, UpdateState, assert_transition
 from trace_core.updates.dto import UpdateHistoryCreateDto
 from trace_core.updates.errors import UpdateError
-from trace_core.updates.gate import ForensicOperationGate, GateDecision
+from trace_core.updates.gate import ForensicOperationGate, GateDecision, UpdateGateContext
 from trace_core.updates.lock import update_lock
 from trace_core.updates.manifest import ReleaseManifest
 from trace_core.updates.service import UpdateService
 
 
 class UpdateLifecycle:
-    def __init__(self, transaction_id: str, service: UpdateService | None = None):
+    def __init__(
+        self,
+        transaction_id: str,
+        service: UpdateService | None = None,
+        state: UpdateState = UpdateState.IDLE,
+    ):
         self.transaction_id = transaction_id
         self.service = service or UpdateService()
-        self.state = UpdateState.IDLE
+        self.state = state
 
     def transition(self, to: UpdateState) -> None:
         from trace_core.updates.marker import write_marker
 
         assert_transition(self.state, to)
-        self.state = to
         write_marker(
             {
                 "transaction_id": self.transaction_id,
-                "state": str(self.state),
+                "state": str(to),
             }
         )
+        self.state = to
 
     def _override_note(self, current: str, manifest: ReleaseManifest, allow_minimum_bypass: bool) -> str | None:
+        import structlog
+
         from trace_core.updates.migration import current_schema_version
         from trace_core.updates.policy import minimum_bypass_note
 
@@ -40,11 +47,13 @@ class UpdateLifecycle:
             try:
                 if manifest.schema_target > current_schema_version(self.service.session_manager):
                     parts.append(f"backup waived: {manifest.backup_waiver}")
-            except Exception:
-                pass
+            except Exception as exc:
+                structlog.get_logger().warning("override-note schema check failed", error=str(exc))
+                parts.append(f"schema check unavailable: {exc}")
         return "; ".join(parts) or None
 
     def _check_release_health(self, base: Path, manifest: ReleaseManifest, snap) -> str:  # type: ignore[no-untyped-def]
+        """Health must be called with a fresh snapshot taken after migration and before activation."""
         from trace_core.updates.migration import current_schema_version
         from trace_updater import updater as updater_mod
 
@@ -73,19 +82,18 @@ class UpdateLifecycle:
         svc = service or UpdateService()
         marker = read_marker()
         if marker.get("transaction_id") != transaction_id:
-            raise UpdateError(f"no recoverable state for transaction {transaction_id}")
+            raise RecoveryError(f"no recoverable state for transaction {transaction_id}")
         try:
             state = UpdateState(marker["state"])
         except ValueError as e:
             raise RecoveryError(f"unrecognized marker state {marker['state']!r}") from e
-        obj = cls(transaction_id, svc)
-        obj.state = state
-        return obj
+        return cls(transaction_id, svc, state=state)
 
     def run(
         self,
         manifest: ReleaseManifest,
         artifact_path: str | Path,
+        *,
         channel: str = "stable",
         gate: ForensicOperationGate | None = None,
         backup_dir: str | Path | None = None,
@@ -141,26 +149,118 @@ class UpdateLifecycle:
                 with contextlib.suppress(UpdateError):
                     finish_update_migration(self.transaction_id)
 
-    def _run_locked(  # type: ignore[no-untyped-def]
-        self, manifest, artifact_path, channel, gate, backup_dir, current, started_at, allow_minimum_bypass=False
-    ) -> UpdateHistoryCreateDto:
-        from trace_core.core.database.health import fetch_db_snapshot
-        from trace_core.core.settings import settings
-        from trace_core.updates import staging as staging_mod
-        from trace_core.updates.migration import run_updater_migration
-        from trace_core.updates.policy import is_installable, select_artifact
+    def _verify_stage(self, manifest: ReleaseManifest, artifact_path: str | Path) -> None:
         from trace_core.updates.verifier import verify_manifest
+
+        verify_manifest(manifest, Path(artifact_path))
+
+    def _download_stage(self, manifest: ReleaseManifest, artifact_path: str | Path, staging_dir: Path) -> Path:
+        from trace_core.updates.verifier import resolve_artifact
         from trace_updater import updater as updater_mod
 
+        artifact = resolve_artifact(manifest, Path(artifact_path))
+        return updater_mod.stage_artifact(
+            Path(artifact_path),
+            staging_dir,
+            expected_sha256=artifact.sha256,
+            binding={
+                "transaction_id": self.transaction_id,
+                "release_id": manifest.release_id,
+                "version": manifest.version,
+            },
+        )
+
+    def _assert_verified_stage(
+        self,
+        staging_dir: Path,
+        staged: Path,
+        manifest: ReleaseManifest,
+        channel: str,
+        current: str,
+        started_at: object,
+    ) -> None:
+        from trace_core.updates import staging as staging_mod
+        from trace_core.updates.verifier import resolve_artifact
+
+        artifact = resolve_artifact(manifest, staged)
+        staging_mod.write_staged_record(
+            staging_dir,
+            {
+                "release_id": manifest.release_id,
+                "version": manifest.version,
+                "filename": staged.name,
+                "expected_sha256": artifact.sha256,
+                "actual_sha256": artifact.sha256,
+                "signing_key_id": manifest.signing_key_id,
+                "verification": "passed",
+            },
+        )
+        if not staging_mod.is_verified_stage(staging_dir, staged):
+            from trace_core.updates.errors import UpdateVerificationError
+
+            self.transition(UpdateState.FAILED)
+            self.service.record_history(
+                UpdateHistoryCreateDto(
+                    from_version=current,
+                    to_version=manifest.version,
+                    channel=channel,
+                    result=UpdateResult.FAILED,
+                    failure_stage=UpdateFailureStage.STAGING,
+                    failure_reason="staged artifact failed re-verification",
+                    transaction_id=self.transaction_id,
+                    started_at=started_at,  # type: ignore[arg-type]
+                    release_id=manifest.release_id,
+                )
+            )
+            raise UpdateVerificationError("staged artifact failed re-verification")
+
+    def _install_stage(self, staged: Path, base: Path, manifest: ReleaseManifest) -> None:
+        from trace_updater import updater as updater_mod
+
+        updater_mod.stage_release(
+            staged.parent,
+            base,
+            manifest.version,
+            expected=[staged.name],
+            release_meta={
+                "version": manifest.version,
+                "release_id": manifest.release_id,
+                "schema_min": manifest.schema_min,
+                "schema_target": manifest.schema_target,
+            },
+        )
+
+    def _run_locked(
+        self,
+        manifest: ReleaseManifest,
+        artifact_path: str | Path,
+        channel: str,
+        gate: ForensicOperationGate,
+        backup_dir: str | Path | None,
+        current: str,
+        started_at: object,
+        allow_minimum_bypass: bool = False,
+    ) -> UpdateHistoryCreateDto:
+        from datetime import datetime as _DateTime
+
+        from trace_core.core.database.health import fetch_db_snapshot
+        from trace_core.updates.migration import run_updater_migration
+        from trace_core.updates.policy import is_installable
+        from trace_updater import updater as updater_mod
+
+        assert isinstance(started_at, _DateTime)
         with update_lock():
             self.transition(UpdateState.CHECKING)
-            decision = gate.can_install_update()
-            if decision == GateDecision.ACTIVE_OPERATION:
-                forensic_active = True
-            elif decision == GateDecision.UNKNOWN:
-                raise UpdateError("unknown forensic-operation state; failing closed")
-            else:
-                forensic_active = False
+            decision = gate.can_install_update(
+                UpdateGateContext(target_version=manifest.version, transaction_id=self.transaction_id)
+            )
+            match decision:
+                case GateDecision.ACTIVE_OPERATION:
+                    forensic_active = True
+                case GateDecision.ALLOWED:
+                    forensic_active = False
+                case _:
+                    raise UpdateError("unknown forensic-operation state; failing closed")
 
             ok, reason = is_installable(current, manifest, channel, forensic_active, allow_minimum_bypass)
             override_note = self._override_note(current, manifest, allow_minimum_bypass) if ok else None
@@ -173,7 +273,7 @@ class UpdateLifecycle:
                     to_version=manifest.version,
                     channel=channel,
                     result=UpdateResult.FAILED,
-                    failure_stage="policy",
+                    failure_stage=UpdateFailureStage.POLICY,
                     failure_reason=reason,
                     transaction_id=self.transaction_id,
                     started_at=started_at,
@@ -183,64 +283,17 @@ class UpdateLifecycle:
                 raise UpdatePolicyBlockedError(reason or "update blocked by policy")
             self.transition(UpdateState.AVAILABLE)
             self.transition(UpdateState.READY_TO_INSTALL)
-            verify_manifest(manifest, Path(artifact_path))
-            base = Path(settings.storage_root).parent / "install"
+            self._verify_stage(manifest, artifact_path)
+            from trace_updater.updater import install_root as _install_root
+
+            base = _install_root()
             staging_dir = base / "staging" / self.transaction_id
             self.transition(UpdateState.DOWNLOADING)
-            artifact = select_artifact(manifest)
-            staged = updater_mod.stage_artifact(
-                Path(artifact_path),
-                staging_dir,
-                expected_sha256=artifact.sha256,
-                binding={
-                    "transaction_id": self.transaction_id,
-                    "release_id": manifest.release_id,
-                    "version": manifest.version,
-                },
-            )
-            staging_mod.write_staged_record(
-                staging_dir,
-                {
-                    "release_id": manifest.release_id,
-                    "version": manifest.version,
-                    "filename": staged.name,
-                    "expected_sha256": artifact.sha256,
-                    "actual_sha256": artifact.sha256,
-                    "signing_key_id": manifest.signing_key_id,
-                    "verification": "passed",
-                },
-            )
-            if not staging_mod.is_verified_stage(staging_dir, staged):
-                from trace_core.updates.errors import UpdateVerificationError
-
-                self.transition(UpdateState.FAILED)
-                dto = UpdateHistoryCreateDto(
-                    from_version=current,
-                    to_version=manifest.version,
-                    channel=channel,
-                    result=UpdateResult.FAILED,
-                    failure_stage="staging",
-                    failure_reason="staged artifact failed re-verification",
-                    transaction_id=self.transaction_id,
-                    started_at=started_at,
-                    release_id=manifest.release_id,
-                )
-                self.service.record_history(dto)
-                raise UpdateVerificationError("staged artifact failed re-verification")
+            staged = self._download_stage(manifest, artifact_path, staging_dir)
+            self._assert_verified_stage(staging_dir, staged, manifest, channel, current, started_at)
             self.transition(UpdateState.STAGED)
             self.transition(UpdateState.INSTALLING)
-            updater_mod.stage_release(
-                staged.parent,
-                base,
-                manifest.version,
-                expected=[staged.name],
-                release_meta={
-                    "version": manifest.version,
-                    "release_id": manifest.release_id,
-                    "schema_min": manifest.schema_min,
-                    "schema_target": manifest.schema_target,
-                },
-            )
+            self._install_stage(staged, base, manifest)
             self.transition(UpdateState.MIGRATING)
             migration = run_updater_migration(
                 self.service.session_manager,
@@ -268,7 +321,7 @@ class UpdateLifecycle:
                         to_version=manifest.version,
                         channel=channel,
                         result=UpdateResult.FAILED,
-                        failure_stage="health",
+                        failure_stage=UpdateFailureStage.HEALTH,
                         failure_reason=f"rollback failed: {e}",
                         migration_range=f"{migration['schema']}",
                         health_check_result=health,
@@ -286,7 +339,7 @@ class UpdateLifecycle:
                     to_version=manifest.version,
                     channel=channel,
                     result=UpdateResult.ROLLED_BACK,
-                    failure_stage="health",
+                    failure_stage=UpdateFailureStage.HEALTH,
                     migration_range=f"{migration['schema']}",
                     health_check_result=f"failed; restored {restored} health {restored_health}",
                     backup_path=migration["backup"],
@@ -313,6 +366,7 @@ class UpdateLifecycle:
                 restart_required=manifest.restart_required,
                 transaction_id=self.transaction_id,
                 release_id=manifest.release_id,
+                started_at=started_at,
             )
             self.service.record_history(dto)
             from trace_core.updates.marker import write_marker

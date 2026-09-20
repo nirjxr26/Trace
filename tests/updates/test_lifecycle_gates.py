@@ -8,7 +8,7 @@ from trace_core.updates.service import UpdateService
 pytestmark = pytest.mark.unit
 
 
-def test_run_rejects_downgrade_directly(session_manager, temp_storage_root, signed_release):
+def test_run_rejects_downgrade_directly(session_manager, signed_release):
     manifest, _, art_path, _ = signed_release(version="0.0.1")
     svc = UpdateService(session_manager)
     life = UpdateLifecycle("tx-gate-1", svc)
@@ -17,7 +17,7 @@ def test_run_rejects_downgrade_directly(session_manager, temp_storage_root, sign
     assert svc.list_history() == []
 
 
-def test_run_rejects_same_version(session_manager, temp_storage_root, signed_release):
+def test_run_rejects_same_version(session_manager, signed_release):
     manifest, _, art_path, _ = signed_release(version="0.1.0")
     svc = UpdateService(session_manager)
     life = UpdateLifecycle("tx-gate-2", svc)
@@ -25,9 +25,7 @@ def test_run_rejects_same_version(session_manager, temp_storage_root, signed_rel
         life.run(manifest, art_path)
 
 
-def test_bypass_override_recorded(
-    session_manager, temp_storage_root, signed_release, release_keys, monkeypatch, tmp_path
-):
+def test_bypass_override_recorded(session_manager, signed_release, release_keys, monkeypatch, tmp_path):
     from trace_core.core.settings import settings
     from trace_core.updates import signing
 
@@ -42,9 +40,7 @@ def test_bypass_override_recorded(
     assert any(r.transaction_id == "tx-gate-3" and (r.override_reason or "") != "" for r in rows)
 
 
-def test_staged_reverify_failure(
-    session_manager, temp_storage_root, signed_release, release_keys, monkeypatch, tmp_path
-):
+def test_staged_reverify_failure(session_manager, signed_release, release_keys, monkeypatch, tmp_path):
     from trace_core.core.settings import settings
     from trace_core.updates import signing
     from trace_core.updates import staging as staging_mod
@@ -61,9 +57,7 @@ def test_staged_reverify_failure(
     assert any(r.transaction_id == "tx-gate-4" and r.failure_stage == "staging" for r in rows)
 
 
-def test_activation_mismatch_recorded(
-    session_manager, temp_storage_root, signed_release, release_keys, monkeypatch, tmp_path
-):
+def test_activation_mismatch_recorded(session_manager, signed_release, release_keys, monkeypatch, tmp_path):
     from trace_core.core.settings import settings
     from trace_updater import updater as updater_mod
 
@@ -83,9 +77,7 @@ def test_activation_mismatch_recorded(
     assert any(r.transaction_id == "tx-gate-5" and r.result == "FAILED" for r in rows)
 
 
-def test_waiver_recorded_on_advancing_schema(
-    session_manager, temp_storage_root, signed_release, release_keys, monkeypatch, tmp_path
-):
+def test_waiver_recorded_on_advancing_schema(session_manager, signed_release, release_keys, monkeypatch, tmp_path):
     from sqlalchemy import Column, Integer, MetaData, Table
 
     from trace_core.core.database import migrations as mig_mod
@@ -97,23 +89,23 @@ def test_waiver_recorded_on_advancing_schema(
     meta = MetaData()
     Table("waiver_probe", meta, Column("id", Integer, primary_key=True))
 
-    @mig_mod.register_migration(16, "016_test_waiver_probe")
+    @mig_mod.register_migration(17, "017_test_waiver_probe")
     def _probe(bind):
         meta.create_all(bind=bind)
 
     try:
-        manifest, _, art_path, _ = signed_release(schema_min=1, schema_target=16, backup_waiver="lab device")
+        manifest, _, art_path, _ = signed_release(schema_min=1, schema_target=17, backup_waiver="lab device")
         svc = UpdateService(session_manager)
         dto = UpdateLifecycle("tx-gate-7", svc).run(manifest, art_path)
         assert dto.result == "SUCCESS"
         assert dto.override_reason is not None
         assert "lab device" in dto.override_reason
     finally:
-        mig_mod.MIGRATIONS[:] = [m for m in mig_mod.MIGRATIONS if m[0] != 16]
-        mig_mod.MIGRATION_VERIFIERS.pop(16, None)
+        mig_mod.MIGRATIONS[:] = [m for m in mig_mod.MIGRATIONS if m[1] != "017_test_waiver_probe"]
+        mig_mod.MIGRATION_VERIFIERS.pop(17, None)
 
 
-def test_started_at_captured(session_manager, temp_storage_root, signed_release, release_keys, monkeypatch, tmp_path):
+def test_started_at_captured(session_manager, signed_release, release_keys, monkeypatch, tmp_path):
     from trace_core.core.settings import settings
     from trace_core.updates import signing
 
@@ -130,8 +122,14 @@ def test_started_at_captured(session_manager, temp_storage_root, signed_release,
 
 
 def test_history_create_rejects_unknown_kwargs():
+    from typing import Any
+
     from pydantic import ValidationError
 
-    kwargs = {"from_version": "0.1.0", "to_version": "1.5.0", "bogus_field": "x"}
+    kwargs: dict[str, Any] = {
+        "from_version": "0.1.0",
+        "to_version": "1.5.0",
+        "bogus_field": "x",
+    }
     with pytest.raises(ValidationError):
         UpdateHistoryCreateDto(**kwargs)

@@ -34,14 +34,14 @@ def _cached_check_http(key: str, channel: str, cached: dict[str, Any] | None) ->
 
     from trace_core.updates import cache as check_cache
     from trace_core.updates.manifest import load_manifest_bytes
-    from trace_core.updates.sources import HttpManifestSource, _NotModified
+    from trace_core.updates.sources import HttpManifestSource, _NotModified, normalize_manifest_url, split_manifest_url
 
-    base, chan = (
-        (key.rsplit("/", 1)[0], key.rsplit("/", 1)[1].removesuffix(".json"))
-        if key.endswith(".json")
-        else (key, channel)
-    )
-    etag = cached.get("etag") if cached and cached.get("manifest_path") == key else None
+    norm_key = normalize_manifest_url(key)
+    base, chan = split_manifest_url(key)
+    if not key.endswith(".json"):
+        chan = channel
+    norm_cached_key = normalize_manifest_url(cached.get("manifest_path", "")) if cached else None
+    etag = cached.get("etag") if cached and norm_cached_key == norm_key else None
     try:
         data, new_etag = HttpManifestSource(base).fetch_with_etag(chan, etag)
     except _NotModified:
@@ -65,7 +65,7 @@ def _cached_check_http(key: str, channel: str, cached: dict[str, Any] | None) ->
     }
     check_cache.write_check_cache(
         {
-            "manifest_path": key,
+            "manifest_path": norm_key,
             "channel": channel,
             "etag": new_etag,
             "manifest_sha256": hashlib.sha256(data).hexdigest(),
@@ -75,18 +75,10 @@ def _cached_check_http(key: str, channel: str, cached: dict[str, Any] | None) ->
     return payload
 
 
-def cached_check(target: str | Path, channel: str = "stable") -> dict[str, Any]:
-    from trace_core.updates import cache as check_cache
-
-    key = str(target)
-    cached = check_cache.read_check_cache()
-    if key.startswith(_URL_PREFIXES):
-        return _cached_check_http(key, channel, cached)
-    if cached and check_cache.cache_valid_for(cached, key, channel):
-        return cached["payload"]
-    res = check_for_update(target, channel)
+def _payload_from_check(res: dict[str, Any]) -> dict[str, Any]:
+    """Single source for cached payload shape. Shared by file and HTTP paths."""
     m = res["manifest"]
-    payload = {
+    return {
         "current": res["current"],
         "available": res["available"],
         "target": m.version if res["available"] else None,
@@ -96,7 +88,20 @@ def cached_check(target: str | Path, channel: str = "stable") -> dict[str, Any]:
         "minimum_supported_version": m.minimum_supported_version,
         "restart_required": m.restart_required,
     }
+
+
+def cached_check(target: str | Path, channel: str = "stable") -> dict[str, Any]:
+    from trace_core.updates import cache as check_cache
+
+    key = str(target)
+    cached = check_cache.read_check_cache()
+    if key.startswith(_URL_PREFIXES):
+        return _cached_check_http(key, channel, cached)
     identity = check_cache.manifest_identity(key)
+    if cached and identity is not None and check_cache.cache_valid_for(cached, key, channel, identity):
+        return cached["payload"]
+    res = check_for_update(target, channel)
+    payload = _payload_from_check(res)
     if identity is not None:
         check_cache.write_check_cache(
             {"manifest_path": key, "channel": channel, "manifest_identity": identity, "payload": payload}

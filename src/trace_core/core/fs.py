@@ -102,6 +102,10 @@ def file_lock(path: str | Path):  # type: ignore[no-untyped-def]
         ensure_dir(Path(path).parent)
         handle = open(path, "a+b")  # noqa: PTH123
         try:
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
             if not _acquire(handle.fileno(), True):
                 raise OSError(f"cannot acquire lock {path}")
             yield
@@ -120,6 +124,10 @@ def try_file_lock(path: str | Path):  # type: ignore[no-untyped-def]
         ensure_dir(Path(path).parent)
         handle = open(path, "a+b")  # noqa: PTH123
         try:
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
             yield _acquire(handle.fileno(), False)
         finally:
             _release(handle.fileno())

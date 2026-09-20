@@ -29,14 +29,14 @@ def test_updater_migration_clears_marker(session_manager, temp_storage_root):
 
 
 def test_corrupt_marker_fails_closed(session_manager, temp_storage_root):
-    from trace_core.updates.migration import marker_path, marker_state
+    from trace_core.updates.migration import marker_state, migration_marker_path
 
-    marker_path().parent.mkdir(parents=True, exist_ok=True)
-    marker_path().write_text("{not-json", encoding="utf-8")
+    migration_marker_path().parent.mkdir(parents=True, exist_ok=True)
+    migration_marker_path().write_text("{not-json", encoding="utf-8")
     assert marker_state()[0] == "corrupt"
     with pytest.raises(UpdateInProgressError):
         session_manager.ensure_ready()
-    marker_path().unlink(missing_ok=True)
+    migration_marker_path().unlink(missing_ok=True)
 
 
 def test_recovery_clears_stale_marker(session_manager, temp_storage_root):

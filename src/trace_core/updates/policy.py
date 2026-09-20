@@ -18,6 +18,12 @@ def is_update_available(current: str, manifest: ReleaseManifest) -> bool:
     return _parse_version(manifest.version) > _parse_version(current)
 
 
+CHANNEL_COMPATIBILITY: dict[str, set[str]] = {
+    UpdateChannel.STABLE: {UpdateChannel.STABLE},
+    UpdateChannel.BETA: {UpdateChannel.STABLE, UpdateChannel.BETA},
+}
+
+
 def is_installable(
     current: str,
     manifest: ReleaseManifest,
@@ -27,9 +33,8 @@ def is_installable(
 ) -> tuple[bool, str | None]:
     if forensic_active:
         return False, "forensic operation active"
-    if manifest.channel != channel and channel == UpdateChannel.STABLE:
-        if manifest.channel == "beta":
-            return False, "beta channel not enabled"
+    if manifest.channel not in CHANNEL_COMPATIBILITY.get(channel, {channel}):
+        return False, f"channel {manifest.channel!r} not enabled on {channel}"
     if manifest.minimum_supported_version:
         if _parse_version(current) < _parse_version(manifest.minimum_supported_version):
             if allow_minimum_bypass:
@@ -55,13 +60,14 @@ def security_label(manifest: ReleaseManifest) -> str | None:
 
 
 def _current_platform() -> tuple[str, str]:
+    raw_machine = _platform.machine()
     machine = {
         "amd64": "x64",
         "x86_64": "x64",
         "arm64": "arm64",
         "aarch64": "arm64",
-    }.get(_platform.machine().lower(), "unknown")
-    system = {"win32": "windows", "linux": "linux", "darwin": "macos"}.get(sys.platform, "unknown")
+    }.get(raw_machine.lower(), f"unknown({raw_machine})")
+    system = {"win32": "windows", "linux": "linux", "darwin": "macos"}.get(sys.platform, f"unknown({sys.platform})")
     return system, machine
 
 

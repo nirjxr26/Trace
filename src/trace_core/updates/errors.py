@@ -17,6 +17,12 @@ class UpdateNotAvailableError(UpdateError):
     pass
 
 
+class UpdateNetworkError(UpdateError):
+    """Transport failure fetching manifests. Distinct from trust failures for UX routing."""
+
+    pass
+
+
 class UpdateInProgressError(UpdateError):
     pass
 
@@ -26,4 +32,8 @@ class MigrationCompatibilityError(UpdateError):
 
 
 class RecoveryError(UpdateError):
+    pass
+
+
+class RecoveryBlockedError(RecoveryError):
     pass

@@ -7,7 +7,10 @@ from trace_core.core.settings import settings
 from trace_core.updates.errors import RecoveryError
 
 MARKER_SCHEMA = 2
-REQUIRED_KEYS = ("marker_schema", "transaction_id", "state")
+SCHEMA_REQUIRED_KEYS: dict[int, tuple[str, ...]] = {
+    MARKER_SCHEMA: ("marker_schema", "transaction_id", "state"),
+}
+REQUIRED_KEYS = SCHEMA_REQUIRED_KEYS[MARKER_SCHEMA]
 
 
 def marker_path() -> Path:
@@ -34,9 +37,11 @@ def read_marker(path: str | Path | None = None) -> dict[str, Any]:
         raise RecoveryError("corrupt update marker; manual inspection required") from e
     if not isinstance(data, dict):
         raise RecoveryError("corrupt update marker; manual inspection required")
-    if data.get("marker_schema") != MARKER_SCHEMA:
+    schema = data.get("marker_schema")
+    required = SCHEMA_REQUIRED_KEYS.get(schema) if isinstance(schema, int) else None
+    if required is None:
         raise RecoveryError(f"unsupported marker schema {data.get('marker_schema')!r}")
-    missing = [k for k in REQUIRED_KEYS if k not in data]
+    missing = [k for k in required if k not in data]
     if missing:
         raise RecoveryError(f"update marker missing fields: {missing}")
     return data

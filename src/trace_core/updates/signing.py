@@ -73,21 +73,36 @@ def verify_artifact_signature(data: bytes, signature: str | None, key_id: str | 
         raise UpdateVerificationError("invalid artifact signature") from e
 
 
+def verify_artifact_signature_streaming(path: object, signature: str | None, key_id: str | None) -> None:
+    """Single source for file-backed artifact verification. Hashing streams; signature needs full bytes."""
+    from pathlib import Path as _Path
+
+    target = _Path(str(path))
+    if target.stat().st_size > 10_737_418_240:
+        raise UpdateVerificationError("artifact too large to verify")
+    verify_artifact_signature(target.read_bytes(), signature, key_id)
+
+
 def import_release_pubkey(raw_pub_hex: str) -> str:
-    raw_pub = bytes.fromhex(raw_pub_hex.strip().split()[0])
+    parts = raw_pub_hex.strip().split()
+    if len(parts) != 1:
+        raise UpdateVerificationError("malformed release key import")
+    try:
+        raw_pub = bytes.fromhex(parts[0])
+    except ValueError as e:
+        raise UpdateVerificationError("malformed release key import") from e
     if len(raw_pub) != 32:
         raise UpdateVerificationError("invalid ed25519 public key length")
     key_id = key_id_for_pubkey(raw_pub)
-    path = trust_key_path(key_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(raw_pub.hex(), encoding="utf-8")
-    import os
+    from trace_core.core.fs import atomic_write_lines
 
-    os.chmod(path, 0o600)
+    path = trust_key_path(key_id)
+    atomic_write_lines(path, [raw_pub.hex()], mode=0o600)
     return key_id
 
 
 def revoke_release_key(key_id: str) -> None:
+    """Revoke takes precedence over the .pub file; both may exist, revoked wins on load."""
     path = revoked_path(key_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("revoked", encoding="utf-8")

@@ -102,6 +102,8 @@ class DatabaseSessionManager:
                 f"update transaction {active.get('transaction_id')} owns migration; normal startup deferred"
             )
         memory = ":memory:" in self._url
+        # _READY_CACHE is a best-effort fast path; correctness relies on
+        # migrations._migration_lock serializing concurrent bootstraps.
         if not memory and _READY_CACHE.get(self._url):
             return
         from trace_core.core.database.migrations import apply_migrations

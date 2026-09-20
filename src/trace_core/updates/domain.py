@@ -1,5 +1,7 @@
 from enum import StrEnum
 
+from trace_core.updates.errors import UpdateError
+
 
 class UpdateState(StrEnum):
     IDLE = "IDLE"
@@ -21,7 +23,7 @@ class UpdateState(StrEnum):
 
 
 _ALLOWED: dict[UpdateState, set[UpdateState]] = {
-    UpdateState.IDLE: {UpdateState.CHECKING},
+    UpdateState.IDLE: {UpdateState.CHECKING, UpdateState.FAILED},
     UpdateState.CHECKING: {UpdateState.AVAILABLE, UpdateState.IDLE, UpdateState.FAILED},
     UpdateState.AVAILABLE: {
         UpdateState.AVAILABLE_BUT_DEFERRED,
@@ -39,6 +41,8 @@ _ALLOWED: dict[UpdateState, set[UpdateState]] = {
     UpdateState.MIGRATING: {UpdateState.HEALTH_CHECK, UpdateState.ROLLING_BACK, UpdateState.FAILED},
     UpdateState.HEALTH_CHECK: {UpdateState.COMPLETED, UpdateState.ROLLING_BACK, UpdateState.FAILED},
     UpdateState.ROLLING_BACK: {UpdateState.ROLLED_BACK, UpdateState.RECOVERY_REQUIRED, UpdateState.FAILED},
+    UpdateState.FAILED: {UpdateState.IDLE},
+    UpdateState.RECOVERY_REQUIRED: {UpdateState.IDLE},
 }
 
 
@@ -48,8 +52,6 @@ def can_transition(a: UpdateState, b: UpdateState) -> bool:
 
 def assert_transition(a: UpdateState, b: UpdateState) -> None:
     if not can_transition(a, b):
-        from trace_core.updates.errors import UpdateError
-
         raise UpdateError(f"illegal update transition {a} -> {b}")
 
 
@@ -57,8 +59,23 @@ class UpdateChannel(StrEnum):
     STABLE = "stable"
     BETA = "beta"
 
+    @classmethod
+    def contains(cls, value: str) -> bool:
+        """Single choke point for channel validation. Shared by manifest/policy."""
+        return value in (cls.STABLE, cls.BETA)
+
 
 class UpdateResult(StrEnum):
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
     ROLLED_BACK = "ROLLED_BACK"
+
+
+class UpdateFailureStage(StrEnum):
+    """Single source for failure_stage values persisted in history."""
+
+    POLICY = "policy"
+    STAGING = "staging"
+    HEALTH = "health"
+    RECOVERY = "recovery"
+    MIGRATION = "migration"

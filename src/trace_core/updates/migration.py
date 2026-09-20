@@ -16,7 +16,7 @@ from trace_core.updates.errors import (
 )
 
 
-def marker_path() -> Path:
+def migration_marker_path() -> Path:
     return Path(settings.storage_root) / "state" / "update-active.json"
 
 
@@ -49,11 +49,15 @@ def update_migration_owner(transaction_id: str):  # type: ignore[no-untyped-def]
 
 
 def is_owner(transaction_id: str) -> bool:
+    # Thread-local is the authority for "am I the owner" — the marker file
+    # only says an update is active, not who is asking. Callers running a
+    # transaction in another thread must propagate it via
+    # update_migration_owner() (run_updater_migration does this itself).
     return _ambient_tx() == transaction_id
 
 
 def marker_state() -> tuple[str, dict | None]:
-    p = marker_path()
+    p = migration_marker_path()
     if not p.exists():
         return "absent", None
     try:
@@ -66,7 +70,7 @@ def marker_state() -> tuple[str, dict | None]:
 
 
 def begin_update_migration(transaction_id: str) -> None:
-    target = marker_path()
+    target = migration_marker_path()
     check_contained(target, settings.storage_root)
     atomic_write_lines(target, [json.dumps({"transaction_id": transaction_id})])
 
@@ -75,7 +79,7 @@ def finish_update_migration(transaction_id: str) -> None:
     state, active = marker_state()
     if state == "active" and active and active.get("transaction_id") != transaction_id:
         raise UpdateInProgressError("another update transaction owns migration")
-    marker_path().unlink(missing_ok=True)
+    migration_marker_path().unlink(missing_ok=True)
 
 
 def applied_versions(manager: DatabaseSessionManager) -> list[int]:
@@ -119,6 +123,8 @@ def restore_backup(backup_path: str | Path, manager: DatabaseSessionManager) -> 
     url = manager._url
     if not src.is_file() or src.stat().st_size == 0:
         raise RecoveryError("backup missing or empty; cannot restore")
+    # Re-resolve after existence check to close symlink-swap TOCTOU.
+    src = _confine_backup_path(src)
     if url.startswith("sqlite") and ":memory:" not in url:
         live = Path(url.split("sqlite:///", 1)[1].split("?", 1)[0])
         if manager._engine is not None:
@@ -168,17 +174,20 @@ def rollback_release(base: str | Path, manager: DatabaseSessionManager, backup_p
 def backup_database(manager: DatabaseSessionManager, dest_dir: str | Path) -> Path:
     from sqlalchemy import text
 
+    from trace_core.core.fs import ensure_dir
+
     url = manager._url
-    dest = Path(dest_dir)
-    dest.mkdir(parents=True, exist_ok=True)
+    dest = ensure_dir(dest_dir)
     if url.startswith("sqlite") and ":memory:" not in url:
         out = dest / "trace-backup.db"
         check_contained(out, dest)
         if out.exists():
             out.unlink()
-        literal = str(out).replace("'", "''")
+        literal = str(check_contained(out, dest)).replace("'", "''")
         with manager.engine.begin() as conn:
             conn.execute(text(f"VACUUM INTO '{literal}'"))
+        if not out.is_file() or out.stat().st_size == 0:
+            raise UpdateError("database backup failed: empty backup")
         return out
     if url.startswith("postgresql"):
         out = dest / "trace-backup.sql"
@@ -210,24 +219,47 @@ def run_updater_migration(
     backup_dir: str | Path | None = None,
     backup_waiver: str | None = None,
 ) -> dict:
-    from trace_core.core.database.migrations import apply_migrations, verify_migration_checksums
-
     state, active = marker_state()
     if state == "corrupt":
         raise UpdateInProgressError("update marker corrupt; run trace recovery before migrating")
     if state == "active" and active and active.get("transaction_id") != transaction_id:
         raise UpdateInProgressError("another update transaction owns migration")
     begin_update_migration(transaction_id)
+    with update_migration_owner(transaction_id):
+        return _run_updater_migration_locked(
+            manager,
+            transaction_id,
+            schema_min=schema_min,
+            schema_target=schema_target,
+            backup_required=backup_required,
+            backup_dir=backup_dir,
+            backup_waiver=backup_waiver,
+        )
+
+
+def _run_updater_migration_locked(
+    manager: DatabaseSessionManager,
+    transaction_id: str,
+    schema_min: int | None = None,
+    schema_target: int | None = None,
+    backup_required: bool = False,
+    backup_dir: str | Path | None = None,
+    backup_waiver: str | None = None,
+) -> dict:
+    from trace_core.core.database.migrations import apply_migrations, verify_migration_checksums
+
+    backup_path = None
+    mutated = False
     try:
         current = current_schema_version(manager)
         would_advance = schema_target is not None and schema_target > current
         needs_backup = backup_required or (would_advance and backup_waiver is None)
-        backup_path = None
         if needs_backup:
             if backup_dir is None:
                 raise UpdateError("backup required but no backup directory given")
             backup_path = backup_database(manager, backup_dir)
         verify_compatibility(manager, schema_min, schema_target)
+        mutated = True
         applied = apply_migrations(manager.engine)
         verify_migration_checksums(manager.engine)
         after = current_schema_version(manager)
@@ -242,6 +274,10 @@ def run_updater_migration(
     except Exception:
         import contextlib
 
+        if backup_path is not None and not mutated:
+            with contextlib.suppress(OSError):
+                Path(backup_path).unlink()
+            backup_path = None
         with contextlib.suppress(UpdateInProgressError):
             finish_update_migration(transaction_id)
         raise

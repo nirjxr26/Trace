@@ -14,10 +14,10 @@ IdT = TypeVar("IdT")
 
 
 def paginate(stmt, limit: int | None, offset: int | None):  # type: ignore[no-untyped-def]
-    """Single source for offset/limit. Skips falsy values (0 offset = no-op)."""
-    if offset:
+    """Single source for offset/limit. None means no clause; 0 offset is a no-op, 0 limit yields no rows."""
+    if offset is not None and offset:
         stmt = stmt.offset(offset)
-    if limit:
+    if limit is not None:
         stmt = stmt.limit(limit)
     return stmt
 
