@@ -142,7 +142,7 @@ def _cached_check_http(key: str, channel: str, cached: dict[str, Any] | None) ->
             return cached["payload"]
         raise
     manifest = load_manifest_bytes(data)
-    current = settings.version
+    current = get_installed_version()
     available = is_update_available(current, manifest)
     installable, reason = is_installable(current, manifest, channel, False)
     payload = {
