@@ -1,5 +1,4 @@
 import json
-import re
 import shutil
 import subprocess
 import threading
@@ -118,13 +117,42 @@ def _confine_backup_path(backup_path: str | Path) -> Path:
     return resolved
 
 
+def _pg_parts(url: str) -> tuple[str, str | None]:
+    """Single source for PG URL split. Returns (passwordless_url, password_or_None). Never logs password."""
+    base_scheme, _, base_rest = url.partition("://")
+    drv, _, _ = base_scheme.partition("+")
+    pg_url = drv + "://" + base_rest if base_rest else url
+    scheme, _, rest = pg_url.partition("://")
+    if not rest:
+        return pg_url, None
+    at = rest.rfind("@")
+    if at == -1:
+        return pg_url, None
+    creds_host = rest
+    creds, _, hostpart = creds_host.partition("@")
+    if ":" not in creds:
+        return pg_url, None
+    user, _, password = creds.partition(":")
+    if not password:
+        return pg_url, None
+    clean = f"{scheme}://{user}@{hostpart}"
+    return clean, password
+
+
 def restore_backup(backup_path: str | Path, manager: DatabaseSessionManager) -> None:
+    import os
+
     src = _confine_backup_path(backup_path)
     url = manager._url
     if not src.is_file() or src.stat().st_size == 0:
         raise RecoveryError("backup missing or empty; cannot restore")
     # Re-resolve after existence check to close symlink-swap TOCTOU.
     src = _confine_backup_path(src)
+    try:
+        fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        os.close(fd)
+    except OSError as e:
+        raise RecoveryError("backup path refused; cannot restore") from e
     if url.startswith("sqlite") and ":memory:" not in url:
         live = Path(url.split("sqlite:///", 1)[1].split("?", 1)[0])
         if manager._engine is not None:
@@ -136,18 +164,24 @@ def restore_backup(backup_path: str | Path, manager: DatabaseSessionManager) -> 
     if url.startswith("postgresql"):
         import subprocess
 
-        pg_url = re.sub(r"^postgresql\+[^:]+://", "postgresql://", url)
+        clean_url, password = _pg_parts(url)
         try:
+            import os as _os
+
+            env = dict(_os.environ)
+            if password:
+                env["PGPASSWORD"] = password
             with src.open("rb") as handle:
                 subprocess.run(
-                    ["psql", pg_url, "-f", "-"],
+                    ["psql", clean_url, "-f", "-"],
                     stdin=handle,
                     stderr=subprocess.DEVNULL,
                     timeout=600,
                     check=True,
+                    env=env,
                 )
         except (OSError, subprocess.SubprocessError) as e:
-            raise RecoveryError(f"database restore failed: {e}") from e
+            raise RecoveryError("database restore failed") from e
         return
     raise RecoveryError(f"restore unsupported for {url.split(':', 1)[0]}")
 
@@ -184,7 +218,7 @@ def backup_database(manager: DatabaseSessionManager, dest_dir: str | Path) -> Pa
         if out.exists():
             out.unlink()
         literal = str(check_contained(out, dest)).replace("'", "''")
-        with manager.engine.begin() as conn:
+        with manager.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.execute(text(f"VACUUM INTO '{literal}'"))
         if not out.is_file() or out.stat().st_size == 0:
             raise UpdateError("database backup failed: empty backup")
@@ -192,18 +226,24 @@ def backup_database(manager: DatabaseSessionManager, dest_dir: str | Path) -> Pa
     if url.startswith("postgresql"):
         out = dest / "trace-backup.sql"
         check_contained(out, dest)
-        pg_url = re.sub(r"^postgresql\+[^:]+://", "postgresql://", url)
+        clean_url, password = _pg_parts(url)
         try:
+            import os as _os
+
+            env = dict(_os.environ)
+            if password:
+                env["PGPASSWORD"] = password
             with out.open("wb") as handle:
                 subprocess.run(
-                    ["pg_dump", pg_url],
+                    ["pg_dump", clean_url],
                     stdout=handle,
                     stderr=subprocess.DEVNULL,
                     timeout=300,
                     check=True,
+                    env=env,
                 )
         except (OSError, subprocess.SubprocessError) as e:
-            raise UpdateError(f"database backup failed: {e}") from e
+            raise UpdateError("database backup failed") from e
         if out.stat().st_size == 0:
             raise UpdateError("database backup failed: empty dump")
         return out

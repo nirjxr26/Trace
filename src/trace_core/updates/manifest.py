@@ -4,11 +4,14 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+MAX_MANIFEST_BYTES = 1_048_576
+MAX_ARTIFACT_BYTES = 10_737_418_240
+
 
 class ManifestArtifact(BaseModel):
     filename: str
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    size: int = Field(ge=1, le=10_737_418_240)
+    size: int = Field(ge=1, le=MAX_ARTIFACT_BYTES)
     signature: str | None = None
     signing_key_id: str | None = None
     platform: str | None = Field(default=None, pattern=r"^(windows|linux|macos)$")
@@ -19,7 +22,7 @@ class ReleaseManifest(BaseModel):
     schema_: int = Field(alias="schema", ge=1)
     product: str = Field(min_length=1, max_length=64)
     channel: str
-    version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+([._-][a-zA-Z0-9]+)*$", max_length=64)
+    version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+([._-][a-zA-Z0-9]+)*(\+[a-zA-Z0-9._-]+)?$", max_length=64)
     release_id: str = Field(min_length=1, max_length=64)
     published_at: str | None = None
     minimum_supported_version: str | None = None
@@ -60,18 +63,36 @@ def _validate(data: dict[str, Any]) -> ReleaseManifest:
     try:
         return ReleaseManifest.model_validate(data)
     except PydanticValidationError as e:
-        details = "; ".join(f"{'.'.join(map(str, err['loc']))}: {err['msg']}" for err in e.errors())
+        errs = e.errors()[:5]
+        details = "; ".join(f"{'.'.join(map(str, err['loc']))}: {err['msg']}" for err in errs)
+        if len(e.errors()) > 5:
+            details += f"; +{len(e.errors()) - 5} more"
         raise UpdateVerificationError(f"invalid manifest: {details}") from e
+
+
+def _parse_bytes(data: bytes) -> ReleaseManifest:
+    from trace_core.updates.errors import UpdateVerificationError
+
+    if len(data) > MAX_MANIFEST_BYTES:
+        raise UpdateVerificationError("manifest too large")
+    try:
+        parsed = json.loads(data.decode("utf-8"))
+    except ValueError as e:
+        raise UpdateVerificationError(f"unreadable manifest: {e}") from e
+    return _validate(parsed)
 
 
 def load_manifest(path: str | Path) -> ReleaseManifest:
     from trace_core.updates.errors import UpdateVerificationError
 
+    p = Path(path)
     try:
-        data = Path(path).read_bytes()
+        if p.stat().st_size > MAX_MANIFEST_BYTES:
+            raise UpdateVerificationError("manifest too large")
+        data = p.read_bytes()
     except OSError as e:
         raise UpdateVerificationError(f"unreadable manifest: {e}") from e
-    return load_manifest_bytes(data)
+    return _parse_bytes(data)
 
 
 def load_manifest_dict(data: dict[str, Any]) -> ReleaseManifest:
@@ -79,12 +100,4 @@ def load_manifest_dict(data: dict[str, Any]) -> ReleaseManifest:
 
 
 def load_manifest_bytes(data: bytes) -> ReleaseManifest:
-    from trace_core.updates.errors import UpdateVerificationError
-
-    if len(data) > 1_048_576:
-        raise UpdateVerificationError("manifest too large")
-    try:
-        parsed = json.loads(data.decode("utf-8"))
-    except ValueError as e:
-        raise UpdateVerificationError(f"unreadable manifest: {e}") from e
-    return _validate(parsed)
+    return _parse_bytes(data)

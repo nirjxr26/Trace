@@ -50,15 +50,18 @@ class UpdatesView(Vertical):
         self._maybe_refresh_hint()
 
     def _maybe_refresh_hint(self) -> None:
-        # Local-only hint pill: remote manifests need network I/O, use `trace update check` for those.
-        from trace_core.core.settings import settings
-        from trace_core.updates.checker import cached_check
+        # Sync by design: Textual calls refresh_data on the UI thread.
+        # cached_check is ETag-cached (1 h) so repeat polls are local reads;
+        # first remote fetch is bounded by HttpManifestSource timeout + 3 retries.
+        from trace_core.updates.checker import cached_check, resolve_channel, resolve_manifest_target
 
-        target = settings.update_manifest
-        if not target or target.startswith("https://") or target.startswith("http://"):
+        try:
+            channel = resolve_channel(None)
+            target = resolve_manifest_target(None, channel)
+        except Exception:
             return
         try:
-            payload = cached_check(target, settings.update_channel)
+            payload = cached_check(target, channel)
         except Exception:
             return
         if not payload["available"]:
@@ -70,16 +73,17 @@ class UpdatesView(Vertical):
             pass
 
     def _check_text(self) -> str:
-        from trace_core.core.settings import settings
-        from trace_core.updates.checker import cached_check
+        from trace_core.updates.checker import cached_check, resolve_channel, resolve_manifest_target
 
-        target = settings.update_manifest
-        if not target:
+        channel = resolve_channel(None)
+        try:
+            target = resolve_manifest_target(None, channel)
+        except Exception:
             return "No update manifest configured (TRACE_UPDATE_MANIFEST)."
-        payload = cached_check(target, settings.update_channel)
+        payload = cached_check(target, channel)
         if not payload["available"]:
-            return f"Up to date ({payload['current']}, {settings.update_channel})."
-        lines = [f"{payload['target']} available (current {payload['current']}, {settings.update_channel})"]
+            return f"Up to date ({payload['current']}, {channel})."
+        lines = [f"{payload['target']} available (current {payload['current']}, {channel})"]
         if payload["security_update"]:
             lines.append("Security update")
         if payload["minimum_supported_version"]:

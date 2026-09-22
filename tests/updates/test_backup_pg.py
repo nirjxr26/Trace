@@ -23,7 +23,9 @@ def test_pg_backup_invocation(tmp_path, monkeypatch):
     out = backup_database(mgr, tmp_path / "backups")
     assert out.name == "trace-backup.sql"
     assert seen["argv"][0] == "pg_dump"
-    assert seen["argv"][1] == "postgresql://u:p@127.0.0.1:1/trace"
+    assert seen["argv"][1] == "postgresql://u@127.0.0.1:1/trace"
+    assert ":p@" not in seen["argv"][1]
+    assert seen["kwargs"]["env"]["PGPASSWORD"] == "p"
     assert seen["kwargs"]["timeout"] == 300
     assert seen["kwargs"]["check"] is True
     assert seen["kwargs"]["stderr"] == subprocess.DEVNULL

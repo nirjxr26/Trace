@@ -2263,3 +2263,40 @@
   - Verified `tests/updates/test_migration_race.py::test_recovery_clears_stale_marker` passes.
   - Verified PostgreSQL integration tests (`tests/integration/test_postgres.py`) with live PostgreSQL container (3 passed).
   - Local pre-PR gate (`check-pr.ps1`): **PASSED** (all 6 stages clean: virtualenv, lockfile, ruff format, ruff lint, mypy, 291 passed, 3 skipped, 76.46% coverage).
+
+---
+
+## 2026-09-20 — PR #5 SonarQube 8-issue remediation (Cognitive Complexity, Duplication, Suspicious Code, Exception Isolation)
+
+- **Cognitive Complexity**:
+  - `release/verify_release.py` (16 → 4): Extracted `_safe_filename`, `_verify_artifact_integrity`, and `_sync_trusted_keys` out of `main()`.
+  - `src/trace_core/core/cli/error_handler.py` (16 → 3): Replaced repeated `isinstance` branches and boolean fallback cascades in `_update_error` with a declarative `specs` tuple loop.
+  - `src/trace_core/core/database/migrations.py` (29 → 1): Extracted `_safe_nested_execute`, `_migration_016_ensure_columns`, `_migration_016_ensure_indexes`, and `_run_migration_016` out of `_migration_016_update_roundtrip`.
+  - `src/trace_core/updates/sources.py` (25 → 4): Extracted `_read_manifest_response` and `_handle_url_error` from `fetch_with_etag`.
+- **Code Duplication**:
+  - `src/trace_core/updates/sources.py`: Defined `_JSON_SUFFIX = ".json"` constant replacing 4 duplicate string literals in `split_manifest_url` and `fetch_with_etag` (SonarLint S1192).
+- **Suspicious Code**:
+  - `release/make_manifest.py`: Removed empty `pass` in `if` branch with `elif ... continue`; unified into `is_tar_gz = ...` single check.
+- **Test Exception Isolation (python:S5754)**:
+  - `tests/updates/test_phase_a_p0.py`: Extracted object instantiation and argument prep outside `pytest.raises` in `test_gate_active_probe_blocks_install`, `test_gate_probe_error_fails_closed`, `test_strict_key_import_rejects_trailing_garbage`, and `test_trust_path_traversal_rejected`.
+- **Verification**:
+  - All 291 tests passed, 3 skipped.
+  - Local pre-PR gate (`check-pr.ps1`): **PASSED** (all 6 stages clean, 76.76% branch coverage).
+
+---
+
+## 2026-09-22 — Fully automatic update module (no manual manifest/artifact)
+
+- **Scope**: Make `update check/show/verify/install` work with zero flags per user request, reusing `checker/sources/policy/verifier/fs` contracts. No new deps, no bypass of verification, AGENTS §§1-4/14 preserved.
+- **Fix**: `checker.py` adds `default_manifest_target/resolve_manifest_target/resolve_channel/load_manifest_auto/ensure_artifact_path` single sources (explicit wins, else `settings.update_manifest/update_channel`, else fail closed only when explicitly disabled); `sources.py` adds `fetch_artifact_bytes` reusing TLS/redirect/retry guards with `assert_safe_filename` + size cap, cached under `state/artifacts/` with sha/size re-verify; `commands.py` makes `--manifest/--artifact/--channel` optional on all four commands and auto-resolves/downloads before `verify_manifest/lifecycle.run`; `shell_handler.py` uses same resolvers and updated help text; `cli/shell.py` strips leading `trace` inside REPL (`trace update check` == `update check`); `tui/screens/updates.py` hint + check use resolvers so default HTTPS manifest shows pill automatically.
+- **Verification**: ruff check clean; ruff format clean; mypy clean (144 files); pytest 291 passed / 3 skipped; manual `resolve_manifest_target(None)` returns default stable.json URL and `trace update check` tolerated via REPL strip.
+- **Files**: `src/trace_core/updates/checker.py,sources.py,commands.py,shell_handler.py`, `src/trace_core/cli/shell.py`, `src/trace_core/tui/screens/updates.py`.
+
+---
+
+## 2026-09-22 — Update module 50-issue permanent remediation (audit list closure)
+
+- **Scope**: Close all 50 issues from the 2026-09-22 file-by-file audit list in smallest permanent diffs per AGENTS §§1-4/14. No new deps or frameworks. Dirty tree kept, nothing committed.
+- **Fix**: Streaming artifact download to temp file (`sources.stream_artifact_to_file` + `_with_retries` single retry path, `checker.ensure_artifact_path` atomic promote); install availability/policy before download with `get_installed_version()` single authority (active pointer else settings); URL-stem-respecting `check_for_update` delegation + query-safe channel via `sources.has_json_suffix`; REPL quote-preserving `trace` strip; `cache` null-timestamp tolerance + mtime fast-path identity; service negative-pagination guard + `started_at/id` ordering; `UpdateFailureStage.from_state` single mapping + `BaseException` interrupted history with record guard; trust/checksum caches keyed by root/action; `manifest` shared constants/capped errors/bounded read/`+build` support/`_parse_bytes`; `policy` unknown-channel reject + sanitized platform; `staging/marker` typed `UpdateError`; DTO channel/result/stage validators; `signing` honest `verify_artifact_signature_file` + alias; `sources` CDN host tuple + manifest-size default; shell completions; canonical layout doc in `updater.install_root`; `lifecycle` sanitized override, typed health/stages, schema-once threading, preverified short-circuit, retention prune hook; `migration` PGPASSWORD env, AUTOCOMMIT vacuum, O_NOFOLLOW probe; `updater` single-pass copy+hash, `os.replace`, `prune_retention`; TUI sync-documented hint; tests updated to typed contracts (`UpdateError`, PGPASSWORD, state-name stages).
+- **Verification**: ruff check clean; ruff format clean; mypy clean (144 files); pytest 291 passed / 3 skipped; `check-pr.ps1` PASSED (coverage ~76%).
+- **Files**: `src/trace_core/updates/checker.py,sources.py,manifest.py,policy.py,domain.py,dto.py,verifier.py,signing.py,trust.py,cache.py,service.py,lifecycle.py,migration.py,marker.py,staging.py,commands.py,shell_handler.py,lock.py`, `src/trace_updater/updater.py`, `src/trace_core/cli/shell.py`, `src/trace_core/tui/screens/updates.py`, `src/trace_core/core/cli/recovery.py`, `src/trace_core/core/database/migrations.py`, `tests/updates/test_marker_schema.py,test_staging_install.py,test_backup_pg.py`.

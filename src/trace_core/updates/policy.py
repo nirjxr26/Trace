@@ -1,11 +1,13 @@
 import platform as _platform
 import sys
 
+from packaging.version import Version
+
 from trace_core.updates.domain import UpdateChannel
 from trace_core.updates.manifest import ManifestArtifact, ReleaseManifest
 
 
-def _parse_version(v: str):  # type: ignore[no-untyped-def]
+def _parse_version(v: str) -> Version:
     from packaging.version import InvalidVersion, Version
 
     try:
@@ -31,6 +33,10 @@ def is_installable(
     forensic_active: bool = False,
     allow_minimum_bypass: bool = False,
 ) -> tuple[bool, str | None]:
+    from trace_core.updates.errors import UpdateVerificationError
+
+    if not UpdateChannel.contains(channel):
+        raise UpdateVerificationError(f"unknown channel {channel!r}")
     if forensic_active:
         return False, "forensic operation active"
     if manifest.channel not in CHANNEL_COMPATIBILITY.get(channel, {channel}):
@@ -60,13 +66,16 @@ def security_label(manifest: ReleaseManifest) -> str | None:
 
 
 def _current_platform() -> tuple[str, str]:
+    from trace_core.core.domain import strip_controls
+
     raw_machine = _platform.machine()
+    safe_machine = strip_controls(str(raw_machine)).strip()[:32]
     machine = {
         "amd64": "x64",
         "x86_64": "x64",
         "arm64": "arm64",
         "aarch64": "arm64",
-    }.get(raw_machine.lower(), f"unknown({raw_machine})")
+    }.get(raw_machine.lower(), f"unknown({safe_machine})")
     system = {"win32": "windows", "linux": "linux", "darwin": "macos"}.get(sys.platform, f"unknown({sys.platform})")
     return system, machine
 

@@ -277,7 +277,7 @@ def _install_sqlite_audit_triggers(conn: Connection) -> None:
             pass
 
 
-_MIGRATION_CHECKSUM_CACHE: dict[str, str] = {}
+_MIGRATION_CHECKSUM_CACHE: dict[tuple[str, int], str] = {}
 
 
 def _migration_checksum(name: str) -> str:
@@ -285,19 +285,22 @@ def _migration_checksum(name: str) -> str:
     import hashlib
     import inspect as pyinspect
 
-    if name in _MIGRATION_CHECKSUM_CACHE:
-        return _MIGRATION_CHECKSUM_CACHE[name]
+    action_id = 0
     source = ""
     for _, mname, action in MIGRATIONS:
         if mname == name:
+            action_id = id(action)
             try:
                 # Normalized: CRLF checkouts must hash identically to LF ones.
                 source = pyinspect.getsource(action).replace("\r\n", "\n")
             except (OSError, TypeError):
                 source = ""
             break
+    key = (name, action_id)
+    if key in _MIGRATION_CHECKSUM_CACHE:
+        return _MIGRATION_CHECKSUM_CACHE[key]
     digest = hashlib.sha256(f"{name}\n{source}".encode()).hexdigest()
-    _MIGRATION_CHECKSUM_CACHE[name] = digest
+    _MIGRATION_CHECKSUM_CACHE[key] = digest
     return digest
 
 
@@ -562,56 +565,54 @@ def _migration_015_update_provenance(bind: Engine | Connection) -> None:
                     _ensure_column(conn, "update_history", column, ddl)
 
 
+def _safe_nested_execute(conn: Connection, stmt: str) -> None:
+    try:
+        with conn.begin_nested():
+            conn.execute(text(stmt))
+    except Exception:
+        pass
+
+
+def _migration_016_ensure_columns(conn: Connection, cols: set[str]) -> None:
+    bool_default = "FALSE" if conn.dialect.name == "postgresql" else "0"
+    for column, ddl in (
+        ("artifact_sha256", "ALTER TABLE update_history ADD COLUMN artifact_sha256 VARCHAR(64)"),
+        ("signing_key_id", "ALTER TABLE update_history ADD COLUMN signing_key_id VARCHAR(64)"),
+        ("failure_reason", "ALTER TABLE update_history ADD COLUMN failure_reason TEXT"),
+        (
+            "restart_required",
+            f"ALTER TABLE update_history ADD COLUMN restart_required BOOLEAN DEFAULT {bool_default}",
+        ),
+    ):
+        if column not in cols:
+            _safe_nested_execute(conn, ddl)
+
+
+def _migration_016_ensure_indexes(conn: Connection) -> None:
+    for idx_name, col in (
+        ("ix_update_history_transaction_id", "transaction_id"),
+        ("ix_update_history_started_at", "started_at"),
+    ):
+        if not _index_exists(conn, "update_history", idx_name):
+            _safe_nested_execute(conn, f"CREATE INDEX {idx_name} ON update_history ({col})")
+
+
+def _run_migration_016(conn: Connection) -> None:
+    if "update_history" not in inspect(conn).get_table_names():
+        return
+    cols = _column_names(conn, "update_history")
+    _migration_016_ensure_columns(conn, cols)
+    bool_lit = "FALSE" if conn.dialect.name == "postgresql" else "0"
+    _safe_nested_execute(conn, f"UPDATE update_history SET restart_required={bool_lit} WHERE restart_required IS NULL")
+    _safe_nested_execute(conn, f"UPDATE update_history SET rollback={bool_lit} WHERE rollback IS NULL")
+    _migration_016_ensure_indexes(conn)
+
+
 @register_migration(16, "016_update_history_roundtrip")
 def _migration_016_update_roundtrip(bind: Engine | Connection) -> None:
     """History round-trip: transaction index + provenance columns for read DTO parity."""
-
-    def _run(conn: Connection) -> None:
-        if "update_history" not in inspect(conn).get_table_names():
-            return
-        cols = _column_names(conn, "update_history")
-        bool_default = "FALSE" if conn.dialect.name == "postgresql" else "0"
-        for column, ddl in (
-            ("artifact_sha256", "ALTER TABLE update_history ADD COLUMN artifact_sha256 VARCHAR(64)"),
-            ("signing_key_id", "ALTER TABLE update_history ADD COLUMN signing_key_id VARCHAR(64)"),
-            ("failure_reason", "ALTER TABLE update_history ADD COLUMN failure_reason TEXT"),
-            (
-                "restart_required",
-                f"ALTER TABLE update_history ADD COLUMN restart_required BOOLEAN DEFAULT {bool_default}",
-            ),
-        ):
-            if column not in cols:
-                try:
-                    with conn.begin_nested():
-                        conn.execute(text(ddl))
-                except Exception:
-                    pass
-        bool_lit = "FALSE" if conn.dialect.name == "postgresql" else "0"
-        try:
-            with conn.begin_nested():
-                conn.execute(
-                    text(f"UPDATE update_history SET restart_required={bool_lit} WHERE restart_required IS NULL")
-                )
-                conn.execute(text(f"UPDATE update_history SET rollback={bool_lit} WHERE rollback IS NULL"))
-        except Exception:
-            pass
-        if not _index_exists(conn, "update_history", "ix_update_history_transaction_id"):
-            try:
-                with conn.begin_nested():
-                    conn.execute(
-                        text("CREATE INDEX ix_update_history_transaction_id ON update_history (transaction_id)")
-                    )
-            except Exception:
-                pass
-        if not _index_exists(conn, "update_history", "ix_update_history_started_at"):
-            try:
-                with conn.begin_nested():
-                    conn.execute(text("CREATE INDEX ix_update_history_started_at ON update_history (started_at)"))
-            except Exception:
-                pass
-
     if isinstance(bind, Connection):
-        _run(bind)
+        _run_migration_016(bind)
     else:
         with bind.begin() as conn:
-            _run(conn)
+            _run_migration_016(conn)

@@ -79,3 +79,14 @@ class UpdateFailureStage(StrEnum):
     HEALTH = "health"
     RECOVERY = "recovery"
     MIGRATION = "migration"
+
+    @classmethod
+    def from_state(cls, state: UpdateState) -> str:
+        """Single source mapping lifecycle states to persisted stages."""
+        if state in (UpdateState.CHECKING, UpdateState.AVAILABLE, UpdateState.READY_TO_INSTALL):
+            return cls.POLICY
+        if state in (UpdateState.DOWNLOADING, UpdateState.STAGED, UpdateState.INSTALLING):
+            return cls.STAGING
+        if state in (UpdateState.MIGRATING, UpdateState.HEALTH_CHECK, UpdateState.ROLLING_BACK):
+            return cls.HEALTH
+        return str(state).lower()

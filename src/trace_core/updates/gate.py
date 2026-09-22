@@ -19,6 +19,11 @@ ActiveProbe = Callable[[UpdateGateContext | None], bool | None]
 
 
 class ForensicOperationGate:
+    """Presentation-safe gate. Default allows; pass active_probe wired to real acquisition state.
+
+    No open-handle inspection — use the application's operation-state provider when imaging exists.
+    """
+
     def __init__(self, active_probe: ActiveProbe | None = None) -> None:
         self._probe = active_probe
 

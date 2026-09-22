@@ -2,17 +2,24 @@ import typer
 
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.ui.renderers import console, render_minimalist_table
+from trace_core.updates.dto import UpdateHistoryDto
 from trace_core.updates.policy import security_label
 from trace_core.updates.service import UpdateService
 
 update_app = typer.Typer(name="update", help="Check, stage, and record updates.")
-MANIFEST_PATH_HELP = "Path to release manifest JSON"
-ARTIFACT_PATH_HELP = "Path to artifact file"
+MANIFEST_PATH_HELP = "Manifest URL or path (default: configured TRACE_UPDATE_MANIFEST)"
+ARTIFACT_PATH_HELP = "Artifact file (default: auto-download from manifest)"
 RESTART_REQUIRED_MESSAGE = "Trace will restart to complete this update."
-HISTORY_COLUMNS: list[tuple[str, dict]] = [("From", {}), ("To", {}), ("Channel", {}), ("Result", {}), ("Rollback", {})]
+HISTORY_COLUMNS: list[tuple[str, dict[str, object]]] = [
+    ("From", {}),
+    ("To", {}),
+    ("Channel", {}),
+    ("Result", {}),
+    ("Rollback", {}),
+]
 
 
-def history_table_rows(rows: list) -> list[list[str]]:  # type: ignore[no-untyped-def]
+def history_table_rows(rows: list[UpdateHistoryDto]) -> list[list[str]]:
     """Single source for history table rows. Shared by CLI and REPL shell."""
     return [[r.from_version, r.to_version, r.channel, r.result, str(r.rollback)] for r in rows]
 
@@ -20,17 +27,14 @@ def history_table_rows(rows: list) -> list[list[str]]:  # type: ignore[no-untype
 @update_app.command("check")
 def update_check(
     manifest: str | None = typer.Option(None, "--manifest", help=MANIFEST_PATH_HELP),
-    channel: str = typer.Option("stable", "--channel", help="stable|beta"),
+    channel: str | None = typer.Option(None, "--channel", help="stable|beta"),
     output: str = typer.Option("table", "--output", "-o", help="table|json"),
 ) -> None:
     with capture_cli_errors("Update Check"):
-        from trace_core.core.settings import settings
-        from trace_core.updates.checker import cached_check
-        from trace_core.updates.errors import UpdateError
+        from trace_core.updates.checker import cached_check, resolve_channel, resolve_manifest_target
 
-        target = manifest or settings.update_manifest
-        if not target:
-            raise UpdateError("no update manifest configured (pass --manifest or set TRACE_UPDATE_MANIFEST)")
+        channel = resolve_channel(channel)
+        target = resolve_manifest_target(manifest, channel)
         payload = cached_check(target, channel)
         if output.lower() == "json":
             from trace_core.core.ui.renderers import render_json
@@ -78,15 +82,15 @@ def update_history(
 
 @update_app.command("show")
 def update_show(
-    manifest: str = typer.Option(..., "--manifest", help=MANIFEST_PATH_HELP),
+    manifest: str | None = typer.Option(None, "--manifest", help=MANIFEST_PATH_HELP),
     artifact: str | None = typer.Option(None, "--artifact", help=ARTIFACT_PATH_HELP),
+    channel: str | None = typer.Option(None, "--channel", help="stable|beta"),
 ) -> None:
     with capture_cli_errors("Update Show"):
-        from pathlib import Path
+        from trace_core.updates.checker import ensure_artifact_path, load_manifest_auto, resolve_channel
 
-        from trace_core.updates.manifest import load_manifest
-
-        m = load_manifest(manifest)
+        channel = resolve_channel(channel)
+        m, target = load_manifest_auto(manifest, channel)
         console.print(f"[bold]{m.product} {m.version}[/bold] ({m.channel})")
         if not artifact:
             console.print("[dim]Unverified manifest content — shown before verification.[/dim]")
@@ -97,33 +101,34 @@ def update_show(
         if m.restart_required:
             console.print(RESTART_REQUIRED_MESSAGE)
         if artifact:
+            from trace_core.updates.checker import ensure_artifact_path
             from trace_core.updates.verifier import verify_manifest
 
-            verify_manifest(m, Path(artifact))
+            verify_manifest(m, ensure_artifact_path(m, artifact, target))
             console.print("[green]Artifact verification passed.[/green]")
 
 
 @update_app.command("verify")
 def update_verify(
-    manifest: str = typer.Option(..., "--manifest", help=MANIFEST_PATH_HELP),
-    artifact: str = typer.Option(..., "--artifact", help=ARTIFACT_PATH_HELP),
+    manifest: str | None = typer.Option(None, "--manifest", help=MANIFEST_PATH_HELP),
+    artifact: str | None = typer.Option(None, "--artifact", help=ARTIFACT_PATH_HELP),
+    channel: str | None = typer.Option(None, "--channel", help="stable|beta"),
 ) -> None:
     with capture_cli_errors("Update Verify"):
-        from pathlib import Path
-
-        from trace_core.updates.manifest import load_manifest
+        from trace_core.updates.checker import ensure_artifact_path, load_manifest_auto, resolve_channel
         from trace_core.updates.verifier import verify_manifest
 
-        m = load_manifest(manifest)
-        verify_manifest(m, Path(artifact))
+        channel = resolve_channel(channel)
+        m, target = load_manifest_auto(manifest, channel)
+        verify_manifest(m, ensure_artifact_path(m, artifact, target))
         console.print("[green]Verification passed.[/green]")
 
 
 @update_app.command("install")
 def update_install(
-    manifest: str = typer.Option(..., "--manifest", help=MANIFEST_PATH_HELP),
-    artifact: str = typer.Option(..., "--artifact", help=ARTIFACT_PATH_HELP),
-    channel: str = typer.Option("stable", "--channel", help="stable|beta"),
+    manifest: str | None = typer.Option(None, "--manifest", help=MANIFEST_PATH_HELP),
+    artifact: str | None = typer.Option(None, "--artifact", help=ARTIFACT_PATH_HELP),
+    channel: str | None = typer.Option(None, "--channel", help="stable|beta"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
     bypass_minimum: bool = typer.Option(
         False, "--bypass-minimum", help="Override minimum-supported-version with audit"
@@ -132,29 +137,32 @@ def update_install(
     with capture_cli_errors("Update Install"):
         import sys
         import uuid
-        from pathlib import Path
 
         from rich.prompt import Confirm
 
-        from trace_core.core.settings import settings
+        from trace_core.updates.checker import ensure_artifact_path, load_manifest_auto, resolve_channel
         from trace_core.updates.errors import UpdateError, UpdateNotAvailableError
         from trace_core.updates.lifecycle import UpdateLifecycle
-        from trace_core.updates.manifest import load_manifest
         from trace_core.updates.policy import is_update_available
         from trace_core.updates.verifier import resolve_artifact, verify_manifest
 
-        m = load_manifest(manifest)
-        if not is_update_available(settings.version, m):
-            raise UpdateNotAvailableError(f"no update available (current {settings.version})")
-        artifact_entry = resolve_artifact(m, Path(artifact))
-        verify_manifest(m, Path(artifact))
+        channel = resolve_channel(channel)
+        m, target = load_manifest_auto(manifest, channel)
+        from trace_core.updates.checker import get_installed_version
+
+        current = get_installed_version()
+        if not is_update_available(current, m):
+            raise UpdateNotAvailableError(f"no update available (current {current})")
+        artifact_path = ensure_artifact_path(m, artifact, target)
+        artifact_entry = resolve_artifact(m, artifact_path)
+        verify_manifest(m, artifact_path)
         bypass_note = ""
         if bypass_minimum:
             from trace_core.updates.policy import minimum_bypass_note
 
-            bypass_note = minimum_bypass_note(settings.version, m) or "minimum check passed; flag recorded"
+            bypass_note = minimum_bypass_note(current, m) or ""
         console.print(f"[bold]{m.product} {m.version}[/bold] ({m.channel})")
-        console.print(f"Current version: {settings.version}")
+        console.print(f"Current version: {current}")
         console.print(f"Target version: {m.version}")
         console.print("Release signature: VERIFIED")
         console.print(f"Artifact integrity: VERIFIED ({artifact_entry.sha256[:16]}…) ")
@@ -174,6 +182,10 @@ def update_install(
                 console.print("[dim]Install cancelled.[/dim]")
                 raise typer.Exit(0)
         dto = UpdateLifecycle(str(uuid.uuid4())).run(
-            m, Path(artifact), channel=channel, allow_minimum_bypass=bypass_minimum
+            m,
+            artifact_path,
+            channel=channel,
+            allow_minimum_bypass=bypass_minimum,
+            preverified_sha256=artifact_entry.sha256,
         )
         console.print(f"[green]Update {dto.result}: {dto.from_version} -> {dto.to_version}[/green]")

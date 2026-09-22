@@ -3,15 +3,16 @@ from pathlib import Path
 from trace_core.core.fs import check_contained, ensure_dir
 from trace_core.core.settings import settings
 
-_TRUST_ROOT_CACHE: Path | None = None
+_TRUST_ROOT_CACHE: tuple[str, Path] | None = None
 
 
 def trust_root() -> Path:
     global _TRUST_ROOT_CACHE
-    if _TRUST_ROOT_CACHE is not None and _TRUST_ROOT_CACHE.exists():
-        return _TRUST_ROOT_CACHE
+    storage_root = str(Path(settings.storage_root))
+    if _TRUST_ROOT_CACHE is not None and _TRUST_ROOT_CACHE[0] == storage_root and _TRUST_ROOT_CACHE[1].exists():
+        return _TRUST_ROOT_CACHE[1]
     root = ensure_dir(Path(settings.storage_root).parent / "trust" / "releases")
-    _TRUST_ROOT_CACHE = root
+    _TRUST_ROOT_CACHE = (storage_root, root)
     return root
 
 

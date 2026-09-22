@@ -1,10 +1,16 @@
+import hashlib
 import os
 import shutil
+import time
 from pathlib import Path
 
-from trace_core.core.fs import atomic_write_lines, check_contained, ensure_dir, sha256_file
+from trace_core.core.fs import atomic_write_lines, check_contained, ensure_dir
 from trace_core.updates.errors import UpdateVerificationError
 from trace_core.updates.lock import update_lock
+
+MAX_PARTIAL_RESUME_BYTES = 100 * 1024 * 1024
+RETENTION_STAGING_DAYS = 7
+RETENTION_BACKUPS = 3
 
 
 def releases_root(base: str | Path) -> Path:
@@ -12,7 +18,14 @@ def releases_root(base: str | Path) -> Path:
 
 
 def install_root() -> Path:
-    """Single source for on-disk install tree. Sibling of storage_root so wipes preserve releases."""
+    """Single source for on-disk install tree. Sibling of storage_root so wipes preserve releases.
+
+    Canonical layout (one map, others reference here):
+      <parent>/install/  releases/<version>/ (immutable), staging/<tx>/ (mutable),
+                         active-version (atomic pointer), previous-version, backups/
+      <parent>/trust/releases/  release Ed25519 keys (0700/0600), revoked/ precedence
+      <storage>/state/  update-check.json, update-active.json, update-result.json, artifacts/
+    """
     from trace_core.core.settings import settings
 
     return Path(settings.storage_root).parent / "install"
@@ -93,15 +106,17 @@ def _stage_artifact_locked(
     return offset
 
 
-def _stage_copy(  # type: ignore[no-untyped-def]
+def _stage_copy(
     src: Path, staging_dir: Path, dst: Path, tmp: Path, expected_sha256: str | None, binding: dict | None
-):
+) -> Path:
     import json
+
+    from trace_core.core.fs import atomic_write_lines
 
     offset = 0
     if tmp.exists():
         prior = _read_binding(staging_dir, src.name)
-        # Resume only when binding matches; >100MiB partials restart to bound disk use.
+        # Resume only when binding matches; large partials restart to bound disk use.
         if (
             prior is None
             or binding is None
@@ -109,7 +124,7 @@ def _stage_copy(  # type: ignore[no-untyped-def]
             or prior.get("release_id") != binding.get("release_id")
             or prior.get("expected_sha256") != expected_sha256
             or prior.get("expected_size") != src.stat().st_size
-            or tmp.stat().st_size > 100 * 1024 * 1024
+            or tmp.stat().st_size > MAX_PARTIAL_RESUME_BYTES
         ):
             tmp.unlink(missing_ok=True)
             _binding_path(staging_dir, src.name).unlink(missing_ok=True)
@@ -122,12 +137,22 @@ def _stage_copy(  # type: ignore[no-untyped-def]
             "expected_sha256": expected_sha256,
             "expected_size": src.stat().st_size,
         }
-        _binding_path(staging_dir, src.name).write_text(json.dumps(record), encoding="utf-8")
+        atomic_write_lines(_binding_path(staging_dir, src.name), [json.dumps(record)])
+    digest = hashlib.sha256()
+    if offset:
+        with tmp.open("rb") as existing:
+            for chunk in iter(lambda: existing.read(1 << 20), b""):
+                digest.update(chunk)
     with src.open("rb") as fin:
         fin.seek(offset)
         with tmp.open("ab" if offset else "wb") as fout:
-            shutil.copyfileobj(fin, fout, length=1024 * 1024)
-    if sha256_file(tmp) != expected_sha256:
+            while True:
+                chunk = fin.read(1 << 20)
+                if not chunk:
+                    break
+                fout.write(chunk)
+                digest.update(chunk)
+    if digest.hexdigest() != expected_sha256:
         tmp.unlink(missing_ok=True)
         _binding_path(staging_dir, src.name).unlink(missing_ok=True)
         raise UpdateVerificationError("staged artifact hash mismatch")
@@ -174,8 +199,31 @@ def _stage_release_locked(
             raise FileNotFoundError(f"incomplete release {version}: {missing}")
     if release_meta is not None:
         (tmp / "release.json").write_text(json.dumps(release_meta, indent=2), encoding="utf-8")
-    os.rename(tmp, target)
+    os.replace(tmp, target)
     return target
+
+
+def prune_retention(base: str | Path, keep_backups: int = RETENTION_BACKUPS) -> None:
+    """Single source for retention. Prunes old staging tx dirs, artifact cache, keeps N backups."""
+    import shutil as _shutil
+
+    cutoff = time.time() - RETENTION_STAGING_DAYS * 86400
+    staging = Path(base) / "staging"
+    if staging.is_dir():
+        for child in staging.iterdir():
+            try:
+                if child.is_dir() and child.stat().st_mtime < cutoff:
+                    _shutil.rmtree(child, ignore_errors=True)
+            except OSError:
+                continue
+    backups = Path(base) / "backups"
+    if backups.is_dir():
+        try:
+            files = sorted([p for p in backups.iterdir() if p.is_file()], key=lambda p: p.stat().st_mtime, reverse=True)
+            for stale in files[keep_backups:]:
+                stale.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def read_release_meta(base: str | Path, version: str) -> dict | None:

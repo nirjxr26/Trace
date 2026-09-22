@@ -2,8 +2,8 @@ from pathlib import Path
 
 from trace_core.core.fs import sha256_file
 from trace_core.updates.errors import UpdateVerificationError
-from trace_core.updates.manifest import ReleaseManifest
-from trace_core.updates.signing import verify_artifact_signature_streaming, verify_manifest_signature
+from trace_core.updates.manifest import ManifestArtifact, ReleaseManifest
+from trace_core.updates.signing import verify_artifact_signature_file, verify_manifest_signature
 
 
 def is_safe_filename(name: str) -> bool:
@@ -17,7 +17,7 @@ def assert_safe_filename(name: str) -> str:
     return name
 
 
-def verify_artifact(path: Path, artifact) -> None:
+def verify_artifact(path: Path, artifact: ManifestArtifact) -> None:
     assert_safe_filename(artifact.filename)
     if path.name != artifact.filename:
         raise UpdateVerificationError(f"filename mismatch: {path.name} != {artifact.filename}")
@@ -27,10 +27,12 @@ def verify_artifact(path: Path, artifact) -> None:
     digest = sha256_file(path)
     if digest != artifact.sha256:
         raise UpdateVerificationError(f"sha256 mismatch: {digest} != {artifact.sha256}")
-    verify_artifact_signature_streaming(path, artifact.signature, artifact.signing_key_id)
+    verify_artifact_signature_file(path, artifact.signature, artifact.signing_key_id)
 
 
-def resolve_artifact(manifest: ReleaseManifest, artifact_path: Path, platform_key: str | None = None):  # type: ignore[no-untyped-def]
+def resolve_artifact(
+    manifest: ReleaseManifest, artifact_path: Path, platform_key: str | None = None
+) -> ManifestArtifact:
     from trace_core.updates.policy import select_artifact
 
     if platform_key is not None:

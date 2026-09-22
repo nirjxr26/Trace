@@ -73,14 +73,21 @@ def verify_artifact_signature(data: bytes, signature: str | None, key_id: str | 
         raise UpdateVerificationError("invalid artifact signature") from e
 
 
-def verify_artifact_signature_streaming(path: object, signature: str | None, key_id: str | None) -> None:
-    """Single source for file-backed artifact verification. Hashing streams; signature needs full bytes."""
+def verify_artifact_signature_file(path: object, signature: str | None, key_id: str | None) -> None:
+    """Single source for file-backed artifact verification. Ed25519 needs full bytes; size pre-capped."""
     from pathlib import Path as _Path
 
+    from trace_core.updates.manifest import MAX_ARTIFACT_BYTES
+
     target = _Path(str(path))
-    if target.stat().st_size > 10_737_418_240:
+    if target.stat().st_size > MAX_ARTIFACT_BYTES:
         raise UpdateVerificationError("artifact too large to verify")
     verify_artifact_signature(target.read_bytes(), signature, key_id)
+
+
+def verify_artifact_signature_streaming(path: object, signature: str | None, key_id: str | None) -> None:
+    """Deprecated alias. Use verify_artifact_signature_file."""
+    verify_artifact_signature_file(path, signature, key_id)
 
 
 def import_release_pubkey(raw_pub_hex: str) -> str:

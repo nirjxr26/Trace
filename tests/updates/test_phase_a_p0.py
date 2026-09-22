@@ -19,8 +19,9 @@ def test_gate_active_probe_blocks_install(session_manager, temp_storage_root, si
     manifest, _, art_path, _ = signed_release()
     svc = UpdateService(session_manager)
     gate = ForensicOperationGate(active_probe=_probe)
+    lifecycle = UpdateLifecycle("tx-p0-gate", svc)
     with pytest.raises(UpdatePolicyBlockedError, match="forensic operation active"):
-        UpdateLifecycle("tx-p0-gate", svc).run(manifest, art_path, gate=gate)
+        lifecycle.run(manifest, art_path, gate=gate)
     assert isinstance(seen["context"], UpdateGateContext)
     assert seen["context"].transaction_id == "tx-p0-gate"
 
@@ -36,8 +37,10 @@ def test_gate_probe_error_fails_closed(session_manager, temp_storage_root, signe
 
     manifest, _, art_path, _ = signed_release()
     svc = UpdateService(session_manager)
+    gate = ForensicOperationGate(_boom)
+    lifecycle = UpdateLifecycle("tx-p0-gate-unknown", svc)
     with pytest.raises(UpdateError, match="failing closed"):
-        UpdateLifecycle("tx-p0-gate-unknown", svc).run(manifest, art_path, gate=ForensicOperationGate(_boom))
+        lifecycle.run(manifest, art_path, gate=gate)
 
 
 def test_stage_release_excludes_sidecars(tmp_path):
@@ -58,8 +61,9 @@ def test_stage_release_excludes_sidecars(tmp_path):
 def test_strict_key_import_rejects_trailing_garbage(release_keys):
     from trace_core.updates import signing
 
+    bad_key = release_keys["pub_hex"] + " extra-garbage"
     with pytest.raises(UpdateVerificationError):
-        signing.import_release_pubkey(release_keys["pub_hex"] + " extra-garbage")
+        signing.import_release_pubkey(bad_key)
 
 
 def test_ipv6_loopback_with_port_allowed():
@@ -76,7 +80,8 @@ def test_ipv6_loopback_with_port_allowed():
 def test_trust_path_traversal_rejected(temp_storage_root):
     from trace_core.updates.trust import revoked_path, trust_key_path
 
+    target_path = "ed25519:../../../etc/passwd"
     with pytest.raises(UpdateVerificationError):
-        trust_key_path("ed25519:../../../etc/passwd")
+        trust_key_path(target_path)
     with pytest.raises(UpdateVerificationError):
-        revoked_path("ed25519:../../../etc/passwd")
+        revoked_path(target_path)

@@ -22,9 +22,11 @@ def staged_record_path(staging_dir: str | Path) -> Path:
 
 
 def write_staged_record(staging_dir: str | Path, record: dict[str, Any]) -> Path:
+    from trace_core.updates.errors import UpdateError
+
     missing = [k for k in REQUIRED_KEYS if k not in record]
     if missing:
-        raise ValueError(f"incomplete staged record: {missing}")
+        raise UpdateError(f"incomplete staged record: {missing}")
     target = staged_record_path(staging_dir)
     check_contained(target, staging_dir)
     record = {**record, "staged_schema": 1}

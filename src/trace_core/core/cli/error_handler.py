@@ -52,41 +52,46 @@ def _update_error(e: Exception, operation_title: str | None, default_remediation
             UpdateVerificationError,
         )
 
-        if isinstance(e, UpdateVerificationError):
-            return (
-                operation_title or "Update Verification Failed",
-                str(e),
-                default_remediation or "Update rejected — verification failed. Installation not performed.",
+        specs = (
+            (
+                UpdateVerificationError,
+                "Update Verification Failed",
+                "Update rejected — verification failed. Installation not performed.",
                 EXIT_VERIFY_FAILED,
-            )
-        if isinstance(e, UpdatePolicyBlockedError):
-            return (
-                operation_title or "Update Blocked",
-                str(e),
-                default_remediation or "Update deferred by policy. See block reason.",
+            ),
+            (
+                UpdatePolicyBlockedError,
+                "Update Blocked",
+                "Update deferred by policy. See block reason.",
                 EXIT_UPDATE_BLOCKED,
-            )
-        if isinstance(e, UpdateNetworkError):
-            return (
-                operation_title or "Update Check Failed",
-                str(e),
-                default_remediation or "Check network connectivity and manifest URL, then retry.",
+            ),
+            (
+                UpdateNetworkError,
+                "Update Check Failed",
+                "Check network connectivity and manifest URL, then retry.",
                 EXIT_ERROR,
-            )
-        if isinstance(e, RecoveryBlockedError):
-            return (
-                operation_title or "Recovery Blocked",
-                str(e),
-                default_remediation or "A live updater owns migration. Retry after it finishes.",
+            ),
+            (
+                RecoveryBlockedError,
+                "Recovery Blocked",
+                "A live updater owns migration. Retry after it finishes.",
                 EXIT_RECOVERY_RETRY,
-            )
-        if isinstance(e, RecoveryError):
-            return (
-                operation_title or "Recovery Failed",
-                str(e),
-                default_remediation or "Recovery could not restore a bootable release. Inspect diagnostics.",
+            ),
+            (
+                RecoveryError,
+                "Recovery Failed",
+                "Recovery could not restore a bootable release. Inspect diagnostics.",
                 EXIT_RECOVERY_FAILED,
-            )
+            ),
+        )
+        for err_cls, title, remed, code in specs:
+            if isinstance(e, err_cls):
+                return (
+                    operation_title or title,
+                    str(e),
+                    default_remediation or remed,
+                    code,
+                )
     except Exception:
         pass
     return None

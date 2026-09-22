@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from trace_core.core.clock import now_utc
 from trace_core.core.dto import BaseDto
@@ -13,6 +13,44 @@ class UpdateHistoryCreateDto(BaseDto):
     started_at: datetime = Field(default_factory=now_utc)
     channel: str = "stable"
     result: str = "SUCCESS"
+
+    @field_validator("channel")
+    @classmethod
+    def _channel_known(cls, value: str) -> str:
+        from trace_core.updates.domain import UpdateChannel
+
+        if not UpdateChannel.contains(value):
+            raise ValueError(f"unknown channel {value!r}")
+        return value
+
+    @field_validator("result")
+    @classmethod
+    def _result_known(cls, value: str) -> str:
+        from trace_core.updates.domain import UpdateResult
+
+        if value not in (UpdateResult.SUCCESS, UpdateResult.FAILED, UpdateResult.ROLLED_BACK):
+            raise ValueError(f"unknown result {value!r}")
+        return value
+
+    @field_validator("failure_stage")
+    @classmethod
+    def _stage_known(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from trace_core.updates.domain import UpdateFailureStage, UpdateState
+
+        allowed = {
+            UpdateFailureStage.POLICY,
+            UpdateFailureStage.STAGING,
+            UpdateFailureStage.HEALTH,
+            UpdateFailureStage.RECOVERY,
+            UpdateFailureStage.MIGRATION,
+        }
+        states = {str(s).lower() for s in UpdateState}
+        if value not in allowed and value.lower() not in states:
+            raise ValueError(f"unknown failure_stage {value!r}")
+        return value
+
     artifact_sha256: str | None = None
     signing_key_id: str | None = None
     failure_reason: str | None = None

@@ -18,11 +18,13 @@ def marker_path() -> Path:
 
 
 def write_marker(data: dict[str, Any], path: str | Path | None = None) -> Path:
+    from trace_core.updates.errors import UpdateError
+
     target = Path(path) if path else marker_path()
     check_contained(target, settings.storage_root)
     missing = [k for k in ("transaction_id", "state") if k not in data]
     if missing:
-        raise ValueError(f"marker missing fields: {missing}")
+        raise UpdateError(f"marker missing fields: {missing}")
     record = {"marker_schema": MARKER_SCHEMA, **data}
     return atomic_write_lines(target, [json.dumps(record, indent=2)])
 

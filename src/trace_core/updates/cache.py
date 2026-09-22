@@ -19,11 +19,15 @@ def read_check_cache(max_age: int = TTL_SECONDS) -> dict[str, Any] | None:
         return None
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, TypeError):
         return None
     if not isinstance(data, dict):
         return None
-    if time.time() - float(data.get("checked_at", 0)) > max_age:
+    try:
+        checked_at = float(data.get("checked_at", 0))
+    except (TypeError, ValueError):
+        return None
+    if time.time() - checked_at > max_age:
         return None
     return data
 
@@ -40,7 +44,7 @@ def write_check_cache(data: dict[str, Any]) -> Path:
     return atomic_write_lines(target, [payload])
 
 
-def manifest_identity(target: str) -> dict[str, Any] | None:
+def manifest_identity(target: str, known: dict[str, Any] | None = None) -> dict[str, Any] | None:
     if target.startswith(("https://", "http://")):
         return None
     from pathlib import Path as _Path
@@ -49,6 +53,13 @@ def manifest_identity(target: str) -> dict[str, Any] | None:
 
     try:
         stat = _Path(target).stat()
+        if (
+            known is not None
+            and known.get("mtime_ns") == stat.st_mtime_ns
+            and known.get("size") == stat.st_size
+            and known.get("sha256")
+        ):
+            return {"sha256": known["sha256"], "mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
         return {"sha256": sha256_file(target), "mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
     except OSError:
         return None

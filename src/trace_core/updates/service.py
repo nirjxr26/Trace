@@ -42,9 +42,16 @@ class UpdateService(BaseService):
 
     def list_history(self, limit: int = 50, offset: int = 0) -> list[UpdateHistoryDto]:
         from trace_core.core.database.repository import paginate
+        from trace_core.core.errors import ValidationError
 
+        if limit < 0 or offset < 0:
+            raise ValidationError("limit and offset must be >= 0")
         with self.session_manager.session() as session:
-            q = paginate(select(UpdateHistoryModel).order_by(UpdateHistoryModel.started_at.desc()), limit, offset)
+            q = paginate(
+                select(UpdateHistoryModel).order_by(UpdateHistoryModel.started_at.desc(), UpdateHistoryModel.id.desc()),
+                limit,
+                offset,
+            )
             rows = session.scalars(q).all()
             return [UpdateHistoryDto.from_model(r) for r in rows]
 

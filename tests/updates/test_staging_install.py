@@ -45,7 +45,9 @@ def test_staged_record_binding(tmp_path, signed_release):
     assert staging_mod.is_verified_stage(staging, art_path) is True
     art_path.write_bytes(b"swapped")
     assert staging_mod.is_verified_stage(staging, art_path) is False
-    with pytest.raises(ValueError):
+    from trace_core.updates.errors import UpdateError
+
+    with pytest.raises(UpdateError):
         staging_mod.write_staged_record(staging, {"release_id": "x"})
 
 

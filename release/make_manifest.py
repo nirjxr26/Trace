@@ -23,9 +23,8 @@ def main() -> None:
             continue
         if path.suffix in (".sig", ".json", ".sbom") or path.name in ("SHA256SUMS", "SHA256SUMS.sig"):
             continue
-        if path.suffixes[-2:] == [".tar", ".gz"] or path.suffix == ".whl":
-            pass
-        elif path.suffix not in (".whl", ".gz", ".zip", ".bin", ".exe"):
+        is_tar_gz = path.suffixes[-2:] == [".tar", ".gz"]
+        if not is_tar_gz and path.suffix not in (".whl", ".gz", ".zip", ".bin", ".exe"):
             continue
         h = hashlib.sha256()
         with path.open("rb") as handle:

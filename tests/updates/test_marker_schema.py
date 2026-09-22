@@ -10,8 +10,10 @@ pytestmark = pytest.mark.unit
 
 
 def test_write_requires_identity(temp_storage_root, tmp_path):
+    from trace_core.updates.errors import UpdateError
+
     path = tmp_path / "m.json"
-    with pytest.raises(ValueError):
+    with pytest.raises(UpdateError):
         write_marker({"state": "IDLE"}, path)
 
 

@@ -293,8 +293,15 @@ class InteractiveShell:
             return
 
         self._ensure_service()
+        import re as _re
+
         try:
-            tokens = shlex.split(clean_line)
+            # Forgive leading `trace` inside REPL: `trace update check` == `update check`.
+            stripped = _re.sub(r"(?i)^\s*trace\s+", "", clean_line).strip()
+            if not stripped:
+                return
+            tokens = shlex.split(stripped)
+            clean_line = stripped
         except ValueError:
             render_error_card("Invalid Command", f"Command '{clean_line}' has unbalanced quotes.")
             return
