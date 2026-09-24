@@ -94,3 +94,28 @@ def test_capture_cli_errors_shell_mode() -> None:
     # In shell mode (exit_on_error=False), should NOT raise typer.Exit
     with capture_cli_errors("Test Op", exit_on_error=False):
         raise NotFoundError("Evidence", "EVID-001")
+
+
+def test_db_status_offline_renders_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Offline status must render styled text, never literal markup brackets."""
+    # Unparsable URL fails inside create_engine: instant, no network involved.
+    bad = DatabaseSessionManager("not-a-database-url")
+    monkeypatch.setattr("trace_core.core.cli.db_commands.db_manager", bad)
+    result = runner.invoke(app, ["db", "status"])
+    assert result.exit_code == 1
+    assert "Offline" in result.stdout
+    assert "[red]" not in result.stdout
+    assert "[/red]" not in result.stdout
+
+
+def test_help_syntax_fits_shared_grid() -> None:
+    """Every help syntax must fit the shared grid or descriptions misalign."""
+    from trace_core.cli.shell import CONSOLE_HELP_ENTRIES, HELP_GRID_SYNTAX_WIDTH
+    from trace_core.core.cli.catalog import default_handlers
+
+    entries = list(CONSOLE_HELP_ENTRIES)
+    for handler in default_handlers():
+        entries.extend(handler.get_help_entries())
+    assert entries
+    for syntax, _alias, _desc in entries:
+        assert len(syntax) <= HELP_GRID_SYNTAX_WIDTH, f"help syntax overflows the grid: {syntax!r}"

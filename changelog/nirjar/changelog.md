@@ -2351,3 +2351,39 @@ Scope: screenshot follow-up, AGENTS 1-4/14 and ponytail (no new deps, no backend
 ## 2026-09-24 - Max-reuse pass over new TUI code
 
 Scope: reuse-only refactor per request, AGENTS 1-4 and ponytail (no behavior change, deletion over addition). New shared helpers in tui/widgets.py: repaint_selection (O(1) arrow, was duplicated in Cases/Audit), mount_header_table (header Static plus fixed columns from one constant, was duplicated), selected_item (cursor to item, was duplicated). New append_kv in tui/theme.py (detail Label/value rows, was 4 copies in Settings). Cases/Audit adopted all four and deleted locals; Settings adopted append_kv; audit also gained a shared _row_cells so refresh and repaint use one builder. Skipped per ponytail: test _text helper (import fragility across test dirs for 4 lines), focus_default one-liners, run_command toast tails, Settings ListView painter (different widget, single use). Verification: ruff clean, mypy clean, pytest 291 passed / 3 skipped, coverage 75.3 percent. Files: tui/widgets.py, theme.py, screens/cases.py, audit.py, settings.py.
+
+---
+
+## 2026-09-24 - Installer UX module spec (docs only, no code)
+
+Scope: design doc per request, AGENTS 1-4 (no code changed). Wrote docs/INSTALLER_UX.md: quiet-by-default contract with single live progress line plus log file, six named phases, TTY fallback, four flags (version, list-versions, reinstall, uninstall/purge-data), exact wipe table, old-versions-via-installer-only rationale (updater stays forward-only), unchanged safety invariants, shellcheck plus PSScriptAnalyzer plus dry-run verification plan, acceptance list. Cut: separate version-manager tool, auto-update, updater downgrades, release-pipeline changes. Open: bar-plus-spinner versus spinner-only default.
+
+---
+
+## 2026-09-24 - Subparts 1 and 2 logic and stability audit (docs only, no code)
+
+Scope: file-by-file line-by-line re-read of cases, core, cli, audit plus installers (updates and TUI excluded). Wrote docs/SUBPART_12_AUDIT.md: 28 findings, 0 critical, 7 medium, 21 low, each with exact file and line. Mediums: SQLite audit-append race, verify-vs-head TOCTOU, HMAC secret rotation framing history as tampered, gap-list memory bomb, dossier silently dropping history, signing-key loss bricking writes, db status markup leak (confirmed live on Kali screenshot), health snapshot wrong-URL with injected managers. Plus cleared-as-sound list and suggested fix order.
+
+---
+
+## 2026-09-24 - Subparts 1 and 2 fix round (all 28 audit findings)
+
+Scope: fixed every actionable finding from docs/SUBPART_12_AUDIT.md per AGENTS 1-4/14, smallest permanent diffs, no new deps. Ledger: savepoint-retry appends (SQLite/PG races), 10k gap cap, non-dict details coercion, loud missing-key error, strict pointer parse with warn-fallback, ASCII key grammar, HMAC no-rotate docs. Surfaces: styled db status (was literal markup), manager-aware masked URL, history-unavailable notice at fetch site, equals-form flags, None-empty canonicalization with preview parity, output validation, single completion list, case-insensitive ghosts. Anchors/exports: 24h failed-retry cooldown, tip in export header. Infra: single hashed pip path in both installers, .env 600 plus manifest-dup guard, per-manager completion nonce. KEPT deliberately: corrupt-row fail-loud display, anchor-skip ordering, keys-init auto-migrate, mutable-main default, completion fetch depth. Verification: ruff clean, mypy clean (142 files), pytest 300 passed / 3 skipped (9 new tests), coverage 75.5 percent.
+
+---
+
+## 2026-09-24 - Release v0.2.1 ops (branch, PR, tag, publish)
+
+Scope: release operations, no new code beyond the triple bump. Cut release/v0.2.1 from main carrying the TUI work plus two pre-existing version-related fixes found dirty in tree (stale check-cache guard, unpinned CLI version assert). Local pre-PR gate 6/6 green. Opened PR 6, remote CI 5/5 green (lint, ubuntu plus windows suites, PostgreSQL 16 integration, SonarCloud). Merged to main, verified triple plus trace version output, confirmed no existing v0.2.1 release, pushed annotated tag v0.2.1. Release workflow green in 46s (reproducible build, SBOM, Ed25519 sign, client self-verify, immutable publish with wheel, sdist, SHA256SUMS, manifest, trust bundle). Wrote then compacted the release notes on user request.
+
+---
+
+## 2026-09-24 - Help alignment plus audit list trim
+
+Scope: two screenshot-driven UX fixes per AGENTS patterns, smallest diffs. Help: update shell entries (45 to 48 chars) overflowed the shared 36-col grid and pushed descriptions out of line; shortened the three long syntaxes to fit (remaining flags stay in tab-completion and Typer help) and added a grid-width guard test covering every handler plus console entries. Audit list: dropped Actor and Command columns from the CLI audit table at all breakpoints (Seq, Action, Case, Time remain); Actor stays in detail views where the 5W1H who belongs, TUI list was already Seq/Event only. Verification: ruff plus mypy clean, targeted suites green, full suite plus coverage gate in final check.
+
+---
+
+## 2026-09-24 - Help grid single-source plus stale-manifest race fix
+
+Scope: reuse plus one real bug found during verification, smallest diffs. Extracted HELP_GRID_SYNTAX_WIDTH and HELP_GRID_ALIAS_WIDTH next to the printer in cli/shell.py; the width-guard test now imports the constant instead of duplicating 36. Removed the manifest (mtime, size) fast-path in updates/cache.py after the full suite exposed it flaking test_cache_invalidates_on_content_change: equal-size rewrites inside one mtime tick reused the old sha and served a stale manifest for the full TTL, able to hide security releases. Always rehash (manifests capped at 1 MiB, milliseconds). Verification: ruff plus mypy clean, full suite 301 passed / 3 skipped with the previously flaking test green, coverage 75.5 percent.

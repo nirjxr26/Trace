@@ -42,6 +42,10 @@ def _format_active_case(active_case: Any, empty_hint: str) -> Text:
     return Text(empty_hint, style=THEME_TOKENS["muted"])
 
 
+HELP_GRID_SYNTAX_WIDTH = 36
+HELP_GRID_ALIAS_WIDTH = 16
+
+
 def _print_help_row(syntax: str, alias: str, desc: str) -> None:
     """Print one manual row shared by feature and console listings. Stacked on XS."""
     from trace_core.core.ui.renderers import breakpoint_width, fit_text
@@ -55,7 +59,7 @@ def _print_help_row(syntax: str, alias: str, desc: str) -> None:
         console.print(f"    [{THEME_TOKENS['label']}]{fit_text(desc, max(20, term_w - 6))}[/{THEME_TOKENS['label']}]")
         return
     console.print(
-        f"    [{THEME_TOKENS['value']}]{syntax:<36}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{alias_str:<16}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]{desc}[/{THEME_TOKENS['label']}]"
+        f"    [{THEME_TOKENS['value']}]{syntax:<{HELP_GRID_SYNTAX_WIDTH}}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{alias_str:<{HELP_GRID_ALIAS_WIDTH}}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]{desc}[/{THEME_TOKENS['label']}]"
     )
 
 

@@ -20,35 +20,23 @@ from trace_core.core.ui.theme import THEME_TOKENS
 
 
 def _audit_table_columns(bp: str) -> list[tuple[str, dict[str, Any]]]:
-    """Single source for audit columns. XS keeps Actor (forensic Who), drops Time/Command."""
+    """Single source for audit columns. Actor/Command live in the detail view, never the list."""
     if bp == "XS":
         return [
             ("Seq", {"style": THEME_TOKENS["accent"], "no_wrap": True, "max_width": 6}),
             ("Action", {"style": THEME_TOKENS["value"], "no_wrap": True, "max_width": 14}),
             (COLUMN_CASE_NUMBER, {"style": THEME_TOKENS["label"], "no_wrap": True, "max_width": 16}),
-            ("Actor", {"style": THEME_TOKENS["muted"], "overflow": "ellipsis", "max_width": 14}),
-        ]
-    if bp in ("LG", "XL"):
-        return [
-            ("Seq", {"style": THEME_TOKENS["accent"], "no_wrap": True, "max_width": 6}),
-            ("Action", {"style": THEME_TOKENS["value"], "no_wrap": True, "max_width": 14}),
-            (COLUMN_CASE_NUMBER, {"style": THEME_TOKENS["label"], "no_wrap": True, "max_width": 16}),
-            ("Actor", {"style": THEME_TOKENS["muted"], "overflow": "ellipsis", "max_width": 14}),
-            ("Command", {"style": THEME_TOKENS["muted"], "overflow": "ellipsis", "max_width": 24}),
-            ("Time", {"style": THEME_TOKENS["muted"], "no_wrap": True, "max_width": 14}),
         ]
     return [
         ("Seq", {"style": THEME_TOKENS["accent"], "no_wrap": True, "max_width": 6}),
         ("Action", {"style": THEME_TOKENS["value"], "no_wrap": True, "max_width": 14}),
         (COLUMN_CASE_NUMBER, {"style": THEME_TOKENS["label"], "no_wrap": True, "max_width": 16}),
-        ("Actor", {"style": THEME_TOKENS["muted"], "overflow": "ellipsis", "max_width": 14}),
         ("Time", {"style": THEME_TOKENS["muted"], "no_wrap": True, "max_width": 14}),
     ]
 
 
 def render_audit_table(events: list[AuditEventDto]) -> None:
-    from trace_core.audit.events import parse_details
-    from trace_core.core.ui.renderers import breakpoint_width, fit_text, format_ledger_time
+    from trace_core.core.ui.renderers import breakpoint_width, format_ledger_time
 
     bp, term_w = breakpoint_width()
     cols = _audit_table_columns(bp)
@@ -58,27 +46,12 @@ def render_audit_table(events: list[AuditEventDto]) -> None:
         _, style, _ = get_status_style_and_label(e.action, False)
         # Plain-string cells parse Rich markup: sanitize + escape. Text() cells: sanitize.
         number = safe_text(e.subject_case_number)
-        actor = safe_text(fit_text(sanitize_terminal(e.actor), 14))
         if bp == "XS":
             rows.append(
                 [
                     str(e.seq),
                     Text(e.action.value, style=style),
                     number,
-                    actor,
-                ]
-            )
-        elif bp in ("LG", "XL"):
-            details = parse_details(e.payload_json)
-            cmd = safe_text(details.get("command") or "-")
-            rows.append(
-                [
-                    str(e.seq),
-                    Text(e.action.value, style=style),
-                    number,
-                    actor,
-                    cmd,
-                    format_ledger_time(e.ts),
                 ]
             )
         else:
@@ -87,7 +60,6 @@ def render_audit_table(events: list[AuditEventDto]) -> None:
                     str(e.seq),
                     Text(e.action.value, style=style),
                     number,
-                    actor,
                     format_ledger_time(e.ts),
                 ]
             )
