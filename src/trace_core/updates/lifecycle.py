@@ -1,4 +1,3 @@
-import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -81,10 +80,9 @@ class UpdateLifecycle:
             if after != manifest.schema_target:
                 return "failed"
         # Pip layouts must prove the venv actually imports the target version;
-        # a flipped pointer with stale code is a lying update.
-        if staged is not None and pip_backend.pip_layout_for(manifest, staged):
-            if pip_backend.pip_installed_version() != manifest.version:
-                return "failed"
+        # a flipped pointer over stale code is a lying update.
+        if not pip_backend.pip_health(manifest, staged):
+            return "failed"
         return "passed"
 
     def _verify_activation(self, base: Path, manifest: ReleaseManifest) -> None:
@@ -305,13 +303,13 @@ class UpdateLifecycle:
             },
         )
 
-    def _pip_install_stage(self, staged: Path, manifest: ReleaseManifest) -> None:
+    def _pip_install_stage(self, staged: Path) -> None:
         """Install the verified wheel into the running venv. No-op off venv layouts."""
         from trace_core.updates import pip_backend
 
-        if not pip_backend.pip_layout_for(manifest, staged):
-            return
-        pip_backend.pip_install_wheel(Path(sys.executable), staged)
+        python = pip_backend.venv_python()
+        if python is not None and pip_backend.pip_layout_for(staged):
+            pip_backend.pip_install_wheel(python, staged)
 
     def _run_locked(
         self,
@@ -381,7 +379,7 @@ class UpdateLifecycle:
             self.transition(UpdateState.STAGED)
             self.transition(UpdateState.INSTALLING)
             self._install_stage(staged, base, manifest)
-            self._pip_install_stage(staged, manifest)
+            self._pip_install_stage(staged)
             self.transition(UpdateState.MIGRATING)
             migration = run_updater_migration(
                 self.service.session_manager,

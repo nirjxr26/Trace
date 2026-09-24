@@ -41,16 +41,15 @@ def _manifest(version="0.2.3"):  # type: ignore[no-untyped-def]
 
 def _force_venv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Deterministic venv detection regardless of the test runner's interpreter."""
-    monkeypatch.setattr(pip_backend, "_venv_python", lambda: tmp_path / "venv" / "python")
+    monkeypatch.setattr(pip_backend, "venv_python", lambda: tmp_path / "venv" / "python")
 
 
 def test_layout_matrix(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    m = _manifest()
     _force_venv(monkeypatch, tmp_path)
-    assert pip_backend.pip_layout_for(m, tmp_path / "pkg-0.2.3.whl") is True
-    assert pip_backend.pip_layout_for(m, tmp_path / "pkg-0.2.3.bin") is False
-    monkeypatch.setattr(pip_backend, "_venv_python", lambda: None)
-    assert pip_backend.pip_layout_for(m, tmp_path / "pkg-0.2.3.whl") is False
+    assert pip_backend.pip_layout_for(tmp_path / "pkg-0.2.3.whl") is True
+    assert pip_backend.pip_layout_for(tmp_path / "pkg-0.2.3.bin") is False
+    monkeypatch.setattr(pip_backend, "venv_python", lambda: None)
+    assert pip_backend.pip_layout_for(tmp_path / "pkg-0.2.3.whl") is False
 
 
 def test_install_failure_is_typed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -104,23 +103,16 @@ def test_restore_refuses_ambiguous_wheels(tmp_path: Path) -> None:
 
 
 def test_health_proves_pip_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from trace_core.updates.lifecycle import UpdateLifecycle
-
-    base = tmp_path / "install"
-    target = base / "releases" / "0.2.3"
-    target.mkdir(parents=True)
-    (target / "pkg.whl").write_bytes(b"x")
-    lc = UpdateLifecycle("tx-test")
-    snap = SimpleNamespace(healthy=True, pending=[])
     m = _manifest()
     staged = tmp_path / "pkg-0.2.3.whl"
     _force_venv(monkeypatch, tmp_path)
     monkeypatch.setattr(pip_backend, "pip_installed_version", lambda *a, **k: "0.2.3")
-    assert lc._check_release_health(base, m, snap, None, staged=staged) == "passed"
+    assert pip_backend.pip_health(m, staged) is True
     monkeypatch.setattr(pip_backend, "pip_installed_version", lambda *a, **k: "0.2.1")
-    assert lc._check_release_health(base, m, snap, None, staged=staged) == "failed"
-    # Frozen artifacts never consult pip: existing behavior untouched.
-    assert lc._check_release_health(base, m, snap, None, staged=tmp_path / "pkg.bin") == "passed"
+    assert pip_backend.pip_health(m, staged) is False
+    # Frozen artifacts and missing paths never consult pip.
+    assert pip_backend.pip_health(m, tmp_path / "pkg.bin") is True
+    assert pip_backend.pip_health(m, None) is True
 
 
 def test_rollback_reinstalls_previous_wheel(tmp_path, session_manager, monkeypatch) -> None:  # type: ignore[no-untyped-def]

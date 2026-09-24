@@ -2393,3 +2393,9 @@ Scope: reuse plus one real bug found during verification, smallest diffs. Extrac
 ## 2026-09-24 - Pip-backend updater plus single-wheel manifests
 
 Scope: permanent fix for uninstallable releases and pointer-without-code updates, smallest diffs reusing all existing machinery. New updates/pip_backend.py: venv detection, quiet code-only wheel install, isolated version proof, previous-wheel restore. Lifecycle runs pip install after file-tree staging and proves the venv imports the target in health (mismatch rolls back through the existing path); rollback reinstalls retained code before flipping the pointer. make_manifest.py ships exactly one wheel and fails the build otherwise (sdist and SBOM stay published but out of the install set). Tribunal tests: layout matrix, typed pip failures, version parse, ambiguous restore refusal, health proof wiring, rollback restore, manifest accept plus zero-wheel plus two-wheel refusal. Note: pip-layout machines take this release once manually (old updater cannot install new code); afterwards trace update install works end to end.
+
+---
+
+## 2026-09-24 - Pip backend reuse pass
+
+Scope: reusability iteration over the new pip code, no behavior change. Consolidated duplicate subprocess handling into _run_quiet, made venv detection public and single-sourced, dropped the unused manifest parameter from layout checks, and moved the version-proof health rule into pip_health so the lifecycle stays orchestration-only and tests no longer need lifecycle instances or temp install trees. Verification: ruff plus mypy clean, targeted suites green.
