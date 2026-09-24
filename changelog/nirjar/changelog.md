@@ -2387,3 +2387,9 @@ Scope: two screenshot-driven UX fixes per AGENTS patterns, smallest diffs. Help:
 ## 2026-09-24 - Help grid single-source plus stale-manifest race fix
 
 Scope: reuse plus one real bug found during verification, smallest diffs. Extracted HELP_GRID_SYNTAX_WIDTH and HELP_GRID_ALIAS_WIDTH next to the printer in cli/shell.py; the width-guard test now imports the constant instead of duplicating 36. Removed the manifest (mtime, size) fast-path in updates/cache.py after the full suite exposed it flaking test_cache_invalidates_on_content_change: equal-size rewrites inside one mtime tick reused the old sha and served a stale manifest for the full TTL, able to hide security releases. Always rehash (manifests capped at 1 MiB, milliseconds). Verification: ruff plus mypy clean, full suite 301 passed / 3 skipped with the previously flaking test green, coverage 75.5 percent.
+
+---
+
+## 2026-09-24 - Pip-backend updater plus single-wheel manifests
+
+Scope: permanent fix for uninstallable releases and pointer-without-code updates, smallest diffs reusing all existing machinery. New updates/pip_backend.py: venv detection, quiet code-only wheel install, isolated version proof, previous-wheel restore. Lifecycle runs pip install after file-tree staging and proves the venv imports the target in health (mismatch rolls back through the existing path); rollback reinstalls retained code before flipping the pointer. make_manifest.py ships exactly one wheel and fails the build otherwise (sdist and SBOM stay published but out of the install set). Tribunal tests: layout matrix, typed pip failures, version parse, ambiguous restore refusal, health proof wiring, rollback restore, manifest accept plus zero-wheel plus two-wheel refusal. Note: pip-layout machines take this release once manually (old updater cannot install new code); afterwards trace update install works end to end.
