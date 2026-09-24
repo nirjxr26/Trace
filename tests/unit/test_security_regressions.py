@@ -672,3 +672,40 @@ async def test_wrong_tab_command_toasts(session_manager: DatabaseSessionManager)
         view.run_command("case-create")  # type: ignore[attr-defined]
         view.run_command("bogus-nope")  # type: ignore[attr-defined]
         await pilot.pause()
+
+
+def test_failed_anchor_intent_cools_down(temp_storage_root, session_manager: DatabaseSessionManager) -> None:  # type: ignore[no-untyped-def]
+    """A failed anchor publish retries on a cooldown, not on every close."""
+    import uuid
+    from datetime import timedelta
+
+    from trace_core.audit.anchor import publish_pending_anchors
+    from trace_core.audit.models import INTENT_FAILED, AnchorIntentModel
+    from trace_core.core.clock import now_utc
+
+    with session_manager.session() as s:
+        s.add(
+            AnchorIntentModel(
+                case_id=uuid.uuid4(),
+                case_number="2026-CR-0001",
+                seq=1,
+                chain_hash="0" * 64,
+                status=INTENT_FAILED,
+                attempt_count=10,
+                last_attempt_at=now_utc(),
+            )
+        )
+        s.commit()
+    # Fresh failure: skipped without another attempt.
+    assert publish_pending_anchors(session_manager) == 0
+    with session_manager.session() as s:
+        row = s.scalars(select(AnchorIntentModel)).one()
+        assert row.attempt_count == 10
+    # Aged failure: retried, and the write succeeds here.
+    with session_manager.session() as s:
+        row = s.scalars(select(AnchorIntentModel)).one()
+        row.last_attempt_at = now_utc() - timedelta(hours=25)
+        s.commit()
+    assert publish_pending_anchors(session_manager) == 1
+    with session_manager.session() as s:
+        assert s.scalars(select(AnchorIntentModel)).one().status == "confirmed"

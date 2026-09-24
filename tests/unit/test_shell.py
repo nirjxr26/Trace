@@ -171,8 +171,9 @@ def test_shell_edit_clear_rules(service: CaseService, monkeypatch: pytest.Monkey
     updated = service.get_case("2026-CLR-0001")
     assert updated.title == "Keep Me"
     assert updated.lead_examiner == "Keep Ex"
-    assert updated.description == ""
-    assert updated.notes == ""
+    # Cleared optionals canonicalize to None (None == "" to the service).
+    assert updated.description is None
+    assert updated.notes is None
     assert updated.tags == []
 
 
@@ -212,3 +213,39 @@ def test_shell_list_limit_offset_recent_parity(service: CaseService, capsys: pyt
 
     shell.execute_line("case list --limit x")
     assert "Invalid integer" in capsys.readouterr().out
+
+
+def test_equals_flag_forms() -> None:
+    """Shell flags accept `--flag value` and `--flag=value` identically."""
+    from trace_core.core.cli.args import extract_flag_value, has_flag
+
+    assert extract_flag_value(["--output=json"], "--output", "-o") == "json"
+    assert extract_flag_value(["--output", "json"], "--output", "-o") == "json"
+    assert extract_flag_value(["-o=json"], "--output", "-o") == "json"
+    assert extract_flag_value(["--output"], "--output", "-o") is None
+    assert has_flag(["--purge=true"], "--purge") is True
+    assert has_flag(["--purge"], "--purge") is True
+    assert has_flag(["--limit", "10"], "--limit") is True
+    assert has_flag(["--limitless", "10"], "--limit") is False
+
+
+def test_output_format_rejects_unknown() -> None:
+    """Unknown --output values fail loudly instead of silently becoming table."""
+    from trace_core.core.cli.output import parse_output_format
+    from trace_core.core.errors import ValidationError
+
+    assert parse_output_format(["--output", "json"]) == "json"
+    assert parse_output_format(["-o=json"]) == "json"
+    assert parse_output_format([]) == "table"
+    with pytest.raises(ValidationError, match="Invalid output format"):
+        parse_output_format(["--output", "xml"])
+
+
+def test_ghost_suggestion_case_insensitive() -> None:
+    """Ghost text matches case-insensitively like completions do."""
+    from trace_core.cli.suggest import TraceAutoSuggest
+
+    shell = InteractiveShell()
+    suggested = TraceAutoSuggest(shell)._suggest_from_defaults("Case")
+    assert suggested is not None
+    assert suggested.text == " list"

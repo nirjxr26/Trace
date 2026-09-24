@@ -6,7 +6,12 @@ OUTPUT_CHOICES = [("table", "Table view"), ("json", "JSON view")]
 
 
 def parse_output_format(args: list[str] | None = None, default: str = "table") -> str:
-    """Parse --output/-o flag into normalized table|json value."""
+    """Parse --output/-o flag into normalized table|json value. Unknown values fail loudly."""
     if not args:
         return default
-    return (extract_flag_value(args, "--output", "-o") or default).lower()
+    value = (extract_flag_value(args, "--output", "-o") or default).lower()
+    if value not in ("table", "json"):
+        from trace_core.core.errors import ValidationError
+
+        raise ValidationError(f"Invalid output format '{value}'. Valid: table, json.")
+    return value

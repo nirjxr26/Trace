@@ -45,9 +45,6 @@ class TraceAutoSuggest(AutoSuggest):
         return None
 
     def _suggest_from_defaults(self, text: str) -> Suggestion | None:
-        # context-aware: active case → most logical next is case show / audit show
-        if self.shell.active_case and not text:
-            return Suggestion(_CASE_SHOW)
         # rank: active-aware defaults first
         ranked = []
         if self.shell.active_case:
@@ -57,8 +54,9 @@ class TraceAutoSuggest(AutoSuggest):
                 "case edit",
                 "case list",
             ]
+        lowered = text.lower()
         for cmd in ranked + self.default_suggestions:
-            if cmd.startswith(text) and len(cmd) > len(text):
+            if cmd.startswith(lowered) and len(cmd) > len(text):
                 return Suggestion(cmd[len(text) :])
         return None
 
@@ -127,21 +125,13 @@ class TraceShellCompleter(Completer):
         ("back", "Back to general"),
     ]
 
-    _ACTIVE_ROOT_OPTIONS: list[tuple[str, str]] = [
-        ("case", "Forensic case management commands"),
-        ("audit", "Audit ledger commands"),
-        ("status", "Display system & database status"),
-        ("recent", "Recent cases"),
-        ("back", "Back to general"),
-        ("help", _MANUAL_META),
-    ]
-
     def _root_completions(self, text: str, word: str) -> Any:
         from trace_core.core.cli.completion import filter_completions
 
-        # hide irrelevant globals when inside case context (prompt shows active)
-        options = self._ACTIVE_ROOT_OPTIONS if self.shell.active_case and not text else self._ROOT_OPTIONS
-        for cmd, meta in filter_completions(options, text.lower(), limit=8):
+        # One list always: hiding mutating verbs on empty input hid `case create`
+        # exactly when an active case made it most likely. Delegated completions
+        # below already stay context-aware.
+        for cmd, meta in filter_completions(self._ROOT_OPTIONS, text.lower(), limit=8):
             yield Completion(cmd, start_position=-len(word), display_meta=meta)
 
     def _delegated_completions(self, text: str, word: str) -> Any:

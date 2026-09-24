@@ -153,19 +153,15 @@ else
     printf "  \033[1;32m[OK] Existing virtual environment detected.\033[0m\n"
 fi
 
-# 3. Install Dependencies
+# 3. Install Dependencies (single path on purpose: the old uv branch skipped
+# --require-hashes and `sync` destructively removed extra packages, so which
+# binary happened to exist changed the security posture — now always hashed).
 printf "\033[1;33m[3/6] Installing locked dependencies...\033[0m\n"
-if command -v uv >/dev/null 2>&1; then
-    printf "  Using uv for fast deterministic dependency installation...\n"
-    uv pip sync requirements.txt --python "$VENV_PYTHON"
-    uv pip install --no-deps -e . --python "$VENV_PYTHON"
-else
-    printf "  Using pip with cryptographic hash verification...\n"
-    # Pinned bootstrap toolchain (rotate with the lockfile, verify with: pip index versions pip)
-    "$VENV_PYTHON" -m pip install --quiet "pip==26.2.1"
-    "$VENV_PYTHON" -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
-    "$VENV_PYTHON" -m pip install --quiet --no-deps -e .
-fi
+printf "  Using pip with cryptographic hash verification...\n"
+# Pinned bootstrap toolchain (rotate with the lockfile, verify with: pip index versions pip)
+"$VENV_PYTHON" -m pip install --quiet "pip==26.2.1"
+"$VENV_PYTHON" -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
+"$VENV_PYTHON" -m pip install --quiet --no-deps -e .
 printf "  \033[1;32m[OK] Dependencies installed successfully.\033[0m\n"
 
 # 4. Environment & Storage Configuration
@@ -173,7 +169,10 @@ printf "\033[1;33m[4/6] Verifying environment & storage directories...\033[0m\n"
 if [ ! -f "$SCRIPT_DIR/.env" ]; then
     if [ -f "$SCRIPT_DIR/.env.example" ]; then
         cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"
-        printf '%s\n' "TRACE_UPDATE_MANIFEST=https://github.com/nirjxr26/Trace/releases/latest/download/stable.json" >> "$SCRIPT_DIR/.env"
+        chmod 600 "$SCRIPT_DIR/.env"
+        if ! grep -q "^TRACE_UPDATE_MANIFEST=" "$SCRIPT_DIR/.env"; then
+            printf '%s\n' "TRACE_UPDATE_MANIFEST=https://github.com/nirjxr26/Trace/releases/latest/download/stable.json" >> "$SCRIPT_DIR/.env"
+        fi
         printf "  \033[1;32m[OK] Created .env from template (.env.example).\033[0m\n"
         printf "  \033[1;33m[!] Set a strong TRACE_DATABASE_URL password and TRACE_SECRET_KEY before production use.\033[0m\n"
     fi

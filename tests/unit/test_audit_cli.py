@@ -26,6 +26,8 @@ def test_audit_cli_show_verify_export(tmp_path, session_manager: DatabaseSession
     res = runner.invoke(app, ["audit", "show"])
     assert res.exit_code == 0
     assert "CASE_" in res.stdout or "Created" in res.stdout or "Audit Ledger" in res.stdout
+    # list shows Seq/Action/Case/Time only; Actor/Command live in the detail view
+    assert "Command" not in res.stdout
     # verify
     res_v = runner.invoke(app, ["audit", "verify"])
     assert res_v.exit_code == 0

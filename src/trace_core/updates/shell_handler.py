@@ -122,10 +122,12 @@ class UpdateShellCommandHandler(BaseShellHandler):
         return [f for f in flags if f.startswith(curr)]
 
     def get_help_entries(self) -> list[tuple[str, str, str]]:
+        # Syntaxes must fit the shared 36-col help grid (see _print_help_row);
+        # remaining flags stay discoverable via tab-completion and --help.
         return [
-            ("update check [--manifest URL] [--channel NAME]", "", "Check for available update"),
+            ("update check [--manifest URL]", "", "Check for available update"),
             ("update history", "", "Show update history"),
-            ("update show [--manifest URL] [--artifact FILE]", "", "Show release manifest"),
-            ("update verify [--manifest URL] [--artifact FILE]", "", "Verify artifact against manifest"),
+            ("update show [--manifest URL]", "", "Show release manifest"),
+            ("update verify [--manifest URL]", "", "Verify artifact against manifest"),
             ("update install (via CLI only)", "", "Install requires standalone CLI with --yes"),
         ]

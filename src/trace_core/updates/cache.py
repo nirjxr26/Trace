@@ -44,7 +44,14 @@ def write_check_cache(data: dict[str, Any]) -> Path:
     return atomic_write_lines(target, [payload])
 
 
-def manifest_identity(target: str, known: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def manifest_identity(target: str) -> dict[str, Any] | None:
+    """Content identity for a manifest file. Always rehashes, by design.
+
+    A (mtime, size) fast-path was removed: on coarse filesystems an equal-size
+    rewrite inside one mtime tick reused the old sha and served a stale
+    manifest for the full TTL — hiding even security releases. Manifests are
+    capped at 1 MiB, so hashing costs milliseconds. Correctness over micro-perf.
+    """
     if target.startswith(("https://", "http://")):
         return None
     from pathlib import Path as _Path
@@ -53,13 +60,6 @@ def manifest_identity(target: str, known: dict[str, Any] | None = None) -> dict[
 
     try:
         stat = _Path(target).stat()
-        if (
-            known is not None
-            and known.get("mtime_ns") == stat.st_mtime_ns
-            and known.get("size") == stat.st_size
-            and known.get("sha256")
-        ):
-            return {"sha256": known["sha256"], "mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
         return {"sha256": sha256_file(target), "mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
     except OSError:
         return None

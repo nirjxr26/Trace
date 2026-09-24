@@ -192,12 +192,14 @@ class CaseService(BaseService):
             if dto.lead_examiner is not None and dto.lead_examiner != case.lead_examiner:
                 changed.append("lead_examiner")
                 case.lead_examiner = dto.lead_examiner
-            if dto.description is not None and dto.description != case.description:
+            # None and "" both mean "empty": comparing (and storing) the
+            # normalized form keeps no-op edits from minting audit noise.
+            if dto.description is not None and (dto.description or None) != (case.description or None):
                 changed.append("description")
-                case.description = dto.description
-            if dto.notes is not None and dto.notes != case.notes:
+                case.description = dto.description or None
+            if dto.notes is not None and (dto.notes or None) != (case.notes or None):
                 changed.append("notes")
-                case.notes = dto.notes
+                case.notes = dto.notes or None
             if dto.tags is not None and dto.tags != case.tags:
                 changed.append("tags")
                 case.tags = dto.tags

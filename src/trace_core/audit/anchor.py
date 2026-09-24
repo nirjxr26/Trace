@@ -179,6 +179,32 @@ def _publish_one(session, intent, extra_sinks: list[str] | None) -> None:  # typ
     session.flush()
 
 
+_FAILED_RETRY_COOLDOWN_HOURS = 24
+
+
+def _failed_retry_due(intent) -> bool:  # type: ignore[no-untyped-def]
+    """Failed intents retry at most once per cooldown window.
+
+    Unwritable disks used to cost a full write attempt on every close, forever.
+    The cooldown bounds that cost while preserving self-healing: fix the disk
+    and the next close past the window confirms the intent.
+    """
+    from datetime import timedelta
+
+    from trace_core.audit.models import INTENT_FAILED
+    from trace_core.core.canonical import coerce_utc
+    from trace_core.core.clock import now_utc
+
+    if intent.status != INTENT_FAILED:
+        return True
+    if intent.last_attempt_at is None:
+        return True
+    last = coerce_utc(intent.last_attempt_at)
+    if last is None:
+        return True
+    return now_utc() - last >= timedelta(hours=_FAILED_RETRY_COOLDOWN_HOURS)
+
+
 def publish_pending_anchors(manager, extra_sinks: list[str] | None = None) -> int:  # type: ignore[no-untyped-def]
     """Publish every pending intent. Returns confirmed count. Never raises."""
     from sqlalchemy import select
@@ -199,6 +225,8 @@ def publish_pending_anchors(manager, extra_sinks: list[str] | None = None) -> in
                 with manager.session() as session:
                     intent = session.get(AnchorIntentModel, row_id)
                     if intent is None or intent.status == INTENT_CONFIRMED:
+                        continue
+                    if not _failed_retry_due(intent):
                         continue
                     _publish_one(session, intent, extra_sinks)
                     session.commit()

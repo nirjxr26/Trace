@@ -14,8 +14,10 @@ class Settings(BaseSettings):
     """Trace runtime settings."""
 
     app_name: str = "Trace"
-    version: str = "0.2.1"
-    debug: bool = False
+    version: str = "0.2.2"
+    # Alias-only binding: the documented TRACE_DEBUG name wins, and a stray
+    # bare DEBUG in the environment can no longer crash startup with a bool error.
+    debug: bool = Field(default=False, alias="TRACE_DEBUG")
     # SQL statement echo. Deliberately separate from debug: SQL logs carry case
     # content (titles, notes), so production keeps TRACE_SQL_ECHO=0.
     sql_echo: bool = Field(default=False, alias="TRACE_SQL_ECHO")
@@ -28,7 +30,9 @@ class Settings(BaseSettings):
         alias="TRACE_DATABASE_URL",
     )
 
-    # Optional secret encryption / auth key
+    # Optional secret encryption / auth key. Invariant: never rotate this while
+    # HMAC-signed audit rows exist — old rows verify against the current value,
+    # so rotation reads as ledger tampering. Rotate Ed25519 keys instead.
     secret_key: SecretStr = Field(
         default=SecretStr("trace-local-dev-key-change-in-production"),
         alias="TRACE_SECRET_KEY",
