@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     """Trace runtime settings."""
 
     app_name: str = "Trace"
-    version: str = "0.2.1"
+    version: str = "0.2.2"
     debug: bool = False
     # SQL statement echo. Deliberately separate from debug: SQL logs carry case
     # content (titles, notes), so production keeps TRACE_SQL_ECHO=0.
