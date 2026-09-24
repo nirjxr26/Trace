@@ -187,6 +187,10 @@ def cached_check(target: str | Path, channel: str = "stable") -> dict[str, Any]:
 
     key = str(target)
     cached = check_cache.read_check_cache()
+    if cached is not None:
+        payload = cached.get("payload") or {}
+        if payload.get("current") != get_installed_version():
+            cached = None  # installed version changed since check; stale result
     if key.startswith(_URL_PREFIXES):
         return _cached_check_http(key, channel, cached)
     stored = (cached.get("manifest_identity") or {}) if cached else None
