@@ -17,14 +17,14 @@ def main() -> None:
     except ValueError:
         raise SystemExit("refusing path outside repository") from None
     version = tag.removeprefix("v")
+    # Exactly one installable wheel per manifest, enforced at build time: the
+    # client refuses multi-universal manifests rather than guessing (fail-closed
+    # on user machines helps nobody — fail here instead). Sdists, SBOMs, and
+    # checksums stay published and hash-covered, just outside the install set.
+    # (Frozen per-OS bundles will extend this with tagged platform/arch entries.)
     artifacts = {}
-    for path in sorted(Path("dist").glob("*")):
+    for path in sorted(Path("dist").glob("*.whl")):
         if not path.is_file():
-            continue
-        if path.suffix in (".sig", ".json", ".sbom") or path.name in ("SHA256SUMS", "SHA256SUMS.sig"):
-            continue
-        is_tar_gz = path.suffixes[-2:] == [".tar", ".gz"]
-        if not is_tar_gz and path.suffix not in (".whl", ".gz", ".zip", ".bin", ".exe"):
             continue
         h = hashlib.sha256()
         with path.open("rb") as handle:
@@ -37,6 +37,10 @@ def main() -> None:
             "signature": "",
             "signing_key_id": "",
         }
+    if len(artifacts) != 1:
+        raise SystemExit(
+            f"release must ship exactly one installable wheel, found {len(artifacts)}: {sorted(artifacts)}"
+        )
     manifest = {
         "schema": 1,
         "product": "trace",
