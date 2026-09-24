@@ -15,7 +15,9 @@ class Settings(BaseSettings):
 
     app_name: str = "Trace"
     version: str = "0.2.2"
-    debug: bool = False
+    # Alias-only binding: the documented TRACE_DEBUG name wins, and a stray
+    # bare DEBUG in the environment can no longer crash startup with a bool error.
+    debug: bool = Field(default=False, alias="TRACE_DEBUG")
     # SQL statement echo. Deliberately separate from debug: SQL logs carry case
     # content (titles, notes), so production keeps TRACE_SQL_ECHO=0.
     sql_echo: bool = Field(default=False, alias="TRACE_SQL_ECHO")
