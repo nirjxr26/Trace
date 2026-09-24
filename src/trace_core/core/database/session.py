@@ -1,5 +1,6 @@
 """Database engine factory and session management."""
 
+import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
@@ -50,6 +51,9 @@ class DatabaseSessionManager:
         self._url = database_url or settings.database_url
         self._engine: Engine | None = None
         self._session_factory: sessionmaker[Session] | None = None
+        # Unique per manager instance: completion caches keyed by URL alone leak
+        # across distinct same-URL databases (e.g. per-test :memory: DBs).
+        self._instance_key = uuid.uuid4().hex[:12]
 
     @property
     def engine(self) -> Engine:
@@ -164,15 +168,20 @@ def sanitized_db_url(url: str) -> str:
 
 
 def db_identity(manager: DatabaseSessionManager | None = None) -> str:
-    """Short stable identity for cache keys. Never includes credentials."""
+    """Short stable identity for cache keys. Never includes credentials.
+
+    Binds the per-manager instance key alongside the URL so same-URL but
+    distinct databases (per-test in-memory DBs) never share cache entries.
+    """
     import hashlib
 
     try:
         url = manager._url if manager is not None else settings.database_url
         clean = sanitized_db_identity(url)
+        nonce = getattr(manager, "_instance_key", "") if manager is not None else ""
     except Exception:
-        clean = "unknown"
-    return hashlib.sha256(clean.encode("utf-8")).hexdigest()[:16]
+        clean, nonce = "unknown", ""
+    return hashlib.sha256(f"{clean}|{nonce}".encode()).hexdigest()[:16]
 
 
 def get_db(ctx: Any | None) -> DatabaseSessionManager:  # type: ignore[no-untyped-def]

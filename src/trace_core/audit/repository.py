@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from trace_core.audit.domain import GENESIS_CHAIN, AuditAction, AuditEvent, build_payload, chain_hash, payload_hash
@@ -12,6 +13,8 @@ from trace_core.audit.models import AuditChainStateModel, AuditEventModel
 from trace_core.cases.domain import normalize_number
 from trace_core.core.database.repository import ilike_literal, paginate
 from trace_core.core.domain import ensure_utc
+
+_APPEND_ATTEMPTS = 3
 
 
 def _base_fields(m: AuditEventModel) -> dict[str, Any]:
@@ -72,6 +75,30 @@ class SqlAlchemyAuditRepository:
         subject_case_number: str,
         subject_case_id: UUID | None,
         payload_details: dict[str, Any] | None = None,
+    ) -> AuditEventDto:
+        """Append one event. Retries transient head/seq collisions on a savepoint.
+
+        PostgreSQL serializes writers via the head lock; the retry exists for
+        the genesis-head race and SQLite writers, which have no row lock. Each
+        attempt rebuilds the payload (fresh timestamp), so attempts are
+        self-consistent. The last error wins after exhausting attempts.
+        """
+        errors: list[Exception] = []
+        for _ in range(_APPEND_ATTEMPTS):
+            try:
+                with self.session.begin_nested():
+                    return self._append_locked(action, actor, subject_case_number, subject_case_id, payload_details)
+            except (IntegrityError, OperationalError) as e:
+                errors.append(e)
+        raise errors[-1]
+
+    def _append_locked(
+        self,
+        action: AuditAction,
+        actor: str,
+        subject_case_number: str,
+        subject_case_id: UUID | None,
+        payload_details: dict[str, Any] | None,
     ) -> AuditEventDto:
         from trace_core.audit.signing import sign_bytes
         from trace_core.core.canonical import canonical_json_str

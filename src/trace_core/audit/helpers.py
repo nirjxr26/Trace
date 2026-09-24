@@ -95,12 +95,17 @@ def do_export(svc: AuditService, out: str):  # type: ignore[no-untyped-def]
 
 def fetch_case_with_history(case_svc, identifier: str, limit: int = 6):  # type: ignore[no-untyped-def]
     """Case + recent audit events shared by Typer show and shell show. Events None on ledger miss."""
+    from trace_core.core.ui.renderers import console
+
     case = case_svc.get_case(identifier)
     try:
         events = AuditService(case_svc.session_manager).list_events(
             AuditFilterDto(case_number=case.number, limit=limit)
         )
     except Exception:
+        # A ledger failure must not look like "no history": say so once, here,
+        # where the fetch (not the renderer) owns the error.
+        console.print("[dim]Audit history unavailable — ledger error; showing case without history.[/dim]\n")
         events = None
     return case, events
 

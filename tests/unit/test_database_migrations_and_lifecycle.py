@@ -296,3 +296,14 @@ def test_cli_db_commands(monkeypatch: pytest.MonkeyPatch, session_manager: Datab
     init_res = runner.invoke(app, ["db", "init"])
     assert init_res.exit_code == 0
     assert "initialized successfully" in init_res.output.lower()
+
+
+def test_snapshot_shows_checked_database_url(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Health snapshot displays the manager under test, not the global settings URL."""
+    from trace_core.core.database.health import fetch_db_snapshot
+    from trace_core.core.database.session import DatabaseSessionManager
+
+    mgr = DatabaseSessionManager(f"sqlite:///{tmp_path}/other-place.db")
+    snap = fetch_db_snapshot(mgr)
+    assert snap.healthy is True
+    assert "other-place.db" in snap.masked_url

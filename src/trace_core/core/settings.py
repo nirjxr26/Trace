@@ -28,7 +28,9 @@ class Settings(BaseSettings):
         alias="TRACE_DATABASE_URL",
     )
 
-    # Optional secret encryption / auth key
+    # Optional secret encryption / auth key. Invariant: never rotate this while
+    # HMAC-signed audit rows exist — old rows verify against the current value,
+    # so rotation reads as ledger tampering. Rotate Ed25519 keys instead.
     secret_key: SecretStr = Field(
         default=SecretStr("trace-local-dev-key-change-in-production"),
         alias="TRACE_SECRET_KEY",

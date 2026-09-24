@@ -17,9 +17,19 @@ def _expected_payload_hash(payload_json: str) -> str:
         return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
 
 
+_MAX_GAPS = 10_000
+
+
 def _collect_gaps(prev_seq: int | None, cur_seq: int, gaps: list[int]) -> None:
-    if prev_seq is not None and cur_seq != prev_seq + 1:
-        gaps.extend(range(prev_seq + 1, cur_seq))
+    if prev_seq is None or cur_seq == prev_seq + 1:
+        return
+    # Bounded: an absurd jump (tampered seq) must not OOM the detector by
+    # materializing billions of ints. Detection itself never depends on this
+    # list — the next row's prev_chain check fails closed regardless.
+    remaining = _MAX_GAPS - len(gaps)
+    if remaining <= 0:
+        return
+    gaps.extend(range(prev_seq + 1, min(cur_seq, prev_seq + 1 + remaining)))
 
 
 def _mismatch(

@@ -30,7 +30,10 @@ def fetch_db_snapshot(mgr=None):  # type: ignore[no-untyped-def]
         healthy, message = manager.check_connection()
     except Exception as exc:
         healthy, message = False, str(exc)
-    masked = sanitized_db_url(settings.database_url)
+    # Display the database actually checked: injected managers (TUI, tests)
+    # point elsewhere, and the global URL would mislead.
+    url = getattr(manager, "_url", None) or settings.database_url
+    masked = sanitized_db_url(url)
     if not healthy:
         return DbSnapshot(healthy=False, message=message, masked_url=masked)
     tables = get_table_names(manager.engine)

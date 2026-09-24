@@ -8,11 +8,17 @@ import hashlib
 import hmac
 import re
 
+from trace_core.core.errors import ApplicationError
+
 HMAC_KEY_ID = "hmac-v1"
 ED25519_PREFIX = "ed25519:"
-_KEY_SUFFIX_RE = re.compile(r"^[\da-f]{16}$")
+_KEY_SUFFIX_RE = re.compile(r"^[0-9a-f]{16}$")
 _DEV_KEY_SENTINEL = "trace-local-dev-key-change-in-production"
+_KEYSTORE_UNAVAILABLE_MESSAGE = (
+    "Ledger signing key {key_id} unavailable in keystore; case writes are paused until it is restored."
+)
 _warned_default_key = False
+_warned_pointer = False
 
 
 def _secret() -> bytes:
@@ -62,12 +68,38 @@ def _active_pointer():  # type: ignore[no-untyped-def]
 
 
 def active_key_id() -> str:
-    """Selected signing key, defaulting to the HMAC envelope. Never raises."""
+    """Selected signing key, defaulting to the HMAC envelope. Never raises.
+
+    The pointer file holds `<key-id> [# comment]` (see init_key). Anything else
+    is refused loudly (one warning) and falls back to HMAC so a corrupt pointer
+    degrades availability visibly instead of signing under a wrong identity.
+    """
     try:
-        key_id = _active_pointer().read_text(encoding="utf-8").strip().split()[0]
-    except (OSError, IndexError):
+        raw = _active_pointer().read_text(encoding="utf-8").strip()
+    except OSError:
         return HMAC_KEY_ID
-    return key_id or HMAC_KEY_ID
+    if not raw:
+        return HMAC_KEY_ID
+    first = raw.split()[0]
+    if first == HMAC_KEY_ID or (
+        first.startswith(ED25519_PREFIX) and _KEY_SUFFIX_RE.match(first[len(ED25519_PREFIX) :])
+    ):
+        return first
+    _warn_pointer(raw)
+    return HMAC_KEY_ID
+
+
+def _warn_pointer(raw: str) -> None:
+    global _warned_pointer
+    if _warned_pointer:
+        return
+    _warned_pointer = True
+    import structlog
+
+    structlog.get_logger().warning(
+        "Ignoring malformed signing-key pointer; using HMAC envelope.",
+        pointer=raw[:64],
+    )
 
 
 def init_key(label: str = "default") -> str:
@@ -164,10 +196,18 @@ def _verify_ed25519(key_id: str, data: bytes, signature: str) -> bool:
 
 
 def sign_bytes(data: bytes) -> tuple[str, str]:
-    """Envelope over canonical payload bytes. Ed25519 when selected, else HMAC-SHA256."""
+    """Envelope over canonical payload bytes. Ed25519 when selected, else HMAC-SHA256.
+
+    HMAC rows verify against the *current* TRACE_SECRET_KEY, so that secret must
+    never be rotated while HMAC-signed rows exist — rotation reads as tampering.
+    Rotate Ed25519 keys (retired pubs keep verifying) instead.
+    """
     key_id = active_key_id()
     if key_id.startswith(ED25519_PREFIX):
-        return key_id, _load_private(key_id).sign(data).hex()
+        try:
+            return key_id, _load_private(key_id).sign(data).hex()
+        except (OSError, ValueError) as e:
+            raise ApplicationError(_KEYSTORE_UNAVAILABLE_MESSAGE.format(key_id=key_id)) from e
     secret = _secret()
     if secret.decode("utf-8", "replace") == _DEV_KEY_SENTINEL:
         _warn_default_key()

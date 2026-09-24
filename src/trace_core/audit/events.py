@@ -29,6 +29,8 @@ class Context:
 def parse_details(payload_json: str) -> dict[str, Any]:
     """Extract details dict from canonical payload_json. Shared by renderers."""
     try:
-        return json.loads(payload_json).get("details", {})
+        details = json.loads(payload_json).get("details", {})
     except Exception:
         return {}
+    # A tampered row may carry a non-dict (e.g. null); callers expect a dict.
+    return details if isinstance(details, dict) else {}

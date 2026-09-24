@@ -176,7 +176,7 @@ class AuditShellCommandHandler(BaseShellHandler):
             self._show_seq(svc, args, seq_raw)
             return
         positional = extract_positional(args, *_AUDIT_VALUE_FLAGS)
-        if "--case" not in args:
+        if not has_flag(args, "--case"):
             if positional:
                 args = args + ["--case", positional[0]]
             elif ctx and ctx.active_case and not any(a.startswith("-") for a in args):

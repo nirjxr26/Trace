@@ -68,10 +68,16 @@ def _migration_table_rows(entries: list[tuple], bp: str) -> list[list]:
 def db_status() -> None:
     """Check database connection and show migration / table status."""
     with capture_cli_errors("Database Health Check Failed"):
+        from rich.text import Text
+
         snap = fetch_db_snapshot(db_manager)
         is_healthy, message, masked_url = snap.healthy, snap.message, snap.masked_url
 
-        status_text = f"[green]Online[/green] ({message})" if is_healthy else f"[red]Offline[/red] ({message})"
+        # Text with spans, not a markup string: the grid coerces plain strings
+        # to literal Text, which used to print raw "[red]...[/red]" brackets.
+        status_text = Text()
+        status_text.append("Online" if is_healthy else "Offline", style="green" if is_healthy else "red")
+        status_text.append(f" ({message})", style="dim")
         bp, term_w = breakpoint_width()
         shown_url = fit_text(masked_url, max(20, term_w - 22)) if bp == "XS" else masked_url
         grid = create_key_value_grid(

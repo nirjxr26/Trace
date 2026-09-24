@@ -412,7 +412,8 @@ class CaseShellCommandHandler(BaseShellHandler):
             reason = prompt_optional("Reason             ", hint="why, optional")
 
             # Clear rules: required fields keep current on blank; optionals clear to "".
-            # (None means "absent" to the service, so only "" actually clears.)
+            # (The service treats None and "" as the same empty and stores None,
+            # so the preview normalizes identically to stay in agreement with it.)
             new_title = new_title.strip() or case.title
             new_examiner = new_examiner.strip() or case.lead_examiner
             cleared_desc = new_desc.strip()
@@ -420,14 +421,22 @@ class CaseShellCommandHandler(BaseShellHandler):
             tag_list = parse_tags(new_tags) or []
 
             # 5W1H diff preview before confirm
+            from trace_core.audit.renderers import format_change_value
             from trace_core.cases.domain import changed_fields, tracked_snapshot
 
             before = tracked_snapshot(case)
+            # Same empty-normalization as the service (None == ""), so legacy ""
+            # rows don't preview a change the service will skip.
+            before = {
+                **before,
+                "description": before["description"] or None,
+                "notes": before["notes"] or None,
+            }
             after_vals = {
                 "title": new_title,
                 "lead_examiner": new_examiner,
-                "description": cleared_desc,
-                "notes": cleared_notes,
+                "description": cleared_desc or None,
+                "notes": cleared_notes or None,
                 "tags": tag_list,
             }
             changed = changed_fields(before, after_vals)
@@ -436,7 +445,7 @@ class CaseShellCommandHandler(BaseShellHandler):
                 return
             console.print(f"\n[{THEME_TOKENS['accent']}]Changes:[/{THEME_TOKENS['accent']}]")
             for k in changed:
-                console.print(f'  {k}: "{before[k]}" → "{after_vals[k]}"')
+                console.print(f'  {k}: "{format_change_value(before[k])}" → "{format_change_value(after_vals[k])}"')
             if not prompt_confirm("Apply these changes?"):
                 console.print(_ACTION_CANCELLED)
                 return
@@ -481,7 +490,7 @@ class CaseShellCommandHandler(BaseShellHandler):
             render_case_detail(closed)
 
     def _interactive_delete_case(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:
-        purge = "--purge" in sub_args
+        purge = has_flag(sub_args, "--purge")
         ident_args = [a for a in sub_args if a != "--purge"]
         ident = self._resolve_or_prompt_identifier(ident_args, ctx, "to delete")
 

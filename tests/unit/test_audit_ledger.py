@@ -250,3 +250,67 @@ def test_non_finite_rejected() -> None:
         canonical_json({"v": float("nan")})
     with pytest.raises(ValueError):
         canonical_json({"v": float("inf")})
+
+
+def test_append_retries_transient_head_collision(session_manager, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A transient seq/head conflict retries on a savepoint instead of failing the case write."""
+    from sqlalchemy.exc import IntegrityError
+
+    from trace_core.audit.domain import AuditAction
+
+    calls = {"n": 0}
+    orig = SqlAlchemyAuditRepository._append_locked
+
+    def flaky(self, *a, **k):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise IntegrityError("INSERT", {}, Exception("collision"))
+        return orig(self, *a, **k)
+
+    monkeypatch.setattr(SqlAlchemyAuditRepository, "_append_locked", flaky)
+    with session_manager.session() as s:
+        dto = SqlAlchemyAuditRepository(s).append(AuditAction.CASE_CREATED, "Ex", "2026-CR-0001", None, {})
+    assert dto.seq == 1
+    assert calls["n"] == 3
+
+
+def test_verify_gaps_capped() -> None:
+    """An absurd seq jump is recorded bounded, valid, and never OOMs the detector."""
+    from trace_core.audit.domain import AuditAction, build_payload, payload_hash
+    from trace_core.audit.verifier import _MAX_GAPS, verify_rows
+    from trace_core.core.canonical import canonical_json_str
+    from trace_core.core.clock import now_utc
+
+    def _row(seq, prev):  # type: ignore[no-untyped-def]
+        payload = build_payload(AuditAction.CASE_CREATED, "2026-CR-0001", "Ex", {}, now_utc())
+        body = canonical_json_str(payload)
+        hashed = payload_hash(payload)
+        chained = chain_hash(prev, hashed, seq)
+        return AuditEventModel(
+            seq=seq,
+            ts=now_utc(),
+            action="CASE_CREATED",
+            actor="Ex",
+            subject_case_number="2026-CR-0001",
+            payload_json=body,
+            payload_hash=hashed,
+            prev_chain=prev,
+            chain_hash=chained,
+        )
+
+    first = _row(1, GENESIS_CHAIN)
+    jumped = _row(10**12, first.chain_hash)
+    res = verify_rows([first, jumped])
+    assert res.is_valid is True
+    assert len(res.sequence_gaps) <= _MAX_GAPS
+
+
+def test_export_header_carries_tip(tmp_path, session_manager: DatabaseSessionManager) -> None:
+    """Bundle header names the tip so tail truncation is checkable without an anchor."""
+    CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+    out = tmp_path / "tip.jsonl"
+    AuditService(session_manager).export(out)
+    lines = out.read_text(encoding="utf-8").strip().splitlines()
+    header, last = json.loads(lines[0]), json.loads(lines[-1])
+    assert header["last_seq"] == 1
+    assert header["last_chain"] == last["chain_hash"]

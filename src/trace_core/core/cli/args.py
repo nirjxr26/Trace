@@ -2,10 +2,17 @@
 
 
 def extract_flag_value(args: list[str], *flags: str) -> str | None:
-    """Extract the value following any of the specified flags (e.g. --output json)."""
+    """Extract the value following any of the specified flags.
+
+    Accepts both `--output json` and `--output=json`. The `=` anchor keeps
+    prefix collisions (e.g. `--out` vs `--output`) impossible.
+    """
     for i, arg in enumerate(args):
-        if arg in flags and i + 1 < len(args):
-            return args[i + 1]
+        for flag in flags:
+            if arg == flag and i + 1 < len(args):
+                return args[i + 1]
+            if arg.startswith(flag + "="):
+                return arg.split("=", 1)[1]
     return None
 
 
@@ -28,8 +35,12 @@ def extract_positional(args: list[str], *value_flags: str) -> list[str]:
 
 
 def has_flag(args: list[str], *flags: str) -> bool:
-    """Check if any of the specified flags are present."""
-    return any(arg in flags for arg in args)
+    """Check if any of the specified flags are present, including `--flag=value` form."""
+    for arg in args:
+        for flag in flags:
+            if arg == flag or arg.startswith(flag + "="):
+                return True
+    return False
 
 
 def extract_int_flag(args: list[str], default: int, *flags: str) -> int:

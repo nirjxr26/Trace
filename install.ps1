@@ -148,19 +148,14 @@ if (-not (Test-Path $VenvPython)) {
 
 # 3. Install Dependencies
 Write-Host "[3/6] Installing locked dependencies..." -ForegroundColor Yellow
-$UvCmd = Get-Command "uv" -ErrorAction SilentlyContinue
-
-if ($UvCmd) {
-    Write-Host "  Using uv for fast deterministic dependency installation..."
-    & uv pip sync requirements.txt --python $VenvPython
-    & uv pip install --no-deps -e . --python $VenvPython
-} else {
-    Write-Host "  Using pip with cryptographic hash verification..."
-    # Pinned bootstrap toolchain (rotate with the lockfile, verify with: pip index versions pip)
-    & $VenvPython -m pip install --quiet "pip==26.2.1"
-    & $VenvPython -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
-    & $VenvPython -m pip install --quiet --no-deps -e .
-}
+# Single path on purpose: the old uv branch skipped --require-hashes and `sync`
+# destructively removed extra packages, so which binary happened to exist changed
+# the security posture -- now always hashed.
+Write-Host "  Using pip with cryptographic hash verification..."
+# Pinned bootstrap toolchain (rotate with the lockfile, verify with: pip index versions pip)
+& $VenvPython -m pip install --quiet "pip==26.2.1"
+& $VenvPython -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
+& $VenvPython -m pip install --quiet --no-deps -e .
 Write-Host "  [OK] Dependencies installed successfully." -ForegroundColor Green
 
 # 4. Environment & Storage Configuration
@@ -171,7 +166,10 @@ $EnvExample = Join-Path $RepoRoot ".env.example"
 if (-not (Test-Path $EnvFile)) {
     if (Test-Path $EnvExample) {
         Copy-Item $EnvExample $EnvFile
-        Add-Content -Path $EnvFile -Value "TRACE_UPDATE_MANIFEST=https://github.com/nirjxr26/Trace/releases/latest/download/stable.json"
+        # User profile directories are per-user on Windows; no chmod equivalent needed.
+        if (-not (Select-String -Path $EnvFile -Pattern "^TRACE_UPDATE_MANIFEST=" -Quiet)) {
+            Add-Content -Path $EnvFile -Value "TRACE_UPDATE_MANIFEST=https://github.com/nirjxr26/Trace/releases/latest/download/stable.json"
+        }
         Write-Host "  [OK] Created .env from template (.env.example)." -ForegroundColor Green
         Write-Host "  [!] Set a strong TRACE_DATABASE_URL password and TRACE_SECRET_KEY before production use." -ForegroundColor Yellow
     }
