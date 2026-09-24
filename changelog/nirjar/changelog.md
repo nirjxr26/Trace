@@ -2309,3 +2309,45 @@
 - **Fix**: `_cached_check_http` now uses `get_installed_version()` single authority, matching `check_for_update`/`lifecycle.run`/`update_install`. One-line change in existing style, no new abstraction.
 - **Verification**: ruff + format + mypy clean; `test_cli_contract` + `test_lifecycle_gates` 13 passed.
 - **Files**: `src/trace_core/updates/checker.py`.
+
+---
+
+## 2026-09-24 - TUI UX refinement pass
+
+Scope: terminal-native refinement only, no backend change, per AGENTS 1-4/14 and ponytail. Global tab/footer/selection/status/scrollbars; Cases aligned + progressive + integrity summary; Audit Seq/Event/Case + no hashes; Integrity hashes-only; Database connection+migrations; Updates Previous/Current/Status single state. Verification: ruff clean, mypy clean (144 files), pytest 291 passed / 3 skipped, coverage 75.7 percent. Files: tui/app.py,theme.py,palette.py, screens/cases.py,audit.py,verify.py,db.py,updates.py, tests/unit/test_tui.py.
+
+---
+
+## 2026-09-24 - Settings tab consolidation (Cases/Audit unchanged)
+
+Scope: terminal-native consolidation per approved design, AGENTS 1-4/14 and ponytail (1 new file, no new deps, services reused). Tabs 5 to 3: Cases, Audit, Settings. Left fixed section list (Database, Updates, Integrity, Storage and Paths, Operator and Env, Diagnostics, About) with selection prefix; right detail reuses fetch_db_snapshot, cached_check, AuditService.verify, settings/trust/doctor calls. Old screens/db.py, updates.py, verify.py removed (superseded, zero other importers). Palette tab-settings plus aliases for old tab ids; Keys 1-3. Verification: ruff clean, mypy clean (142 files), pytest 291 passed / 3 skipped, coverage 75.2 percent. Files: tui/screens/settings.py (new), tui/app.py, actions.py, palette.py, tests/unit/test_tui.py, tests/updates/test_tui_updates.py, tests/unit/test_security_regressions.py.
+
+---
+
+## 2026-09-24 - Settings left nav spacing/size/dividers + 2-col lists + fast arrow
+
+Scope: left-bar readability pass per screenshot review, AGENTS 1-4/14 and ponytail (no new deps, no backend change). Settings left DataTable to ListView with item spacing and instant CSS highlight; left width 1fr like Cases/Audit; muted Rule under Settings title and under Cases/Audit search boxes; Cases list Case-number plus Status only; Audit list Seq plus Event only (details unchanged); arrow repaint O(n) to O(1) old-plus-new row in Cases/Audit and single-item paint in Settings. Verification: ruff clean, mypy clean, pytest 291 passed / 3 skipped, coverage 75.1 percent. Files: tui/app.py, tui/screens/settings.py, cases.py, audit.py, tests/unit/test_tui.py, tests/updates/test_tui_updates.py, tests/unit/test_security_regressions.py.
+
+---
+
+## 2026-09-24 - Table header dividers, flat settings nav, active-tab label fix
+
+Scope: screenshot-review pass, AGENTS 1-4/14 and ponytail (CSS-only plus 2-line test, no backend change). Cases/Audit DataTable headers gain a muted bottom divider separating header from rows. Settings ListView drops hover/active backgrounds entirely: transparent bg, bold text plus existing selection prefix (never color-only). Settings title gains padding. Root cause for the blank active tab: Tab is fixed at height 1, so any border-bottom clips the label row away; replaced with underline text-style at zero layout cost. Proved with headless SVG render probe (border build omits Audit from SVG, underline build keeps it) and locked with export_screenshot label assertions for Audit and Settings in the pilot flow. Verification: ruff clean, mypy clean, pytest 291 passed / 3 skipped, coverage 75.1 percent. Files: tui/app.py, tests/unit/test_tui.py.
+
+---
+
+## 2026-09-24 - Real table header dividers plus dossier integrity divider
+
+Scope: screenshot follow-up, AGENTS 1-4/14 and ponytail (no new deps, no backend change). Root-caused the missing header divider the same way as the tab bug: proved with headless SVG probes that box borders on .datatable--header render nothing (identical SVG with and without), then used the mechanism that provably aligns: header_height=2 with two-line muted dash labels, verified row order header, dashes, data in render output. Cases shows Case-number divider plus Status divider; Audit shows Seq divider plus Event divider. Removed the dead border CSS. Added the missing rule between NOTES and INTEGRITY in the case dossier. Hardened the pilot flow with render assertions (table painted, headers and divider present) at realistic 110-col width after finding the 80-col default clips the Status column. Verification: ruff clean, mypy clean, pytest 291 passed / 3 skipped, coverage 75.1 percent. Files: tui/screens/cases.py, audit.py, tui/app.py, tests/unit/test_tui.py.
+
+---
+
+## 2026-09-24 - Full-width table dividers plus flat inputs/nav
+
+Scope: screenshot follow-up, AGENTS 1-4/14 and ponytail (no new deps, no backend change). Tables now render a manual bold header plus a full-pane Rule divider (image-2 style) instead of segmented per-column dashes, after proving via SVG probes that box borders on .datatable--header render nothing. Header text alignment derived from measured DataTable geometry (width equals content width, 1 padding each side) via shared tui.theme.table_head_text, verified column-for-column in render output; trimmed Cases columns back to 16/10 so normal panes need no h-scroll. Settings list hover/active backgrounds removed for real this time (Textual uses .-hovered class, not :hover, plus focus tint kill); bold text plus selection prefix only. Search, create/edit, and purge inputs flattened to transparent with no focus tint (borders unchanged). Verification: ruff clean, mypy clean, pytest 291 passed / 3 skipped, coverage 75.2 percent. Files: tui/theme.py, tui/app.py, tui/forms.py, tui/screens/cases.py, audit.py, tests/unit/test_tui.py.
+
+---
+
+## 2026-09-24 - Max-reuse pass over new TUI code
+
+Scope: reuse-only refactor per request, AGENTS 1-4 and ponytail (no behavior change, deletion over addition). New shared helpers in tui/widgets.py: repaint_selection (O(1) arrow, was duplicated in Cases/Audit), mount_header_table (header Static plus fixed columns from one constant, was duplicated), selected_item (cursor to item, was duplicated). New append_kv in tui/theme.py (detail Label/value rows, was 4 copies in Settings). Cases/Audit adopted all four and deleted locals; Settings adopted append_kv; audit also gained a shared _row_cells so refresh and repaint use one builder. Skipped per ponytail: test _text helper (import fragility across test dirs for 4 lines), focus_default one-liners, run_command toast tails, Settings ListView painter (different widget, single use). Verification: ruff clean, mypy clean, pytest 291 passed / 3 skipped, coverage 75.3 percent. Files: tui/widgets.py, theme.py, screens/cases.py, audit.py, settings.py.

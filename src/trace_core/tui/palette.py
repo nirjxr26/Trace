@@ -18,8 +18,7 @@ COMMANDS: list[tuple[str, str, str]] = [
     # (command id, label, hint)
     ("tab-cases", "Go: Cases", "case table + dossier"),
     ("tab-audit", "Go: Audit", "ledger stream + detail"),
-    ("tab-integrity", "Go: Integrity", "chain confidence"),
-    ("tab-database", "Go: Database", "health + migrations"),
+    ("tab-settings", "Go: Settings", "sections + detail"),
     ("case-create", "Case: create", "guided form"),
     ("case-edit", "Case: edit selected", "diff preview + reason"),
     ("case-close", "Case: seal selected", "type number to confirm"),
@@ -96,10 +95,14 @@ class KeysModal(_BaseModal, ModalScreen[None]):
         (
             "Navigation",
             (
-                ("1 – 4", "switch tabs  Cases · Audit · Integrity · Database"),
+                ("1 – 3", "switch tabs  Cases · Audit · Settings"),
+                ("← / →", "prev / next tab"),
+                ("↑ / ↓", "move / select"),
+                ("Enter", "open / select"),
+                ("Esc", "back / cancel"),
+                ("/", "search"),
+                ("r", "refresh"),
                 ("Ctrl+P", "command palette"),
-                ("Enter", "open dossier / detail"),
-                ("Esc", "back out / close"),
                 ("q", "quit"),
             ),
         ),
@@ -107,18 +110,19 @@ class KeysModal(_BaseModal, ModalScreen[None]):
             "Cases",
             (
                 ("c / e / x / a / p", "create · edit · seal · archive · purge"),
+                ("u", "restore archived"),
                 ("r", "recent-first toggle"),
-                ("/", "focus search"),
                 ("v", "raw JSON drawer"),
             ),
         ),
         (
-            "Audit · Integrity · Database",
+            "Audit · Settings",
             (
                 ("s", "scope to case  (Audit)"),
-                ("a", "anchor file  (Integrity)"),
-                ("e", "export bundle"),
-                ("m", "apply migrations  (Database)"),
+                ("e", "export bundle  (Audit)"),
+                ("m", "apply migrations  (Settings · Database)"),
+                ("c", "check updates  (Settings · Updates)"),
+                ("v", "verify chain  (Settings · Integrity)"),
             ),
         ),
     )

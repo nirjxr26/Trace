@@ -17,9 +17,11 @@ def isolated_db(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_cli_version() -> None:
+    from trace_core.core.settings import settings
+
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "Trace v0.1.0" in result.stdout
+    assert f"Trace v{settings.version}" in result.stdout
 
 
 def test_cli_case_crud_flow() -> None:
