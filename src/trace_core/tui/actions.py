@@ -4,8 +4,11 @@ from collections.abc import Callable
 from typing import Any
 
 PALETTE_ALIASES = {
-    "tab-verify": "tab-integrity",
-    "tab-db": "tab-database",
+    "tab-verify": "tab-settings",
+    "tab-integrity": "tab-settings",
+    "tab-db": "tab-settings",
+    "tab-database": "tab-settings",
+    "tab-updates": "tab-settings",
     "db-migrate": "database-migrate",
 }
 

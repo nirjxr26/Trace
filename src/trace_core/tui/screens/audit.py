@@ -6,7 +6,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.timer import Timer
-from textual.widgets import DataTable, Input, Static
+from textual.widgets import DataTable, Input, Rule, Static
 
 from trace_core.audit.dto import AuditEventDto, AuditFilterDto
 from trace_core.audit.events import parse_details
@@ -20,6 +20,8 @@ from trace_core.tui.forms import RawModal, TextInputModal
 from trace_core.tui.widgets import DossierScroll
 
 TABLE_ID = "audit-table"
+AUDIT_HEADER_ID = "audit-header"
+TABLE_COLUMNS = (("Seq", 7), ("Event", 12))
 
 
 class AuditView(Vertical):
@@ -38,6 +40,7 @@ class AuditView(Vertical):
         self._scope: str | None = None
         self._events: list[AuditEventDto] = []
         self._search_timer: Timer | None = None
+        self._last_cursor: int | None = None
 
     @property
     def _svc(self) -> AuditService:
@@ -48,16 +51,19 @@ class AuditView(Vertical):
 
         with Horizontal(id="audit-main"):
             with Vertical(id="audit-left"):
-                yield Input(placeholder="search actor / action / case…", id="audit-search")
+                yield Input(placeholder="Search actor, action, case, seq...", id="audit-search")
                 yield Static("", id="audit-scope")
-                yield DataTable(id=TABLE_ID, cursor_type="row")
+                yield Rule()
+                yield Static("", id=AUDIT_HEADER_ID, classes="table-head")
+                yield Rule()
+                yield DataTable(id=TABLE_ID, cursor_type="row", show_header=False)
             with DossierScroll(id="audit-right"):
                 yield Static("Select an event…", id="audit-detail")
 
     def on_mount(self) -> None:
-        table = self.query_one(f"#{TABLE_ID}", DataTable)
-        table.add_column("Seq", width=6)
-        table.add_column("Event")
+        from trace_core.tui.widgets import mount_header_table
+
+        mount_header_table(self, TABLE_ID, AUDIT_HEADER_ID, TABLE_COLUMNS)
         self.refresh_data()
 
     def focus_default(self) -> None:
@@ -76,26 +82,48 @@ class AuditView(Vertical):
         except Exception as exc:  # boundary: every service failure becomes a toast, never a crash
             self.app.notify(str(exc), severity="error")
             return
-        from trace_core.audit.renderers import short_action_label
-
         table = self.query_one(f"#{TABLE_ID}", DataTable)
         table.clear()
-        for e in self._events:
-            table.add_row(str(e.seq), short_action_label(e.action), key=str(e.seq))
+        cursor = table.cursor_row if table.cursor_row is not None else 0
+        for idx, e in enumerate(self._events):
+            table.add_row(*self._row_cells(e, idx == cursor), key=str(e.seq))
+        try:
+            if self._events:
+                table.move_cursor(row=min(cursor, len(self._events) - 1))
+        except Exception:
+            pass
+        self._last_cursor = table.cursor_row if table.cursor_row is not None else 0
         self._render_detail()
 
-    def _selected(self) -> AuditEventDto | None:
+    def _row_cells(self, event: AuditEventDto, selected: bool) -> list:  # type: ignore[no-untyped-def]
+        from trace_core.audit.renderers import short_action_label
+        from trace_core.tui.theme import SELECT_PREFIX
+
+        prefix = SELECT_PREFIX if selected else "  "
+        return [f"{prefix}{event.seq}", short_action_label(event.action)]
+
+    def _repaint_selection(self) -> None:
+        from trace_core.tui.widgets import repaint_selection
+
         table = self.query_one(f"#{TABLE_ID}", DataTable)
-        if table.cursor_row is None or table.cursor_row >= len(self._events):
-            return None
-        return self._events[table.cursor_row]
+        if not self._events:
+            return
+        cursor = table.cursor_row if table.cursor_row is not None else 0
+        repaint_selection(table, self._last_cursor, cursor, lambda idx, sel: self._row_cells(self._events[idx], sel))
+        self._last_cursor = cursor
+
+    def _selected(self) -> AuditEventDto | None:
+        from trace_core.tui.widgets import selected_item
+
+        return selected_item(self.query_one(f"#{TABLE_ID}", DataTable), self._events)
 
     def _render_detail(self) -> None:
         from trace_core.audit.verifier import verify_event
+        from trace_core.tui.theme import integrity_line
 
         e = self._selected()
         if e is None:
-            self.query_one("#audit-detail", Static).update(Text("No events.", style="dim"))
+            self.query_one("#audit-detail", Static).update(Text("No audit events found", style="dim"))
             return
         details = parse_details(e.payload_json)
         intact = verify_event(
@@ -111,17 +139,14 @@ class AuditView(Vertical):
         rule = pane.divider()
         body = Text()
         body.append(f"#{e.seq}  {action_title(e.action.value)}\n", style=THEME_TOKENS["accent"])
-        body.append(f"{sanitize_terminal(e.subject_case_number)} · {format_india_datetime(e.ts)}\n", style="dim")
-        body.append("\n")
         body.append(rule)
         body.append("\n")
+        body.append("Case    ", style="dim")
+        body.append(f"{sanitize_terminal(e.subject_case_number)}\n")
         body.append("Actor   ", style="dim")
-        body.append(f"{sanitize_terminal(e.actor)} @ {sanitize_terminal(details.get('host', '-'))}\n")
+        body.append(f"{sanitize_terminal(e.actor)}\n")
         body.append("When    ", style="dim")
         body.append(f"{format_india_datetime(e.ts)}\n")
-        body.append("\n")
-        body.append(rule)
-        body.append("\n")
         body.append("Event   ", style="dim")
         body.append(f"{e.action.value}\n")
         reason = (details.get("reason") or "").strip()
@@ -129,28 +154,21 @@ class AuditView(Vertical):
             body.append("Reason  ", style="dim")
             body.append(f"{sanitize_terminal(reason)}\n")
         changed = details.get("changed", [])
-        body.append("\n")
-        body.append(rule)
-        body.append("\n")
         if changed:
             from trace_core.audit.renderers import format_change_value
 
             before, after = details.get("before", {}), details.get("after", {})
+            body.append(rule)
             body.append(f"\nCHANGES · {len(changed)}\n", style=THEME_TOKENS["accent"])
-            body.append("\n")
             for field in changed:
                 body.append(f"{field}\n", style="dim")
                 body.append(f"  {sanitize_terminal(format_change_value(before.get(field)))}", style="#D06A73")
                 body.append("  →  ")
                 body.append(f"{sanitize_terminal(format_change_value(after.get(field)))}\n", style="#5FD18A")
-            body.append("\n")
-            body.append(rule)
-        body.append("\nINTEGRITY · ", style=THEME_TOKENS["accent"])
-        body.append("✓ VERIFIED\n" if intact else "✗ MISMATCH — run Verify\n", style="#5FD18A" if intact else "#D06A73")
+        body.append(rule)
+        body.append("\nINTEGRITY\n", style=THEME_TOKENS["accent"])
+        body.append_text(integrity_line(intact))
         body.append("\n")
-        body.append(f"Payload   {e.payload_hash}\n", style="dim")
-        body.append(f"Previous  {e.prev_chain}\n", style="dim")
-        body.append(f"Chain     {e.chain_hash}\n", style="dim")
         self.query_one("#audit-detail", Static).update(body)
 
     def run_command(self, command: str) -> None:
@@ -165,6 +183,7 @@ class AuditView(Vertical):
     @on(DataTable.RowHighlighted)
     def _highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.data_table.id == TABLE_ID:
+            self._repaint_selection()
             self._render_detail()
 
     @on(DataTable.RowSelected)

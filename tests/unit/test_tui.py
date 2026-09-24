@@ -51,17 +51,22 @@ def _text(widget) -> str:  # type: ignore[no-untyped-def]
 
 
 async def test_tui_pilot_flow(seeded_manager: DatabaseSessionManager) -> None:
-    """Mount → cases listed → cursor moves dossier → audit → verify → db."""
+    """Mount → cases listed → cursor moves dossier → audit → settings sections."""
     from textual.widgets import DataTable, Static, TabbedContent
 
     app = TraceApp(seeded_manager)
-    async with app.run_test() as pilot:
+    async with app.run_test(size=(110, 30)) as pilot:
         table = app.query_one("#case-table", DataTable)
         assert table.row_count == 2
         # ensure table has focus so arrows move the cursor, not the tab bar
         table.focus()
         await pilot.pause()
         assert "Beta" in _text(app.query_one("#case-dossier", Static))
+        await pilot.pause()
+        shot = app.export_screenshot()
+        assert "2026-CR-" in shot
+        assert "Case" in shot and "Status" in shot
+        assert "─" in shot
 
         await pilot.press("down")
         await pilot.pause()
@@ -70,19 +75,32 @@ async def test_tui_pilot_flow(seeded_manager: DatabaseSessionManager) -> None:
         await pilot.press("2")
         await pilot.pause()
         assert app.query_one(TabbedContent).active == "audit"
+        assert "Audit" in app.export_screenshot()
         audit_table = app.query_one("#audit-table", DataTable)
         assert audit_table.row_count == 3
         assert len(audit_table.columns) == 2
         assert "Case details updated" in _text(app.query_one("#audit-detail", Static))
+        assert "Seq" in app.export_screenshot()
 
         await pilot.press("3")
         await pilot.pause()
-        assert "VALID" in _text(app.query_one("#verify-result", Static))
+        assert app.query_one(TabbedContent).active == "settings"
+        assert "Settings" in app.export_screenshot()
+        from textual.widgets import ListView
 
-        await pilot.press("4")
+        sections = app.query_one("#settings-sections", ListView)
+        assert len(list(sections.children)) == 7
+        assert "Database" in _text(app.query_one("#settings-detail", Static))
+        assert "Online" in _text(app.query_one("#settings-detail", Static))
+
+        await pilot.press("down")
         await pilot.pause()
-        assert "Online" in _text(app.query_one("#db-health", Static))
-        assert app.query_one("#db-migrations", DataTable).row_count >= 8
+        detail = _text(app.query_one("#settings-detail", Static))
+        assert "Previous" in detail and "Status" in detail
+
+        await pilot.press("down")
+        await pilot.pause()
+        assert "VALID" in _text(app.query_one("#settings-detail", Static))
 
 
 async def test_modals_back_out_on_escape(seeded_manager: DatabaseSessionManager) -> None:
@@ -144,11 +162,14 @@ async def test_tui_palette_routing(seeded_manager: DatabaseSessionManager) -> No
 
     app = TraceApp(seeded_manager)
     async with app.run_test():
+        app._palette_done("tab-settings")
+        await app.workers.wait_for_complete()
+        assert app.query_one(TabbedContent).active == "settings"
         app._palette_done("tab-integrity")
         await app.workers.wait_for_complete()
-        assert app.query_one(TabbedContent).active == "integrity"
+        assert app.query_one(TabbedContent).active == "settings"
         app._palette_done("tab-database")
         await app.workers.wait_for_complete()
-        assert app.query_one(TabbedContent).active == "database"
+        assert app.query_one(TabbedContent).active == "settings"
         app._palette_done(None)
         app._palette_done("no-such-command")

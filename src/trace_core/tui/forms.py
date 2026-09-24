@@ -42,7 +42,8 @@ class CaseForm(_BaseModal, ModalScreen[dict[str, str] | None]):
     CSS = """
     CaseForm { align: center middle; }
     #case-form { width: 84; height: auto; max-height: 90%; border: round $panel 50%; background: $surface; padding: 1 2; }
-    #case-form Input { border: round $panel; height: 3; }
+    #case-form Input { border: round $panel; height: 3; background: transparent; }
+    #case-form Input:focus { background: transparent; background-tint: transparent; }
     #case-form Label { height: 1; margin: 0; color: $text-muted; }
     #case-fields { layout: grid; grid-size: 2; grid-gutter: 1 1; height: auto; max-height: 22; scrollbar-gutter: stable; }
     .field-col { width: 1fr; height: 4; }
@@ -155,7 +156,8 @@ class TextInputModal(_BaseModal, ModalScreen[str | None]):
     CSS = """
     TextInputModal { align: center middle; }
     #text-box { width: 64; height: auto; border: round $panel 50%; background: $surface; padding: 1 2; }
-    #text-box Input { border: round $panel; height: 3; }
+    #text-box Input { border: round $panel; height: 3; background: transparent; }
+    #text-box Input:focus { background: transparent; background-tint: transparent; }
     #text-box Horizontal { align: center middle; height: 3; margin-top: 1; }
     #text-box Button { border: round $panel; min-width: 16; height: 3; }
     """
@@ -195,7 +197,8 @@ class TypedConfirmModal(_BaseModal, ModalScreen[bool]):
     #confirm-box { width: 60; height: auto; border: round $error 60%; background: $surface; padding: 1 2; }
     #confirm-box Horizontal { align: center middle; height: auto; margin-top: 1; }
     #confirm-box Button { border: round $panel; min-width: 16; height: 3; content-align: center middle; margin: 0 2; }
-    #confirm-box Input { border: round $panel; height: 3; margin: 1 0; }
+    #confirm-box Input { border: round $panel; height: 3; margin: 1 0; background: transparent; }
+    #confirm-box Input:focus { background: transparent; background-tint: transparent; }
     """
 
     def __init__(self, prompt: str, expected: str, note: str = "") -> None:
