@@ -249,6 +249,3 @@ def test_ghost_suggestion_case_insensitive() -> None:
     suggested = TraceAutoSuggest(shell)._suggest_from_defaults("Case")
     assert suggested is not None
     assert suggested.text == " list"
-
-
-
