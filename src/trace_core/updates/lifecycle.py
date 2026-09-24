@@ -1,3 +1,4 @@
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -54,9 +55,15 @@ class UpdateLifecycle:
         return "; ".join(parts) or None
 
     def _check_release_health(
-        self, base: Path, manifest: ReleaseManifest, snap: object, schema_after: int | None = None
+        self,
+        base: Path,
+        manifest: ReleaseManifest,
+        snap: object,
+        schema_after: int | None = None,
+        staged: Path | None = None,
     ) -> str:
         """Health must be called with a fresh snapshot taken after migration and before activation."""
+        from trace_core.updates import pip_backend
         from trace_core.updates.migration import current_schema_version
         from trace_updater import updater as updater_mod
 
@@ -72,6 +79,11 @@ class UpdateLifecycle:
             if after is None:
                 after = current_schema_version(self.service.session_manager)
             if after != manifest.schema_target:
+                return "failed"
+        # Pip layouts must prove the venv actually imports the target version;
+        # a flipped pointer with stale code is a lying update.
+        if staged is not None and pip_backend.pip_layout_for(manifest, staged):
+            if pip_backend.pip_installed_version() != manifest.version:
                 return "failed"
         return "passed"
 
@@ -293,6 +305,14 @@ class UpdateLifecycle:
             },
         )
 
+    def _pip_install_stage(self, staged: Path, manifest: ReleaseManifest) -> None:
+        """Install the verified wheel into the running venv. No-op off venv layouts."""
+        from trace_core.updates import pip_backend
+
+        if not pip_backend.pip_layout_for(manifest, staged):
+            return
+        pip_backend.pip_install_wheel(Path(sys.executable), staged)
+
     def _run_locked(
         self,
         manifest: ReleaseManifest,
@@ -361,6 +381,7 @@ class UpdateLifecycle:
             self.transition(UpdateState.STAGED)
             self.transition(UpdateState.INSTALLING)
             self._install_stage(staged, base, manifest)
+            self._pip_install_stage(staged, manifest)
             self.transition(UpdateState.MIGRATING)
             migration = run_updater_migration(
                 self.service.session_manager,
@@ -378,7 +399,7 @@ class UpdateLifecycle:
                 schema_after = current_schema_version(self.service.session_manager)
             except Exception:
                 schema_after = schema_before
-            health = self._check_release_health(base, manifest, snap, schema_after)
+            health = self._check_release_health(base, manifest, snap, schema_after, staged=staged)
             if health != "passed":
                 from trace_core.updates.migration import rollback_release
 

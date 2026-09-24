@@ -202,6 +202,15 @@ def rollback_release(base: str | Path, manager: DatabaseSessionManager, backup_p
         restore_backup(backup_path, manager)
         if current_schema_version(manager) < schema_min:
             raise RecoveryError(f"previous release {previous} still incompatible after restore")
+    # Code before pointer: reinstalling the retained wheel first means a pip
+    # failure leaves the (failed) pointer untouched for RECOVERY_REQUIRED,
+    # never a flipped pointer over stale code.
+    from trace_core.updates import pip_backend
+
+    try:
+        pip_backend.restore_release(base, previous)
+    except UpdateError as e:
+        raise RecoveryError(f"previous release {previous} found but its code could not be reinstalled: {e}") from e
     return updater_mod.rollback(base)
 
 
