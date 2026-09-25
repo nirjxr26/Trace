@@ -11,7 +11,7 @@ from trace_core.tui.theme import TRACE_THEME
 TAB_HINTS: dict[str, str] = {
     "cases": "↑↓ Navigate   Enter Open   / Search   r Refresh   q Quit",
     "audit": "↑↓ Navigate   Enter Open   / Search   r Refresh   q Quit",
-    "settings": "↑↓ Sections   Enter Run   m Migrate   c Check   q Quit",
+    "settings": "↑↓ Sections   Enter Run   m Migrate   c Check   u Install   q Quit",
 }
 
 _TAB_ORDER = ("cases", "audit", "settings")

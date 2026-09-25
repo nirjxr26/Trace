@@ -2471,3 +2471,9 @@ Scope: updates verifier plus checker plus two test files. Root cause from a fiel
 ## 2026-09-25 - v0.2.5 floor policy plus release-time floor assertion
 
 Scope: release workflow plus update spec doc. Since 0.2.3 and 0.2.4 updaters cannot download at all, shipping 2.5 with a lower floor would show those boxes available and let them fail confusingly, so the floor moves to 0.2.5 with bootstrap notes in both the dispatch defaults and the tag-push fallback, and a new workflow step asserts the built manifest carries minimum_supported_version plus notes and fails closed otherwise. Documented the going-forward rule that the floor is always the oldest self-downloading release. Verification: workflow YAML parses with steps ordered generate, assert, sign, verify, publish, and the exact generate plus assert commands were rehearsed locally against a scratch manifest.
+
+---
+
+## 2026-09-25 - v0.2.5 update UX live stages plus shared renderers
+
+Scope: feat/update-ux branch, rendering only, no pipeline logic changed. New updates/stages.py stage model with backend-state mapping plus speed and ETA helpers, byte callback on the artifact stream, and an optional no-op-default progress seam on the lifecycle. New updates/renderers.py with the check card, install summary, and a live display that draws the determinate download bar plus a spinner checklist on TTY and sequential lines when piped. Install orchestration factored into shared load and prepare helpers used by both the Typer command and the TUI worker, and the shell now renders through the same card instead of duplicated strings. TUI Updates tab rebuilt as the spec card with an Update button behind confirm, worker-driven live stages, and recent history rows. Verification: ruff plus mypy clean, full suite 329 passed with the local e2e file skipping cleanly without wheels, and the e2e harness proves all eight scenarios end to end with the sibling fix branch composed in.

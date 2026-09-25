@@ -1,6 +1,7 @@
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -139,7 +140,12 @@ def _with_retries(op):  # type: ignore[no-untyped-def]
 
 
 def stream_artifact_to_file(
-    base_url: str, filename: str, dest_tmp: Path, max_bytes: int, timeout: float = 30.0
+    base_url: str,
+    filename: str,
+    dest_tmp: Path,
+    max_bytes: int,
+    timeout: float = 30.0,
+    on_bytes: Callable[[int], None] | None = None,
 ) -> Path:
     """Single source for artifact download. Streams in 1 MB chunks, never holds full bytes in RAM."""
     from trace_core.updates.errors import UpdateNetworkError
@@ -164,6 +170,8 @@ def stream_artifact_to_file(
                     if written > max_bytes:
                         raise UpdateNetworkError("artifact response too large")
                     fout.write(chunk)
+                    if on_bytes is not None:
+                        on_bytes(written)
         return dest_tmp
 
     return _with_retries(_download)

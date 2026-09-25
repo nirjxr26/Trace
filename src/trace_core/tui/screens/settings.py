@@ -9,9 +9,10 @@ from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import ListItem, ListView, Rule, Static
+from textual.widgets import Button, ListItem, ListView, Rule, Static
 
 from trace_core.core.database.session import DatabaseSessionManager
+from trace_core.updates.stages import STAGE_ORDER, Stage, StageStatus
 
 TABLE_ID = "settings-sections"
 DETAIL_ID = "settings-detail"
@@ -27,12 +28,28 @@ SECTIONS = (
 )
 
 
+class _TuiProgress:
+    def __init__(self, view: "SettingsView") -> None:
+        self._view = view
+
+    def on_bytes(self, read: int, total: int) -> None:
+        _ = (read, total)
+
+    def on_stage(self, stage: Stage, status: StageStatus) -> None:
+        view = self._view
+        try:
+            view.app.call_from_thread(view._on_update_stage, stage, status)
+        except Exception:
+            pass
+
+
 class SettingsView(Vertical):
     """Left: fixed section list. Right: selected section detail."""
 
     BINDINGS = [
         Binding("m", "migrate", "Migrate"),
         Binding("c", "check", "Check updates"),
+        Binding("u", "install", "Install update"),
         Binding("v", "verify", "Verify chain"),
     ]
 
@@ -45,6 +62,8 @@ class SettingsView(Vertical):
         self._kind = "idle"
         self._extra = ""
         self._checking = False
+        self._installing = False
+        self._install_state = {stage: StageStatus.PENDING for stage in STAGE_ORDER}
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="settings-top"):
@@ -57,6 +76,7 @@ class SettingsView(Vertical):
                 )
             with Vertical(id="settings-right"):
                 yield Static("", id=DETAIL_ID)
+                yield Button("Update", id="update-apply")
 
     def on_mount(self) -> None:
         self.refresh_data()
@@ -131,6 +151,13 @@ class SettingsView(Vertical):
         except Exception as exc:
             body.append(f"Version unavailable ({exc})", style="dim")
         self.query_one(f"#{DETAIL_ID}", Static).update(body)
+        try:
+            show_apply = (
+                section == "Updates" and self._kind == "available" and bool(self._current) and not self._installing
+            )
+            self.query_one("#update-apply", Button).display = show_apply
+        except Exception:
+            pass
 
     # --- section bodies (each reuses one service, no view-to-view imports) ---
 
@@ -162,11 +189,14 @@ class SettingsView(Vertical):
 
     def _updates_body(self, body: Text, width: int) -> None:
         from trace_core.core.ui.renderers import sanitize_terminal
+        from trace_core.core.ui.theme import THEME_TOKENS
         from trace_core.tui.theme import update_status_text
 
-        _ = width
         if self._checking:
             body.append("Checking…\n", style="dim")
+            return
+        if self._installing:
+            self._install_lines(body)
             return
         if self._kind == "idle":
             # First paint uses the cached check so the tab never opens empty.
@@ -175,17 +205,61 @@ class SettingsView(Vertical):
             except Exception as exc:
                 prev, current, kind, extra = "", "—", "failed", str(exc)[:300]
             self._prev, self._current, self._kind, self._extra = prev, current, kind, extra
-        from trace_core.tui.theme import append_kv
-
-        prev = sanitize_terminal(self._prev or "")
         current = sanitize_terminal(self._current or "—")
-        append_kv(body, "Previous", prev)
-        append_kv(body, "Current", current)
-        body.append(f"{'Status':<10} ", style="dim")
-        body.append_text(update_status_text(self._kind))
-        body.append("\n")
+        body.append("Current version\n", style="dim")
+        body.append(f"{current}\n")
+        if self._kind != "available" or not self._current:
+            body.append(f"{'Status':<10} ", style="dim")
+            body.append_text(update_status_text(self._kind))
+            body.append("\n")
+            if self._extra:
+                body.append(f"{sanitize_terminal(self._extra)}\n", style="dim")
+            return
+        rule = "─" * max(20, min(60, int(width or 60) - 2))
+        body.append(Text(rule + "\n", style=THEME_TOKENS["border"]))
+        body.append("Update available\n")
+        body.append(f"{current}\n")
+        body.append("\nNew version available.\n", style="dim")
         if self._extra:
             body.append(f"{sanitize_terminal(self._extra)}\n", style="dim")
+        body.append("\n[ Update ]  (press u)\n")
+        body.append(Text(rule + "\n", style=THEME_TOKENS["border"]))
+        body.append("\nRecent activity\n", style="#72B7D3")
+        self._recent_lines(body)
+
+    def _recent_lines(self, body: Text) -> None:
+        from trace_core.tui.theme import DOT_BAD, DOT_OK
+        from trace_core.updates.service import UpdateService
+
+        try:
+            rows = UpdateService(self._manager).list_history(limit=3, offset=0)
+        except Exception:
+            return
+        for row in rows:
+            ok = str(row.result) == "SUCCESS"
+            body.append("✓ " if ok else "✕ ", style=DOT_OK if ok else DOT_BAD)
+            body.append(f"{row.from_version} → {row.to_version}    {row.result}\n", style="dim")
+
+    def _install_lines(self, body: Text) -> None:
+        from trace_core.tui.theme import stage_line
+        from trace_core.updates.stages import STAGE_ACTIVE_LABEL, STAGE_DONE_LABEL, StageStatus
+
+        prev = self._prev or "?"
+        current = self._current or "?"
+        body.append(f"Updating Trace v{prev} → v{current}\n")
+        body.append("\n")
+        for stage in STAGE_ORDER:
+            status = self._install_state.get(stage, StageStatus.PENDING)
+            if status == StageStatus.PENDING:
+                continue
+            if status == StageStatus.DONE:
+                label = STAGE_DONE_LABEL[stage]
+            elif status == StageStatus.FAILED:
+                label = STAGE_DONE_LABEL[stage]
+            else:
+                label = STAGE_ACTIVE_LABEL[stage]
+            body.append_text(stage_line(status.value, label))
+            body.append("\n")
 
     def _integrity_body(self, body: Text, width: int) -> None:
         from trace_core.audit.service import AuditService
@@ -395,6 +469,61 @@ class SettingsView(Vertical):
         self._render_detail()
         self._maybe_refresh_hint()
 
+    def action_install(self) -> None:
+        if self._selected_section() != "Updates":
+            self.app.notify("Select Updates first.", severity="warning")
+            return
+        if self._kind != "available" or not self._current:
+            self.app.notify("Nothing to install.", severity="warning")
+            return
+        from trace_core.tui.forms import YesNoModal
+
+        prev = self._prev or "?"
+        self.app.push_screen(YesNoModal(f"Install update {prev} → {self._current}?"), self._install_confirmed)
+
+    def _install_confirmed(self, ok: bool | None) -> None:
+        if not ok:
+            return
+        self._install_state = {stage: StageStatus.PENDING for stage in STAGE_ORDER}
+        self._installing = True
+        self._render_detail()
+        self.app.run_worker(self._install_worker())
+
+    async def _install_worker(self) -> None:
+        import asyncio
+        import uuid
+
+        from trace_core.updates.commands import prepare_install
+        from trace_core.updates.lifecycle import UpdateLifecycle
+
+        def sync_install():  # type: ignore[no-untyped-def]
+            m, _target, _current, artifact_path, entry, channel = prepare_install(None, None)
+            return UpdateLifecycle(str(uuid.uuid4())).run(
+                m, artifact_path, channel=channel, preverified_sha256=entry.sha256, progress=_TuiProgress(self)
+            )
+
+        try:
+            dto = await asyncio.to_thread(sync_install)
+        except Exception as exc:
+            self._installing = False
+            self.app.notify(str(exc)[:300], severity="error")
+            self.action_check()
+            return
+        self._installing = False
+        self.app.notify(f"Trace updated to v{dto.to_version}.")
+        self.action_check()
+
+    def _on_update_stage(self, stage: Stage, status: StageStatus) -> None:
+        try:
+            self._install_state[stage] = status
+            self._render_detail()
+        except Exception:
+            pass
+
+    @on(Button.Pressed, "#update-apply")
+    def _apply_pressed(self) -> None:
+        self.action_install()
+
     def action_migrate(self) -> None:
         if self._selected_section() != "Database":
             self.app.notify("Select Database first.", severity="warning")
@@ -422,6 +551,8 @@ class SettingsView(Vertical):
     def run_command(self, command: str) -> None:
         if command in ("check", "updates-check"):
             self.action_check()
+        elif command in ("install", "updates-install"):
+            self.action_install()
         elif command in ("migrate", "database-migrate"):
             self.action_migrate()
         elif command in ("verify", "anchor"):
