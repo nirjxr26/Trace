@@ -75,7 +75,7 @@ def test_installed_version_parsing(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     monkeypatch.setattr(
         pip_backend.subprocess,
         "run",
-        lambda *a, **k: SimpleNamespace(returncode=0, stdout="0.2.3\n", stderr="warn noise\n"),
+        lambda *a, **k: SimpleNamespace(returncode=0, stdout="TRACE_VERSION=0.2.3\n", stderr="warn noise\n"),
     )
     assert pip_backend.pip_installed_version() == "0.2.3"
     monkeypatch.setattr(
@@ -84,6 +84,20 @@ def test_installed_version_parsing(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
         lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr=""),
     )
     assert pip_backend.pip_installed_version() is None
+
+
+def test_installed_version_ignores_stdout_noise(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _force_venv(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        pip_backend.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(
+            returncode=0,
+            stdout="2026-09-25 10:40:25 [warning] shipped default credentials\nTRACE_VERSION=9.9.9\n",
+            stderr="",
+        ),
+    )
+    assert pip_backend.pip_installed_version() == "9.9.9"
 
 
 def test_restore_skips_without_wheel(tmp_path: Path) -> None:

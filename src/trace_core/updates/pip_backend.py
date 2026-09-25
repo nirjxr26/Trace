@@ -15,7 +15,7 @@ from trace_core.updates.errors import UpdateError
 
 _PIP_TIMEOUT_SECONDS = 300
 _PROOF_TIMEOUT_SECONDS = 120
-_VERSION_PROBE = "from trace_core.core.settings import settings; print(settings.version)"
+_VERSION_PROBE = "from trace_core.core.settings import settings; print('TRACE_VERSION=' + settings.version)"
 
 
 def venv_python() -> Path | None:
@@ -55,8 +55,9 @@ def pip_install_wheel(python: Path, wheel: Path) -> None:
 def pip_installed_version(python: Path | None = None) -> str | None:
     """Version string the venv actually imports, or None when unverifiable.
 
-    Isolated (`-I`) so cwd/PYTHONPATH can never shadow site-packages, and only
-    stdout is read so warnings on stderr cannot pollute the parse.
+    The probe prints a TRACE_VERSION= sentinel because settings import logs
+    warnings to stdout on stock installs; first-token parsing read the date.
+    Isolated (`-I`) so cwd/PYTHONPATH can never shadow site-packages.
     """
     target = python or venv_python()
     if target is None:
@@ -64,8 +65,10 @@ def pip_installed_version(python: Path | None = None) -> str | None:
     proc = _run_quiet([str(target), "-I", "-c", _VERSION_PROBE], _PROOF_TIMEOUT_SECONDS)
     if proc is None or proc.returncode != 0:
         return None
-    version = proc.stdout.strip().split()[0] if proc.stdout.strip() else ""
-    return version or None
+    for token in proc.stdout.strip().split():
+        if token.startswith("TRACE_VERSION="):
+            return token.partition("=")[2] or None
+    return None
 
 
 def pip_health(manifest, staged: Path | None) -> bool:  # type: ignore[no-untyped-def]
