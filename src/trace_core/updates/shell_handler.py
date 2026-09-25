@@ -26,8 +26,6 @@ class UpdateShellCommandHandler(BaseShellHandler):
             return self._shell_check(args)
         if act == "history":
             return self._shell_history(args)
-        if act in ("show", "verify"):
-            return self._shell_show_verify(act, args)
         if act == "install":
             from trace_core.core.ui.renderers import console
 
@@ -39,22 +37,20 @@ class UpdateShellCommandHandler(BaseShellHandler):
         )
 
     def _shell_check(self, args: list[str]) -> bool:
-        from trace_core.core.cli.args import extract_flag_value
         from trace_core.core.cli.error_handler import capture_cli_errors
         from trace_core.core.ui.renderers import console
         from trace_core.updates.checker import cached_check, resolve_channel, resolve_manifest_target
+        from trace_core.updates.commands import render_check_blocked
 
+        _ = args
         with capture_cli_errors("Update Check", exit_on_error=False):
-            manifest = extract_flag_value(args, "--manifest")
-            channel = resolve_channel(extract_flag_value(args, "--channel"))
-            target = resolve_manifest_target(manifest, channel)
+            channel = resolve_channel(None)
+            target = resolve_manifest_target(None, channel)
             payload = cached_check(target, channel)
             if not payload["available"]:
                 console.print(f"[dim]Up to date ({payload['current']}, {channel}).[/dim]")
             elif not payload["installable"]:
-                console.print(
-                    f"[yellow]Update {payload['target']} available but deferred: {payload['block_reason']}[/yellow]"
-                )
+                render_check_blocked(payload)
             else:
                 console.print(
                     f"[green]Update {payload['target']} available[/green] — current {payload['current']} ({channel})"
@@ -72,7 +68,7 @@ class UpdateShellCommandHandler(BaseShellHandler):
             svc = UpdateService()
             rows = svc.list_history(
                 limit=extract_int_flag(args, 50, "--limit"),
-                offset=extract_int_flag(args, 0, "--offset"),
+                offset=0,
             )
             render_minimalist_table(
                 "Update History",
@@ -82,34 +78,6 @@ class UpdateShellCommandHandler(BaseShellHandler):
             )
         return True
 
-    def _shell_show_verify(self, act: str, args: list[str]) -> bool:
-        from trace_core.core.cli.args import extract_flag_value
-        from trace_core.core.cli.error_handler import capture_cli_errors
-        from trace_core.core.ui.renderers import console
-        from trace_core.updates.checker import ensure_artifact_path, load_manifest_auto, resolve_channel
-
-        with capture_cli_errors(f"Update {act.capitalize()}", exit_on_error=False):
-            manifest_opt = extract_flag_value(args, "--manifest")
-            channel = resolve_channel(extract_flag_value(args, "--channel"))
-            m, target = load_manifest_auto(manifest_opt, channel)
-            console.print(f"[bold]{m.product} {m.version}[/bold] ({m.channel})")
-            if act == "show":
-                artifact = extract_flag_value(args, "--artifact")
-                if not artifact:
-                    console.print("[dim]Unverified manifest content — shown before verification.[/dim]")
-                else:
-                    from trace_core.updates.verifier import verify_manifest
-
-                    verify_manifest(m, ensure_artifact_path(m, artifact, target))
-                    console.print("[green]Artifact verification passed.[/green]")
-            else:
-                artifact = extract_flag_value(args, "--artifact")
-                from trace_core.updates.verifier import verify_manifest
-
-                verify_manifest(m, ensure_artifact_path(m, artifact, target))
-                console.print("[green]Verification passed.[/green]")
-        return True
-
     @property
     def _typer_app(self) -> object:
         return self._app
@@ -117,7 +85,7 @@ class UpdateShellCommandHandler(BaseShellHandler):
     def get_completions(self, text: str, ctx: object) -> list[str]:
         """Flag completions shared with case handler pattern. No new completer framework."""
         _ = ctx
-        flags = ["--manifest", "--channel", "--artifact", "--limit", "--offset"]
+        flags = ["--limit"]
         curr = text.split()[-1] if text.split() else ""
         return [f for f in flags if f.startswith(curr)]
 
@@ -125,9 +93,7 @@ class UpdateShellCommandHandler(BaseShellHandler):
         # Syntaxes must fit the shared 36-col help grid (see _print_help_row);
         # remaining flags stay discoverable via tab-completion and --help.
         return [
-            ("update check [--manifest URL]", "", "Check for available update"),
+            ("update check", "", "Check for available update"),
             ("update history", "", "Show update history"),
-            ("update show [--manifest URL]", "", "Show release manifest"),
-            ("update verify [--manifest URL]", "", "Verify artifact against manifest"),
             ("update install (via CLI only)", "", "Install requires standalone CLI with --yes"),
         ]

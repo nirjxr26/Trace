@@ -12,12 +12,15 @@ def _manifest_json(manifest_path):
     return data
 
 
-def test_check_json_stable_across_cache(signed_release, temp_storage_root):
+def test_check_json_stable_across_cache(signed_release, temp_storage_root, monkeypatch):
+    from trace_core.core.settings import settings
+
     _, manifest_path, _, _ = signed_release()
+    monkeypatch.setattr(settings, "update_manifest", str(manifest_path))
     runner = CliRunner()
-    first = runner.invoke(app, ["update", "check", "--manifest", str(manifest_path), "--output", "json"])
+    first = runner.invoke(app, ["update", "check", "--output", "json"])
     assert first.exit_code == 0
-    second = runner.invoke(app, ["update", "check", "--manifest", str(manifest_path), "--output", "json"])
+    second = runner.invoke(app, ["update", "check", "--output", "json"])
     assert second.exit_code == 0
     assert json.loads(second.output) == json.loads(first.output)
     payload = json.loads(first.output)
@@ -26,18 +29,15 @@ def test_check_json_stable_across_cache(signed_release, temp_storage_root):
     assert payload["installable"] is True
 
 
-def test_verify_failure_exit_code(signed_release):
-    _, manifest_path, art_path, _ = signed_release()
-    art_path.write_bytes(b"tampered")
-    res = CliRunner().invoke(app, ["update", "verify", "--manifest", str(manifest_path), "--artifact", str(art_path)])
-    assert res.exit_code == 11
+def test_policy_deferred_exit_zero(signed_release, temp_storage_root, monkeypatch):
+    from trace_core.core.settings import settings
 
-
-def test_policy_deferred_exit_zero(signed_release):
-    manifest, manifest_path, _, _ = signed_release(minimum_supported_version="9.9.9")
-    res = CliRunner().invoke(app, ["update", "check", "--manifest", str(manifest_path)])
+    _, manifest_path, _, _ = signed_release(minimum_supported_version="9.9.9", notes="reinstall required")
+    monkeypatch.setattr(settings, "update_manifest", str(manifest_path))
+    res = CliRunner().invoke(app, ["update", "check"])
     assert res.exit_code == 0
     assert "deferred" in res.output.lower()
+    assert "reinstall required" in res.output
 
 
 def test_history_json_shape(session_manager, temp_storage_root, monkeypatch):

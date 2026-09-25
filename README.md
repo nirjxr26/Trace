@@ -98,17 +98,32 @@ src/trace_core/
 
 Trace requires **Python 3.12+**.
 
-### Option 1 — Automated Install
+### Option 1 — Automated Install (quiet by default)
 
 **Windows (PowerShell):**
 ```powershell
 irm https://raw.githubusercontent.com/nirjxr26/Trace/main/install.ps1 | iex
 ```
 
-**Linux / macOS (POSIX Shell):**
+**Linux / macOS (POSIX Shell — also works in Git Bash on Windows):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nirjxr26/Trace/main/install.sh | sh
 ```
+
+Default runs show one live green download block (`Downloading Trace vX.Y.Z...` plus a single 20-cell bar counting 0 to 100 percent in real time with no speed or ETA; long steps keep a pulse so it never stalls). Everything else goes to `~/.trace/install.log`. Success ends in two green lines: `Installation complete` plus `Trace vX.Y.Z installed successfully.`. Failures end in `Install failed at '<step>' - see ~/.trace/install.log`.
+
+| Flag | Effect |
+|---|---|
+| *(none)* | Quiet install of `main` (or `TRACE_REF` when set) |
+| `--version <tag>` | Install that release instead |
+| `--list-versions` | List releases; TTY offers pick-and-install |
+| `--reinstall` | Wipe app code first, then install |
+| `--uninstall` | Remove launcher + app + config; keeps storage and database |
+| `--uninstall --purge-data` | Also remove storage; confirms first, prints drop line for Postgres |
+| `--verbose` | Full step-by-step output |
+| `--help` | Usage; exit 0 |
+
+Storage and the database are never touched without `--purge-data`. Details live in `docs/INSTALLER_UX.md`.
 
 The installer validates the Python runtime, clones the repository to `~/.trace/app`, provisions an isolated virtual environment, installs hash-verified dependencies, sets up configuration and local forensic storage, runs schema migrations, and registers the global `trace` command.
 

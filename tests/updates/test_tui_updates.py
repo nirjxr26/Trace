@@ -53,7 +53,7 @@ async def test_updates_tab_check_and_hint(session_manager: DatabaseSessionManage
         await pilot.press("c")
         await pilot.pause()
         detail = _text(app.query_one("#settings-detail", Static))
-        assert "1.5.0 available" in detail
+        assert "1.5.0" in detail
         assert "restart" in detail.lower()
         assert "Update 1.5.0 available" in _text(app.query_one("#hint", Static))
 

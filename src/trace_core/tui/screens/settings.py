@@ -186,9 +186,6 @@ class SettingsView(Vertical):
         body.append("\n")
         if self._extra:
             body.append(f"{sanitize_terminal(self._extra)}\n", style="dim")
-        if self._kind == "available" and self._current and self._prev:
-            # Machine-readable line for scripts; status line above stays human.
-            body.append(f"{self._current} available (current {self._prev}).\n", style="dim")
 
     def _integrity_body(self, body: Text, width: int) -> None:
         from trace_core.audit.service import AuditService
@@ -349,6 +346,8 @@ class SettingsView(Vertical):
             parts.append("Trace will restart to complete this update.")
         if not payload.get("installable") and payload.get("block_reason"):
             parts.append(f"Deferred: {payload['block_reason']}")
+            if payload.get("notes"):
+                parts.append(str(payload["notes"]))
         return prev, current, "available", " ".join(parts)
 
     def _maybe_refresh_hint(self) -> None:
