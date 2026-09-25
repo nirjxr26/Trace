@@ -33,11 +33,11 @@ async def _goto_settings_updates(pilot, app) -> None:  # type: ignore[no-untyped
     app.query_one("#settings-sections", ListView).focus()
     for _ in range(5):
         detail = _text(app.query_one("#settings-detail", Static))
-        if "Previous" in detail and "Status" in detail:
+        if "Current version" in detail:
             return
         await pilot.press("down")
         await pilot.pause()
-    assert "Previous" in _text(app.query_one("#settings-detail", Static))
+    assert "Current version" in _text(app.query_one("#settings-detail", Static))
 
 
 async def test_updates_tab_check_and_hint(session_manager: DatabaseSessionManager, signed_release, monkeypatch) -> None:
@@ -56,6 +56,42 @@ async def test_updates_tab_check_and_hint(session_manager: DatabaseSessionManage
         assert "1.5.0" in detail
         assert "restart" in detail.lower()
         assert "Update 1.5.0 available" in _text(app.query_one("#hint", Static))
+
+
+async def test_updates_card_and_recent_activity(
+    session_manager: DatabaseSessionManager, signed_release, monkeypatch
+) -> None:
+    from textual.widgets import Button, Static
+
+    from trace_core.core.settings import settings
+    from trace_core.tui.app import TraceApp
+    from trace_core.updates.dto import UpdateHistoryCreateDto
+    from trace_core.updates.service import UpdateService
+
+    _, manifest_path, _, _ = signed_release()
+    monkeypatch.setattr(settings, "update_manifest", str(manifest_path))
+    UpdateService(session_manager).record_history(UpdateHistoryCreateDto(from_version="0.2.2", to_version="0.2.3"))
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await _goto_settings_updates(pilot, app)
+        detail = _text(app.query_one("#settings-detail", Static))
+        assert "Current version" in detail
+        assert "[ Update ]" in detail
+        assert "Recent activity" in detail
+        assert "0.2.2" in detail
+        assert app.query_one("#update-apply", Button) is not None
+
+
+async def test_updates_install_guarded_without_update(session_manager: DatabaseSessionManager) -> None:
+    from trace_core.tui.app import TraceApp
+    from trace_core.tui.screens.settings import SettingsView
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await _goto_settings_updates(pilot, app)
+        view = app.query_one(SettingsView)
+        view.run_command("updates-install")
+        await pilot.pause()
 
 
 async def test_updates_tab_no_manifest_configured(session_manager: DatabaseSessionManager, monkeypatch) -> None:

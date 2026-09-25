@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,10 @@ def load_manifest_auto(explicit: str | Path | None, channel: str = "stable") -> 
 
 
 def ensure_artifact_path(
-    manifest: ReleaseManifest, explicit: str | Path | None, manifest_target: str | Path | None = None
+    manifest: ReleaseManifest,
+    explicit: str | Path | None,
+    manifest_target: str | Path | None = None,
+    on_bytes: Callable[[int], None] | None = None,
 ) -> Path:
     """Single source for artifact resolution. Explicit path wins, else auto-select + auto-download."""
     from trace_core.core.fs import check_contained, ensure_dir, sha256_file
@@ -79,7 +83,7 @@ def ensure_artifact_path(
             pass
     base, _ = split_manifest_url(target)
     tmp = check_contained(cache_dir / f"{artifact.filename}.tmp", cache_dir)
-    stream_artifact_to_file(base, artifact.filename, tmp, max(artifact.size + 1, 1_048_576))
+    stream_artifact_to_file(base, artifact.filename, tmp, max(artifact.size + 1, 1_048_576), on_bytes=on_bytes)
     verify_artifact_content(tmp, artifact)
     tmp.replace(dest)
     return dest

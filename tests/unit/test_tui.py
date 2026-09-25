@@ -96,7 +96,7 @@ async def test_tui_pilot_flow(seeded_manager: DatabaseSessionManager) -> None:
         await pilot.press("down")
         await pilot.pause()
         detail = _text(app.query_one("#settings-detail", Static))
-        assert "Previous" in detail and "Status" in detail
+        assert "Current version" in detail
 
         await pilot.press("down")
         await pilot.pause()

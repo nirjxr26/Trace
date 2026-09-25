@@ -8,6 +8,7 @@ from trace_core.updates.gate import ForensicOperationGate, GateDecision, UpdateG
 from trace_core.updates.lock import update_lock
 from trace_core.updates.manifest import ReleaseManifest
 from trace_core.updates.service import UpdateService
+from trace_core.updates.stages import SILENT, ProgressCallback, Stage, StageStatus
 
 
 class UpdateLifecycle:
@@ -117,12 +118,14 @@ class UpdateLifecycle:
         backup_dir: str | Path | None = None,
         allow_minimum_bypass: bool = False,
         preverified_sha256: str | None = None,
+        progress: ProgressCallback | None = None,
     ) -> UpdateHistoryCreateDto:
         from trace_core.core.domain import now_utc
         from trace_core.updates.checker import get_installed_version
         from trace_core.updates.errors import UpdateNotAvailableError, UpdatePolicyBlockedError
         from trace_core.updates.policy import is_update_available
 
+        progress = progress or SILENT
         gate = gate or ForensicOperationGate()
         current = get_installed_version()
         if not is_update_available(current, manifest):
@@ -147,6 +150,7 @@ class UpdateLifecycle:
                     started_at,
                     allow_minimum_bypass,
                     preverified_sha256,
+                    progress,
                 )
             except UpdatePolicyBlockedError:
                 raise
@@ -322,6 +326,7 @@ class UpdateLifecycle:
         started_at: datetime,
         allow_minimum_bypass: bool = False,
         preverified_sha256: str | None = None,
+        progress: ProgressCallback = SILENT,
     ) -> UpdateHistoryCreateDto:
         from trace_core.core.database.health import fetch_db_snapshot
         from trace_core.updates.migration import current_schema_version, run_updater_migration
@@ -375,9 +380,12 @@ class UpdateLifecycle:
             staging_dir = base / "staging" / self.transaction_id
             self.transition(UpdateState.DOWNLOADING)
             staged = self._download_stage(manifest, artifact_path, staging_dir)
+            progress.on_stage(Stage.VERIFY, StageStatus.ACTIVE)
             self._assert_verified_stage(staging_dir, staged, manifest, channel, current, started_at)
+            progress.on_stage(Stage.VERIFY, StageStatus.DONE)
             self.transition(UpdateState.STAGED)
             self.transition(UpdateState.INSTALLING)
+            progress.on_stage(Stage.INSTALL, StageStatus.ACTIVE)
             self._install_stage(staged, base, manifest)
             self._pip_install_stage(staged)
             self.transition(UpdateState.MIGRATING)
@@ -391,6 +399,8 @@ class UpdateLifecycle:
                 backup_waiver=manifest.backup_waiver,
             )
             self.transition(UpdateState.HEALTH_CHECK)
+            progress.on_stage(Stage.INSTALL, StageStatus.DONE)
+            progress.on_stage(Stage.HEALTH, StageStatus.ACTIVE)
             snap = fetch_db_snapshot(self.service.session_manager)
             schema_after: int | None
             try:

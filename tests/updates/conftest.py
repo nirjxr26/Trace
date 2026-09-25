@@ -1,11 +1,30 @@
 import hashlib
 import json
+import threading
+from http.server import HTTPServer
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def serve():
+    servers = []
+
+    def _serve(handler):
+        server = HTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        servers.append(server)
+        return f"http://127.0.0.1:{server.server_port}"
+
+    yield _serve
+    for server in servers:
+        server.shutdown()
+        server.server_close()
 
 
 @pytest.fixture

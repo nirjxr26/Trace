@@ -2471,3 +2471,21 @@ Scope: updates verifier plus checker plus two test files. Root cause from a fiel
 ## 2026-09-25 - v0.2.5 floor policy plus release-time floor assertion
 
 Scope: release workflow plus update spec doc. Since 0.2.3 and 0.2.4 updaters cannot download at all, shipping 2.5 with a lower floor would show those boxes available and let them fail confusingly, so the floor moves to 0.2.5 with bootstrap notes in both the dispatch defaults and the tag-push fallback, and a new workflow step asserts the built manifest carries minimum_supported_version plus notes and fails closed otherwise. Documented the going-forward rule that the floor is always the oldest self-downloading release. Verification: workflow YAML parses with steps ordered generate, assert, sign, verify, publish, and the exact generate plus assert commands were rehearsed locally against a scratch manifest.
+
+---
+
+## 2026-09-25 - v0.2.5 update UX live stages plus shared renderers
+
+Scope: feat/update-ux branch, rendering only, no pipeline logic changed. New updates/stages.py stage model with backend-state mapping plus speed and ETA helpers, byte callback on the artifact stream, and an optional no-op-default progress seam on the lifecycle. New updates/renderers.py with the check card, install summary, and a live display that draws the determinate download bar plus a spinner checklist on TTY and sequential lines when piped. Install orchestration factored into shared load and prepare helpers used by both the Typer command and the TUI worker, and the shell now renders through the same card instead of duplicated strings. TUI Updates tab rebuilt as the spec card with an Update button behind confirm, worker-driven live stages, and recent history rows. Verification: ruff plus mypy clean, full suite 329 passed with the local e2e file skipping cleanly without wheels, and the e2e harness proves all eight scenarios end to end with the sibling fix branch composed in.
+
+---
+
+## 2026-09-25 - v0.2.5 local-only update e2e harness plus gitignore guard
+
+Scope: local verification only, nothing pushed. Built tests/updates/test_update_e2e_local.py driving the real update CLI against fake isolated machines with real venvs and real release wheels: full upgrade, clean min-block, bypass recorded, corrupt rejected, rogue signature stopped pre-stage, incompatible schema rejected, lying-wheel rollback restoring code and pointer. Result 7 passed in about 25 seconds. Added the harness path to .gitignore under local developer scripts so it can never be committed. Surfaced three product findings for later: version-probe stdout parsing versus settings warnings, exit 0 on rollback and recovery-required, and new-code residue after migration-blocked installs.
+
+---
+
+## 2026-09-25 - v0.2.5 probe sentinel plus default-creds e2e
+
+Scope: updates pip backend probe plus one unit test plus one local e2e scenario. The version probe shell-parsed the first stdout token, but settings import logs warnings to stdout on stock installs, so the parsed version was the log date and health failed every update on default-credential boxes. The probe now prints a TRACE_VERSION sentinel and the parser takes that token, immune to any startup noise. Added a default-credentials end-to-end upgrade that fails pre-fix by stash proof and passes post-fix, alongside the existing seven scenarios. Verification: ruff plus mypy clean, local e2e 8 passed, full suite 318 passed with the e2e file skipping cleanly without wheels.

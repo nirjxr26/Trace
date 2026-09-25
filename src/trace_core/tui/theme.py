@@ -76,6 +76,17 @@ def update_status_text(kind: str):  # type: ignore[no-untyped-def]
     return dot_line(True, "Up to date")
 
 
+def stage_line(status: str, label: str):
+    if status == "done":
+        return dot_line(True, label)
+    if status == "failed":
+        return dot_line(False, label)
+    body = Text()
+    body.append("◌ ", style=DOT_INFO)
+    body.append(label)
+    return body
+
+
 def integrity_line(verified: bool):  # type: ignore[no-untyped-def]
     """Single source for Cases/Audit integrity summary. Hashes live in Integrity tab only."""
     return dot_line(verified, "Verified" if verified else "Mismatch")

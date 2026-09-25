@@ -29,6 +29,7 @@ COMMANDS: list[tuple[str, str, str]] = [
     ("audit-export", "Audit: export bundle", "header + JSONL"),
     ("audit-anchor", "Audit: verify with anchor", "tail check"),
     ("database-migrate", "Database: apply migrations", "pending only"),
+    ("updates-install", "Updates: install", "y/N confirm"),
 ]
 
 
@@ -122,6 +123,7 @@ class KeysModal(_BaseModal, ModalScreen[None]):
                 ("e", "export bundle  (Audit)"),
                 ("m", "apply migrations  (Settings · Database)"),
                 ("c", "check updates  (Settings · Updates)"),
+                ("u", "install update  (Settings · Updates)"),
                 ("v", "verify chain  (Settings · Integrity)"),
             ),
         ),

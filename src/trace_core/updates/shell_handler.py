@@ -38,23 +38,14 @@ class UpdateShellCommandHandler(BaseShellHandler):
 
     def _shell_check(self, args: list[str]) -> bool:
         from trace_core.core.cli.error_handler import capture_cli_errors
-        from trace_core.core.ui.renderers import console
         from trace_core.updates.checker import cached_check, resolve_channel, resolve_manifest_target
-        from trace_core.updates.commands import render_check_blocked
+        from trace_core.updates.renderers import render_check_card
 
         _ = args
         with capture_cli_errors("Update Check", exit_on_error=False):
             channel = resolve_channel(None)
             target = resolve_manifest_target(None, channel)
-            payload = cached_check(target, channel)
-            if not payload["available"]:
-                console.print(f"[dim]Up to date ({payload['current']}, {channel}).[/dim]")
-            elif not payload["installable"]:
-                render_check_blocked(payload)
-            else:
-                console.print(
-                    f"[green]Update {payload['target']} available[/green] — current {payload['current']} ({channel})"
-                )
+            render_check_card(cached_check(target, channel), channel)
         return True
 
     def _shell_history(self, args: list[str]) -> bool:
