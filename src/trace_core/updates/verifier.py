@@ -17,10 +17,8 @@ def assert_safe_filename(name: str) -> str:
     return name
 
 
-def verify_artifact(path: Path, artifact: ManifestArtifact) -> None:
+def verify_artifact_content(path: Path, artifact: ManifestArtifact) -> None:
     assert_safe_filename(artifact.filename)
-    if path.name != artifact.filename:
-        raise UpdateVerificationError(f"filename mismatch: {path.name} != {artifact.filename}")
     size = path.stat().st_size
     if size != artifact.size:
         raise UpdateVerificationError(f"size mismatch: {size} != {artifact.size}")
@@ -28,6 +26,13 @@ def verify_artifact(path: Path, artifact: ManifestArtifact) -> None:
     if digest != artifact.sha256:
         raise UpdateVerificationError(f"sha256 mismatch: {digest} != {artifact.sha256}")
     verify_artifact_signature_file(path, artifact.signature, artifact.signing_key_id)
+
+
+def verify_artifact(path: Path, artifact: ManifestArtifact) -> None:
+    assert_safe_filename(artifact.filename)
+    if path.name != artifact.filename:
+        raise UpdateVerificationError(f"filename mismatch: {path.name} != {artifact.filename}")
+    verify_artifact_content(path, artifact)
 
 
 def resolve_artifact(

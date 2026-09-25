@@ -11,11 +11,11 @@ on:
         type: boolean
       min_version:
         description: "Minimum supported version for this release"
-        default: "0.2.3"
+        default: "0.2.5"
         type: string
       notes:
         description: "Migration notes shown when minimum is not met"
-        default: "Blocked on pre-0.2.3? Run: rm -rf ~/.trace/app then reinstall this release. Storage and database are untouched."
+        default: "One manual step is required below 0.2.5. Install this release wheel once with your trace venv python via pip install --force-reinstall --no-deps, or run a fresh install (pre-2.3 boxes remove ~/.trace/app first). Storage and database are untouched; afterwards updates are zero-touch again."
         type: string
 
 permissions:
@@ -64,11 +64,14 @@ jobs:
           MANIFEST_MIN_VERSION: ${{ inputs.min_version }}
           MANIFEST_NOTES: ${{ inputs.notes }}
         run: |
-          MIN_VER="${MANIFEST_MIN_VERSION:-0.2.3}"
+          MIN_VER="${MANIFEST_MIN_VERSION:-0.2.5}"
           if [ -z "$MANIFEST_NOTES" ]; then
-            MANIFEST_NOTES="Blocked on pre-0.2.3? Run: rm -rf ~/.trace/app then reinstall this release. Storage and database are untouched."
+            MANIFEST_NOTES="One manual step is required below 0.2.5. Install this release wheel once with your trace venv python via pip install --force-reinstall --no-deps, or run a fresh install (pre-2.3 boxes remove ~/.trace/app first). Storage and database are untouched; afterwards updates are zero-touch again."
           fi
           python release/make_manifest.py "${GITHUB_REF_NAME}" stable "${GITHUB_REF_NAME}" release-manifest.json --min-version "$MIN_VER" --notes "$MANIFEST_NOTES"
+      - name: Assert update floor (fail closed without min-version + notes)
+        run: |
+          python -c "import json; m=json.load(open('release-manifest.json')); assert m.get('minimum_supported_version'), 'manifest missing minimum_supported_version'; assert m.get('notes'), 'manifest missing migration notes'; print('floor ok:', m['minimum_supported_version'])"
       - name: Sign release (fail closed without key)
         run: python release/sign_release.py release-manifest.json
         env:

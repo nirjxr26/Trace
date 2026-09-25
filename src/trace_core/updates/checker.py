@@ -57,7 +57,7 @@ def ensure_artifact_path(
     from trace_core.updates.errors import UpdateError
     from trace_core.updates.policy import select_artifact
     from trace_core.updates.sources import split_manifest_url, stream_artifact_to_file
-    from trace_core.updates.verifier import verify_artifact
+    from trace_core.updates.verifier import verify_artifact, verify_artifact_content
 
     if explicit:
         return Path(explicit)
@@ -80,7 +80,7 @@ def ensure_artifact_path(
     base, _ = split_manifest_url(target)
     tmp = check_contained(cache_dir / f"{artifact.filename}.tmp", cache_dir)
     stream_artifact_to_file(base, artifact.filename, tmp, max(artifact.size + 1, 1_048_576))
-    verify_artifact(tmp, artifact)
+    verify_artifact_content(tmp, artifact)
     tmp.replace(dest)
     return dest
 

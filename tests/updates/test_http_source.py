@@ -113,3 +113,35 @@ def test_checker_accepts_http_url(serve, manifest_bytes, temp_storage_root):
     res = check_for_update(f"{base}/stable.json", "stable")
     assert res["available"] is True
     assert res["installable"] is True
+
+
+def test_ensure_artifact_path_downloads_fresh_and_verifies(serve, signed_release, temp_storage_root):
+    from trace_core.updates.checker import ensure_artifact_path
+    from trace_core.updates.manifest import load_manifest_bytes
+
+    manifest, _, _, artifact_bytes = signed_release()
+    body = manifest.model_dump_json(by_alias=True).encode()
+    filename = manifest.artifacts["default"].filename
+    routes = {"/stable.json": body, f"/{filename}": artifact_bytes}
+
+    class _R(BaseHTTPRequestHandler):
+        def do_GET(self):
+            raw = routes.get(self.path)
+            if raw is None:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *a):
+            pass
+
+    base = serve(_R)
+    target = f"{base}/stable.json"
+    dest = ensure_artifact_path(load_manifest_bytes(body), None, target)
+    assert dest.name == filename
+    assert dest.read_bytes() == artifact_bytes
