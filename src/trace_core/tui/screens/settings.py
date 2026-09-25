@@ -215,14 +215,14 @@ class SettingsView(Vertical):
             if self._extra:
                 body.append(f"{sanitize_terminal(self._extra)}\n", style="dim")
             return
-        rule = "─" * max(20, min(60, int(width or 60) - 2))
+        rule = "─" * max(20, min(66, int(width or 60) - 2))
         body.append(Text(rule + "\n", style=THEME_TOKENS["border"]))
         body.append("Update available\n")
         body.append(f"{current}\n")
         body.append("\nNew version available.\n", style="dim")
         if self._extra:
             body.append(f"{sanitize_terminal(self._extra)}\n", style="dim")
-        body.append("\n[ Update ]  (press u)\n")
+        body.append("\nPress u or pick Update below to install.\n")
         body.append(Text(rule + "\n", style=THEME_TOKENS["border"]))
         body.append("\nRecent activity\n", style="#72B7D3")
         self._recent_lines(body)
@@ -441,7 +441,7 @@ class SettingsView(Vertical):
         if not payload["available"]:
             return
         try:
-            self.app.query_one("#hint", Static).update(f"● Update {payload['target']} available")
+            self.app.query_one("#hint", Static).update(f"↑ Update {payload['target']} available")
         except Exception:
             pass
 
@@ -573,6 +573,12 @@ class SettingsView(Vertical):
         if old != new:
             self._paint_item(old, False)
             self._paint_item(new, True)
+            try:
+                from trace_core.tui.app import TAB_HINTS
+
+                self.app.query_one("#hint", Static).update(TAB_HINTS["settings"])
+            except Exception:
+                pass
         self._render_detail()
 
     @on(ListView.Selected)

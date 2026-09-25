@@ -17,6 +17,9 @@ def test_filter_completions_prefix_substring_fuzzy_limit() -> None:
     assert filter_completions(cands, "au", limit=8)[0][0] == "audit"
     # fuzzy: "cs" matches "case" (c...s)
     assert any(c[0] == "case" for c in filter_completions(cands, "cs", limit=8))
+    # transposed typo falls back behind exact ranks but still resolves
+    assert filter_completions([("update", ""), ("audit", "")], "udpate", limit=8)[0][0] == "update"
+    assert filter_completions([("update", "")], "update", limit=8)[0][0] == "update"
     # limit
     many = [(f"case{i}", "") for i in range(20)]
     assert len(filter_completions(many, "", limit=8)) == 8

@@ -162,10 +162,11 @@ class TextInputModal(_BaseModal, ModalScreen[str | None]):
     #text-box Button { border: round $panel; min-width: 16; height: 3; }
     """
 
-    def __init__(self, title: str, placeholder: str = "") -> None:
+    def __init__(self, title: str, placeholder: str = "", required: bool = False) -> None:
         super().__init__()
-        self._title = title
+        self._title = title if not required else f"{title} *"
         self._placeholder = placeholder
+        self._required = required
 
     def compose(self) -> ComposeResult:
         with Vertical(id="text-box"):
@@ -182,6 +183,9 @@ class TextInputModal(_BaseModal, ModalScreen[str | None]):
     @on(Input.Submitted)
     def _ok(self) -> None:
         value = self.query_one("#text-input", Input).value.strip()
+        if self._required and not value:
+            self.app.notify("A value is required.", severity="warning")
+            return
         self.dismiss(value or None)
 
     @on(Button.Pressed, "#cancel")

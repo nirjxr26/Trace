@@ -124,7 +124,7 @@ def test_install_summary_hides_trust_details(capsys, signed_release):
     out = capsys.readouterr().out
     assert "Product: trace" in out
     assert "Current: v0.2.3" in out
-    assert "Security: Verified" in out
+    assert "Signature: Verified" in out
     assert "TRUSTED" not in out
     assert "sha256" not in out.lower()
     assert manifest.signing_key_id not in out

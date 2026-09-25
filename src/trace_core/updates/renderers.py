@@ -45,6 +45,7 @@ def render_check_blocked(payload: dict) -> None:
     console.print(f"[yellow]Update {payload['target']} available but deferred: {payload['block_reason']}[/yellow]")
     if payload.get("notes"):
         console.print(payload["notes"])
+    console.print("[dim]See `trace update history` for past attempts.[/dim]")
 
 
 def render_check_card(payload: dict, channel: str) -> None:
@@ -61,14 +62,16 @@ def render_check_card(payload: dict, channel: str) -> None:
         render_check_blocked(payload)
         return
     console.print(f"[green]Update {payload['target']} available[/green] — current {payload['current']} ({channel})")
+    console.print("[dim]Run `trace update install` to update.[/dim]")
 
 
 def render_install_summary(manifest: ReleaseManifest, current: str, bypass_note: str) -> None:
+    console.print("")
     console.print("Update available")
     console.print(f"Product: {manifest.product}")
     console.print(f"Current: v{current}")
     console.print(f"Target:  v{manifest.version}")
-    console.print("Security: Verified")
+    console.print("Signature: Verified")
     if manifest.restart_required:
         console.print("Restart: Required")
     if bypass_note:
@@ -89,8 +92,9 @@ class UpdateProgressDisplay(ProgressCallback):
         self._last_draw = 0.0
 
     def begin_update(self) -> None:
+        console.print("")
         console.print(f"Updating {self.product} v{self.current} → v{self.target}")
-        console.print()
+        console.print("")
         if self.tty:
             self._live = Live(self._frame(), console=console, transient=False, refresh_per_second=4)
             self._live.start()
@@ -125,10 +129,11 @@ class UpdateProgressDisplay(ProgressCallback):
                 self.statuses[stage] = StageStatus.DONE
             self._stop()
             console.print(self._frame())
-            console.print()
+            console.print("")
             console.print("Trace updated successfully.")
-            console.print()
+            console.print("")
             console.print(f"v{dto.from_version} → v{dto.to_version}")
+            console.print("[dim]Run `trace case list` to resume work.[/dim]")
             return
         if dto.rollback:
             self.statuses[Stage.DOWNLOAD] = StageStatus.DONE
@@ -136,9 +141,9 @@ class UpdateProgressDisplay(ProgressCallback):
             self.statuses[Stage.INSTALL] = StageStatus.FAILED
             self._stop()
             console.print(self._frame())
-            console.print()
+            console.print("")
             console.print("The update was rolled back.")
-            console.print()
+            console.print("")
             console.print(f"Current version: v{current}")
             return
         failed_stage = _FAILED_STAGE.get(str(dto.failure_stage or ""))
@@ -147,13 +152,13 @@ class UpdateProgressDisplay(ProgressCallback):
         self._stop()
         if any(status != StageStatus.PENDING for status in self.statuses.values()):
             console.print(self._frame())
-            console.print()
+            console.print("")
         console.print("[red]✕ Update failed[/red]")
-        console.print()
+        console.print("")
         console.print(dto.failure_reason or "Update did not complete.")
-        console.print()
+        console.print("")
         console.print(f"Current version: v{current}")
-        console.print()
+        console.print("")
         console.print("Run `trace update history` for details.")
 
     def _stage_line(self, stage: Stage, status: StageStatus) -> str:

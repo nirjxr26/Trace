@@ -76,7 +76,7 @@ async def test_updates_card_and_recent_activity(
         await _goto_settings_updates(pilot, app)
         detail = _text(app.query_one("#settings-detail", Static))
         assert "Current version" in detail
-        assert "[ Update ]" in detail
+        assert "Press u or pick Update below to install." in detail
         assert "Recent activity" in detail
         assert "0.2.2" in detail
         assert app.query_one("#update-apply", Button) is not None

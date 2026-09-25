@@ -17,7 +17,7 @@ from trace_core.core.errors import ApplicationError
 from trace_core.core.ui.renderers import format_india_datetime, sanitize_terminal
 from trace_core.tui.actions import run_guarded
 from trace_core.tui.forms import CaseForm, RawModal, TextInputModal, TypedConfirmModal, YesNoModal
-from trace_core.tui.theme import STATUS_COLORS, THEME_TOKENS, status_text
+from trace_core.tui.theme import STATUS_COLORS, THEME_TOKENS, status_text, table_head_text
 from trace_core.tui.widgets import DossierScroll
 
 TABLE_ID = "case-table"
@@ -101,6 +101,9 @@ class CasesView(Vertical):
         except Exception:
             pass
         self._last_cursor = table.cursor_row if table.cursor_row is not None else 0
+        self.query_one(f"#{CASE_HEADER_ID}", Static).update(
+            f"{table_head_text(list(TABLE_COLUMNS))}  · {len(self._cases)}"
+        )
         self._render_dossier()
 
     def _row_cells(self, case: CaseResponseDto, selected: bool) -> list:  # type: ignore[no-untyped-def]
@@ -130,7 +133,10 @@ class CasesView(Vertical):
 
         case = self._selected()
         if case is None:
-            self.query_one("#case-dossier", Static).update(Text("No cases found", style="dim"))
+            if not self._cases:
+                self.query_one("#case-dossier", Static).update(Text("No cases found — press c to create.", style="dim"))
+            else:
+                self.query_one("#case-dossier", Static).update(Text("Select a case…", style="dim"))
             return
         events = self._dossier_events(case)
         rule = self.query_one("#cases-right", DossierScroll).divider()
@@ -348,7 +354,7 @@ class CasesView(Vertical):
             self.app.notify(_NO_SELECTION, severity="warning")
             return
         self.app.push_screen(
-            TextInputModal("Reason for sealing (required)", "why is this case closed?"),
+            TextInputModal("Reason for sealing", "why is this case closed?", required=True),
             lambda reason: self._seal_reason(case.number, reason),
         )
 

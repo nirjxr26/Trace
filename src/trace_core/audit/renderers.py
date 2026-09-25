@@ -359,10 +359,11 @@ def _render_valid(res: VerifyResultDto, anchor: str | None = None) -> None:
     console.print("[dim]Tip: export with `audit export --out bundle.jsonl` to preserve chain.[/dim]")
     if res.events_verified > 0 and not res.sequence_gaps:
         console.print(
-            "[dim]Note: Tail truncation (deleting last seq) is not detectable without external anchor — export header stores last_seq/last_chain for manual compare.[/dim]\n"
+            "[dim]Note: Tail truncation (deleting last seq) is not detectable without external anchor — export header stores last_seq/last_chain for manual compare.[/dim]"
         )
+        console.print("")
     else:
-        console.print()
+        console.print("")
 
 
 def _render_tamper(res: VerifyResultDto) -> None:

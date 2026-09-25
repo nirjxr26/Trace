@@ -290,12 +290,12 @@ def test_cli_db_commands(monkeypatch: pytest.MonkeyPatch, session_manager: Datab
     # db migrate (already migrated)
     migrate_res = runner.invoke(app, ["db", "migrate"])
     assert migrate_res.exit_code == 0
-    assert "already up to date" in migrate_res.output.lower()
+    assert "up to date" in migrate_res.output.lower()
 
     # db init
     init_res = runner.invoke(app, ["db", "init"])
     assert init_res.exit_code == 0
-    assert "initialized successfully" in init_res.output.lower()
+    assert "database schema initialized" in init_res.output.lower()
 
 
 def test_snapshot_shows_checked_database_url(tmp_path) -> None:  # type: ignore[no-untyped-def]

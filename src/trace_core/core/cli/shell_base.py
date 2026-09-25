@@ -12,6 +12,6 @@ class BaseShellHandler(ShellCommandHandler):
         """Render `Unknown <Resource> Action` card. Callers pass their exact message to preserve UX."""
         from trace_core.core.ui.renderers import render_error_card
 
-        msg = detail if detail is not None else f"Action '{action}' not valid. Try 'help'."
+        msg = detail if detail is not None else f"Action '{action}' not valid. Try `help`."
         render_error_card(f"Unknown {self.resource} Action", msg)
         return False

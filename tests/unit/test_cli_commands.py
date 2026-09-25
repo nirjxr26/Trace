@@ -44,7 +44,7 @@ def test_cli_case_crud_flow() -> None:
         ],
     )
     assert res.exit_code == 0
-    assert "Case '2026-CLI-0001' created successfully!" in res.stdout
+    assert "Case '2026-CLI-0001' created." in res.stdout
 
     # 2. List cases
     res_list = runner.invoke(app, ["case", "list"])
@@ -64,22 +64,22 @@ def test_cli_case_crud_flow() -> None:
     # 5. Edit case
     res_edit = runner.invoke(app, ["case", "edit", "2026-CLI-0001", "--notes", "Automated edit note"])
     assert res_edit.exit_code == 0
-    assert "updated successfully" in res_edit.stdout
+    assert "Case '2026-CLI-0001' updated." in res_edit.stdout
 
     # 6. Close case
     res_close = runner.invoke(app, ["case", "close", "2026-CLI-0001", "--reason", "CLI flow done", "--yes"])
     assert res_close.exit_code == 0
-    assert "CLOSED" in res_close.stdout
+    assert "Case '2026-CLI-0001' closed permanently." in res_close.stdout
 
     # 7. Soft delete (archive) case
     res_archive = runner.invoke(app, ["case", "delete", "2026-CLI-0001", "--yes"])
     assert res_archive.exit_code == 0
-    assert "archive/soft-deleted" in res_archive.stdout
+    assert "Case '2026-CLI-0001' archived." in res_archive.stdout
 
     # 8. Permanent purge of archived case
     res_del = runner.invoke(app, ["case", "delete", "2026-CLI-0001", "--purge", "--yes"])
     assert res_del.exit_code == 0
-    assert "PERMANENTLY PURGEd" in res_del.stdout
+    assert "Case '2026-CLI-0001' purged permanently." in res_del.stdout
 
     # 9. Querying non-existent case exits with NOT_FOUND
     res_missing = runner.invoke(app, ["case", "show", "NON-EXISTENT-CASE"])
