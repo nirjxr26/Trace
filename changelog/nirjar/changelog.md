@@ -2459,3 +2459,9 @@ Scope: same release/v0.2.4 branch. Deleted update show and update verify command
 ## 2026-09-25 - v0.2.4 rename ps1 helpers to approved verbs
 
 Scope: install.ps1 only, renames with zero behavior change. Say-Trace becomes Write-Trace and Fail-Install becomes Stop-TraceInstall, clearing the two PSScriptAnalyzer PSUseApprovedVerbs findings. Every other helper verb already resolves from the approved list, confirmed with Get-Verb. Verification: ParseFile 0 errors, no stale references.
+
+---
+
+## 2026-09-25 - v0.2.4 fix fresh-download filename verification failure
+
+Scope: updates verifier plus checker plus two test files. Root cause from a field report on a fresh box: ensure_artifact_path verifies the staged download at its dot-tmp path with the name-strict verify_artifact, which always raises filename mismatch, so every fresh HTTP download failed closed and only cache-hit or sibling paths ever worked. Split verify_artifact into the name check plus a new verify_artifact_content covering safe name, size, sha256, and Ed25519 signature, and switched the staging-tmp call to the content check before the atomic rename to the exact manifest filename. No trust downgrade: tmp stays in the contained cache dir and bytes must fully verify before promotion, while final and explicit paths keep the strict name check. Tests: staged tmp passes content check, tampered tmp rejected, strict mismatch preserved, plus an end-to-end fresh HTTP download through ensure_artifact_path that fails pre-fix by construction. Verification: ruff plus mypy clean, pytest 317 passed 3 skipped coverage over 70 percent.
