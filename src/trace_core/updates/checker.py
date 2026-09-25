@@ -27,7 +27,7 @@ def resolve_manifest_target(explicit: str | Path | None, channel: str = "stable"
     target = default_manifest_target()
     if target:
         return target
-    raise UpdateError("no update manifest configured (pass --manifest or set TRACE_UPDATE_MANIFEST)")
+    raise UpdateError("no update manifest configured (set TRACE_UPDATE_MANIFEST)")
 
 
 def resolve_channel(explicit: str | None) -> str:
@@ -154,6 +154,7 @@ def _cached_check_http(key: str, channel: str, cached: dict[str, Any] | None) ->
         "security_update": manifest.security_update,
         "minimum_supported_version": manifest.minimum_supported_version,
         "restart_required": manifest.restart_required,
+        "notes": manifest.notes,
     }
     check_cache.write_check_cache(
         {
@@ -179,6 +180,7 @@ def _payload_from_check(res: dict[str, Any]) -> dict[str, Any]:
         "security_update": m.security_update,
         "minimum_supported_version": m.minimum_supported_version,
         "restart_required": m.restart_required,
+        "notes": m.notes,
     }
 
 

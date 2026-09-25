@@ -2399,3 +2399,63 @@ Scope: permanent fix for uninstallable releases and pointer-without-code updates
 ## 2026-09-24 - Pip backend reuse pass
 
 Scope: reusability iteration over the new pip code, no behavior change. Consolidated duplicate subprocess handling into _run_quiet, made venv detection public and single-sourced, dropped the unused manifest parameter from layout checks, and moved the version-proof health rule into pip_health so the lifecycle stays orchestration-only and tests no longer need lifecycle instances or temp install trees. Verification: ruff plus mypy clean, targeted suites green.
+
+---
+
+## 2026-09-24 - Zero-touch update spec (docs only, no code)
+
+Scope: design doc per request, no code changed. Wrote docs/UPDATE_ZERO_TOUCH.md: the guaranteed flow, why the pre-0.2.3 base needs exactly one in-flow step (bootstrap paradox), the hollow-update trap traced through old lifecycle code (pointer flips without code swap, then Up to date lies forever), the v0.2.4 fix (manifest min-version plus notes inputs, existing enforcement matrix, bypass stays explicit), steady-state pip pipeline recap, full reusable-code inventory mapping every behavior to existing machinery, implementation plan, acceptance list.
+
+---
+
+## 2026-09-25 - v0.2.4 zero-touch manifest plus quiet green installers
+
+Scope: release/v0.2.4 branch cut from main. Zero-touch: release/make_manifest.py takes --min-version/--notes plus TRACE_MANIFEST_MIN_VERSION/TRACE_MANIFEST_NOTES envs, omits keys when absent to preserve output; .github/workflows/release.yml adds min_version/notes dispatch inputs defaulting to 0.2.3 plus migration notes and forwards them; tests/unit/test_release_manifest.py covers flags, env, and absent-preserves. Version triple bumped to 0.2.4 across pyproject, trace_core __init__, and settings. Installer UX: install.sh (POSIX) and install.ps1 (native) share quiet green 20-cell download blocks with percent and no speed/ETA, verifying/installing check stages, and footer guides with version proof, next step, log path, and kept paths; flags --version/--list-versions/--reinstall/--uninstall/--purge-data/--verbose/--help with wipe table per spec; log file ~/.trace/install.log; failures end in failure block with log path. README install section matches new flow. Verification: ruff format/check clean, mypy clean, pytest 315 passed 3 skipped coverage 75.65%.
+
+---
+
+## 2026-09-25 - v0.2.4 installer single-block trim
+
+Scope: same release/v0.2.4 branch. Installers now print a single green 100 percent download block instead of one per phase, and success is two green lines only: Installation complete plus Trace vX installed successfully. Removed live trace --version proof run (kills the shipped-default-credentials warning leak), Next/Log/Kept footers, and per-phase labels/speed/ETA in both install.sh and install.ps1 with shared layout. README matches. Verification: ps1 ParseFile 0 errors, pytest 315 passed 3 skipped coverage 75.56 percent.
+
+---
+
+## 2026-09-25 - v0.2.4 installer live single bar
+
+Scope: same release/v0.2.4 branch. Replaced final-only 100 percent block with one live green 20-cell bar that redraws in place per completed phase (sh printf carriage return, ps1 Write-Host NoNewline carriage return, shared width/color/percent math), header printed once, piped runs still print a single final plain block with no control chars, verbose stays detail-only. Success stays two lines. Verification: ps1 ParseFile 0 errors, ruff plus mypy clean, pytest 315 passed 3 skipped coverage 75.56 percent.
+
+---
+
+## 2026-09-25 - v0.2.4 installer smooth live 0-100 bar
+
+Scope: same release/v0.2.4 branch. Replaced per-phase jumping bar with one live green 20-cell bar that counts every number 0 to 100: phase boundaries sweep fast at 50ms per number, long commands run in background while the foreground ticks 1 percent per second toward the phase floor then pulses a spinner frame at the floor so it never stalls. Shared reusable design in both scripts with platform-idiomatic code: sh trace_bar_for plus trace_draw plus trace_to plus trace_spin plus trace_run_live with EXIT trap, ps1 Show-Bar plus Show-Spin plus Step-To plus Invoke-LiveCommand over Start-Job with try-finally cleanup. Piped runs still print one plain final block, verbose stays detail-only, success stays two lines. Verification: ps1 ParseFile 0 errors, ruff plus mypy clean, pytest 315 passed 3 skipped coverage 75.56 percent.
+
+---
+
+## 2026-09-25 - v0.2.4 fix ps1 live-command job failures
+
+Scope: same release/v0.2.4 branch, install.ps1 only. Fixed two real bugs behind Install failed at dependencies with a frozen bar: renamed Invoke-LoggedCommand and Invoke-LiveCommand parameter Args to ActionArgs because the automatic dollar-Args variable silently discards the bound value, and the Start-Job wrapper now captures the caller directory and runs Set-Location inside the job because jobs start in the home directory, which broke the relative requirements.txt path. Job-passed scriptblocks are recompiled with scriptblock-Create inside the job because the deserialized form cannot be invoked with call-operator directly. Both failure paths now print the last 12 install.log lines after the failure block, mirrored in install.sh trace_fail. Verification: ps1 ParseFile 0 errors, file-based job probes for arg passing, CWD handling, and nonzero-exit detection all green. Python untouched since the last full gate of 315 passed 3 skipped at 75.56 percent.
+
+---
+
+## 2026-09-25 - v0.2.4 install.sh Windows Git Bash venv paths
+
+Scope: same release/v0.2.4 branch, install.sh only. Root cause from the posted log was Windows Python receiving an MSYS POSIX venv path, so the venv landed in the wrong place and bin/python never existed. Added uname-based Windows detection plus a cygpath helper that converts only the venv creation target, and a resolver that picks Scripts/python.exe and Scripts/trace.exe on Windows layouts while keeping bin layouts elsewhere, reused for venv creation, doctor, and the launcher shim. Verification: bash minus-n clean under Git Bash, uname and cygpath conversion probed live, resolver probed against Windows, POSIX, and empty trees. Python untouched since the last full gate of 315 passed 3 skipped at 75.56 percent.
+
+---
+
+## 2026-09-25 - v0.2.4 reuse pass over new installer and manifest code
+
+Scope: same release/v0.2.4 branch, no behavior change except one safer failure. make_manifest.py collapses the two argv passes into one _parse_manifest_args single pass with a single option-name table, which also turns a dangling trailing flag from a silent drop into a usage error, locked by a new test. install.ps1 gains Get-TraceBar shared by Show-Bar and Show-Spin, Write-TempLog shared by both command runners, and Step-One shared by Step-To and the live poll loop. install.sh gains trace_step shared by trace_to and the live loop and trace_collect_tmp shared by trace_run and trace_run_live. Tests gain a _read_manifest reader used by all four content assertions. Verification: ruff plus mypy clean, bash minus-n and ps1 ParseFile clean, pytest 316 passed 3 skipped coverage 75.56 percent.
+
+---
+
+## 2026-09-25 - v0.2.4 update UI cut to check-install-history
+
+Scope: same release/v0.2.4 branch. Deleted update show and update verify commands plus the shell mirror, dropped minus-minus-channel everywhere and minus-minus-offset from history, trimmed the install summary to Product, Current, Target, Security, Restart, and Override, folded migration notes into the deferred check message shared by CLI and shell through render_check_blocked, and removed the duplicate TUI status line while adding notes to the TUI deferred text. Backend pipeline untouched. Check payloads now carry notes. Check tests moved from the removed minus-minus-manifest flag to settings override, matching the existing TUI test pattern. Verification: ruff plus mypy clean, pytest 314 passed 3 skipped coverage over 70 percent, update help lists exactly three commands.
+
+---
+
+## 2026-09-25 - v0.2.4 rename ps1 helpers to approved verbs
+
+Scope: install.ps1 only, renames with zero behavior change. Say-Trace becomes Write-Trace and Fail-Install becomes Stop-TraceInstall, clearing the two PSScriptAnalyzer PSUseApprovedVerbs findings. Every other helper verb already resolves from the approved list, confirmed with Get-Verb. Verification: ParseFile 0 errors, no stale references.

@@ -2,7 +2,7 @@ import pytest
 
 from trace_core.updates.domain import UpdateChannel
 from trace_core.updates.gate import ForensicOperationGate, GateDecision
-from trace_core.updates.policy import _parse_version, is_installable, is_update_available, security_label
+from trace_core.updates.policy import _parse_version, is_installable, is_update_available
 
 
 def test_version_ordering():
@@ -49,14 +49,6 @@ def test_gate_unknown_fails_closed():
             return GateDecision.UNKNOWN
 
     assert UnknownGate().can_install_update() == GateDecision.UNKNOWN
-
-
-def test_security_label_deterministic(signed_release):
-    manifest, _, _, _ = signed_release(security_update=True, minimum_supported_version="1.4.0")
-    label = security_label(manifest)
-    assert label == "Security update — minimum supported version: 1.4.0"
-    plain, _, _, _ = signed_release()
-    assert security_label(plain) is None
 
 
 def test_channels_are_enum():

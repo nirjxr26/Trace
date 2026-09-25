@@ -9,6 +9,14 @@ on:
         description: "Validate without publishing"
         default: true
         type: boolean
+      min_version:
+        description: "Minimum supported version for this release"
+        default: "0.2.3"
+        type: string
+      notes:
+        description: "Migration notes shown when minimum is not met"
+        default: "Blocked on pre-0.2.3? Run: rm -rf ~/.trace/app then reinstall this release. Storage and database are untouched."
+        type: string
 
 permissions:
   contents: write
@@ -52,7 +60,15 @@ jobs:
       - run: cyclonedx-py requirements requirements.txt -o sbom.json
       - run: sha256sum dist/* sbom.json > SHA256SUMS
       - name: Generate manifest
-        run: python release/make_manifest.py "${GITHUB_REF_NAME}" stable "${GITHUB_REF_NAME}" release-manifest.json
+        env:
+          MANIFEST_MIN_VERSION: ${{ inputs.min_version }}
+          MANIFEST_NOTES: ${{ inputs.notes }}
+        run: |
+          MIN_VER="${MANIFEST_MIN_VERSION:-0.2.3}"
+          if [ -z "$MANIFEST_NOTES" ]; then
+            MANIFEST_NOTES="Blocked on pre-0.2.3? Run: rm -rf ~/.trace/app then reinstall this release. Storage and database are untouched."
+          fi
+          python release/make_manifest.py "${GITHUB_REF_NAME}" stable "${GITHUB_REF_NAME}" release-manifest.json --min-version "$MIN_VER" --notes "$MANIFEST_NOTES"
       - name: Sign release (fail closed without key)
         run: python release/sign_release.py release-manifest.json
         env:

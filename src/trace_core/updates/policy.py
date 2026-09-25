@@ -57,14 +57,6 @@ def minimum_bypass_note(current: str, manifest: ReleaseManifest) -> str | None:
     return None
 
 
-def security_label(manifest: ReleaseManifest) -> str | None:
-    if not manifest.security_update:
-        return None
-    if manifest.minimum_supported_version:
-        return f"Security update — minimum supported version: {manifest.minimum_supported_version}"
-    return "Security update"
-
-
 def _current_platform() -> tuple[str, str]:
     from trace_core.core.domain import strip_controls
 
