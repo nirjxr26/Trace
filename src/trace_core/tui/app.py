@@ -55,7 +55,6 @@ class TraceApp(App[None]):
     #case-search, #audit-search { border: round $panel; margin-bottom: 1; background: transparent; }
     #case-search:focus, #audit-search:focus { background: transparent; background-tint: transparent; }
     #audit-scope { height: 1; color: $muted; }
-    #integrity-scroll, #database-scroll { height: 1fr; }
     VerticalScroll { scrollbar-size: 1 1; }
     * { scrollbar-background: transparent; scrollbar-color: $panel; scrollbar-corner-color: transparent; }
     .card {

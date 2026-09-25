@@ -97,6 +97,6 @@ def _recover() -> None:
             return
     if snap.pending:
         console.print(f"[yellow]{len(snap.pending)} pending migration(s).[/yellow]")
-        console.print("Run 'trace db migrate' to apply.")
+        console.print("Run `trace db migrate` to apply.")
     else:
-        console.print("[green]No recovery needed. Database up to date.[/green]")
+        console.print("[green]No recovery needed — up to date.[/green]")

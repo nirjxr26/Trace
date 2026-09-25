@@ -220,7 +220,7 @@ def render_case_detail(case: CaseResponseDto, events: list[Any] | None = None) -
             continue
         render_section_title(section_title)
         console.print("")
-        console.print(Text(f"    {sanitize_terminal(section_body.strip())}", style=TOK["value"]))
+        console.print(Text(f"  {sanitize_terminal(section_body.strip())}", style=TOK["value"]))
         console.print(divider)
         console.print("")
 

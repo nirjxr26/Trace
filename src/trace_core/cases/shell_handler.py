@@ -43,14 +43,14 @@ CASE_ACTIONS = [
 CASE_FLAGS = [
     ("--status", "Filter by case status"),
     ("--search", "Search title/examiner/notes"),
-    ("--output", "Output format (table/json)"),
+    ("--output", "table|json"),
     ("--all", "Include deleted cases"),
     ("--limit", "Max rows"),
     ("--offset", "Skip rows"),
     ("--recent", "5 most recently updated"),
     ("-s", "Filter by status"),
     ("-q", "Search query"),
-    ("-o", "Output format"),
+    ("-o", "table|json"),
     ("-a", "Include deleted cases"),
 ]
 
@@ -84,7 +84,9 @@ _CASE_VALUE_FLAGS = (
     "--tags",
 )
 
-_ACTION_CANCELLED = "\n[dim]Action cancelled.[/dim]\n"
+
+def print_cancelled(action: str) -> None:
+    console.print(f"\n[dim]{action} cancelled.[/dim]\n")
 
 
 def _sync_active_case(ctx: ShellContext, case: Any) -> None:
@@ -332,11 +334,11 @@ class CaseShellCommandHandler(BaseShellHandler):
     def _interactive_create_case(self, service: CaseService, ctx: ShellContext) -> None:
         render_wizard_header("New Case", "fields marked * are required")
 
-        title = prompt_required("* Title            ", "Case title cannot be empty.")
-        examiner = prompt_required("* Lead Examiner    ", "Lead examiner cannot be empty.")
+        title = prompt_required("* Title", "Case title cannot be empty.")
+        examiner = prompt_required("* Lead Examiner", "Lead examiner cannot be empty.")
 
-        number = prompt_optional("Case Number        ", hint="auto-generated if left blank")
-        description = prompt_optional("Description        ", hint="optional")
+        number = prompt_optional("Case Number", hint="auto-generated if left blank")
+        description = prompt_optional("Description", hint="optional")
         # tag autosuggest from existing taxonomy
         try:
             existing = sorted({t for c in service.list_cases() for t in c.tags})[:10]
@@ -344,7 +346,7 @@ class CaseShellCommandHandler(BaseShellHandler):
                 console.print(f"  [dim]Existing tags: {escape(', '.join(existing))}[/dim]")
         except Exception:
             pass
-        tags_raw = prompt_optional("Tags               ", hint="comma-separated, optional")
+        tags_raw = prompt_optional("Tags", hint="comma-separated, optional")
 
         tags = parse_tags(tags_raw) or []
 
@@ -363,7 +365,7 @@ class CaseShellCommandHandler(BaseShellHandler):
         ):
             created = service.create_case(dto)
             ctx.active_case = created
-            render_success(f"Case {created.number} created and set as active")
+            render_success(f"Case '{created.number}' created and set as active.")
             render_case_detail(created)
 
     def _interactive_list_cases(
@@ -380,7 +382,7 @@ class CaseShellCommandHandler(BaseShellHandler):
         ident = self._resolve_or_prompt_identifier(sub_args, ctx)
 
         with capture_cli_errors(
-            "Show Case", exit_on_error=False, default_remediation="Use 'case list' to inspect available cases."
+            "Show Case", exit_on_error=False, default_remediation="Use `case list` to inspect available cases."
         ):
             from trace_core.audit.helpers import fetch_case_with_history
 
@@ -409,7 +411,7 @@ class CaseShellCommandHandler(BaseShellHandler):
                 f"  [{THEME_TOKENS['label']}]Tags (comma-separated)[/{THEME_TOKENS['label']}]",
                 default=", ".join(case.tags) if case.tags else "",
             )
-            reason = prompt_optional("Reason             ", hint="why, optional")
+            reason = prompt_optional("Reason", hint="why, optional")
 
             # Clear rules: required fields keep current on blank; optionals clear to "".
             # (The service treats None and "" as the same empty and stores None,
@@ -447,7 +449,7 @@ class CaseShellCommandHandler(BaseShellHandler):
             for k in changed:
                 console.print(f'  {k}: "{format_change_value(before[k])}" → "{format_change_value(after_vals[k])}"')
             if not prompt_confirm("Apply these changes?"):
-                console.print(_ACTION_CANCELLED)
+                print_cancelled("Edit")
                 return
 
             dto = CaseUpdateDto(
@@ -459,7 +461,7 @@ class CaseShellCommandHandler(BaseShellHandler):
             )
             updated = service.update_case(ident, dto, reason=reason)
             _sync_active_case(ctx, updated)
-            render_success(f"Case '{updated.number}' updated successfully!")
+            render_success(f"Case '{updated.number}' updated.")
             render_case_detail(updated)
 
     def _confirm_typed(self, ident: str, action: str) -> bool:
@@ -476,14 +478,14 @@ class CaseShellCommandHandler(BaseShellHandler):
         if not self._confirm_typed(ident, "close"):
             return
 
-        reason = prompt_required("Reason             ", "A closure reason is required to seal a case.")
-        closed_by = prompt_optional("Closed By          ", hint="examiner name, optional")
+        reason = prompt_required("Reason", "A closure reason is required to seal a case.")
+        closed_by = prompt_optional("Closed By", hint="examiner name, optional")
         with capture_cli_errors("Close Case", exit_on_error=False):
             from trace_core.audit.anchor import describe_anchor
 
             closed = service.close_case(ident, reason=reason, closed_by=closed_by)
             _sync_active_case(ctx, closed)
-            render_success(f"Case {closed.number} permanently closed.")
+            render_success(f"Case '{closed.number}' closed permanently.")
             line = describe_anchor(service.session_manager, closed.number)
             if line is not None:
                 console.print(f"[dim]{escape(line)}[/dim]")
@@ -500,32 +502,30 @@ class CaseShellCommandHandler(BaseShellHandler):
             console.print(f"  [{THEME_TOKENS['danger']}]{warn_icon} Purge is irreversible![/{THEME_TOKENS['danger']}]")
             if not self._confirm_typed(ident, "purge"):
                 return
-            action_label = "purged"
         else:
             prompt_msg = f"Archive case '{ident}'?"
-            action_label = "archived"
             if not prompt_confirm(prompt_msg, is_danger=False):
-                console.print(_ACTION_CANCELLED)
+                print_cancelled("Archive")
                 return
 
         with capture_cli_errors("Delete Case", exit_on_error=False):
             target = service.get_case(ident)
             service.delete_case(ident, purge=purge)
             _clear_active_if_matches(ctx, target.id)
-            render_success(f"Case {ident} {action_label}.")
+            render_success(f"Case '{ident}' purged permanently." if purge else f"Case '{ident}' archived.")
 
     def _interactive_restore_case(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:
         ident = self._resolve_or_prompt_identifier(sub_args, ctx, "to restore")
 
         console.print("")
         if not prompt_confirm(f"Restore archived case '{ident}'?"):
-            console.print(_ACTION_CANCELLED)
+            print_cancelled("Restore")
             return
 
         with capture_cli_errors("Restore Case", exit_on_error=False):
             restored = service.restore_case(ident)
             _sync_active_case(ctx, restored)
-            render_success(f"Case {ident} restored.")
+            render_success(f"Case '{ident}' restored.")
 
     def _select_case(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:
         ident = self._resolve_or_prompt_identifier(sub_args, ctx, "to select")

@@ -74,7 +74,7 @@ def run_doctor() -> None:
                 if snap.pending:
                     record(
                         "Migrations",
-                        f"{len(snap.pending)} pending — run 'trace db migrate'",
+                        f"{len(snap.pending)} pending — run `trace db migrate`",
                         False,
                     )
                 else:
@@ -104,7 +104,7 @@ def run_doctor() -> None:
             render_error_card(
                 "System Diagnostics Failed",
                 f"Failing checks: {', '.join(failed)}.",
-                "Fix the rows above, then re-run 'trace doctor'.",
+                "Fix the rows above, then re-run `trace doctor`.",
             )
             raise typer.Exit(code=EXIT_ERROR)
         return

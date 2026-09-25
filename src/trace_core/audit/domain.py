@@ -16,7 +16,7 @@ GENESIS_CHAIN: str = "0" * 64
 SPEC_VERSION = "trace-audit-v1"
 CANONICAL_VERSION = "trace-canonical-json-v1"
 HASH_ALGO = "SHA-256"
-AUDIT_LEDGER_NOT_INITIALIZED_MESSAGE = "Audit ledger not initialized. Run 'trace db migrate'."
+AUDIT_LEDGER_NOT_INITIALIZED_MESSAGE = "Audit ledger not initialized. Run `trace db migrate`."
 
 
 class AuditAction(StrEnum):

@@ -58,8 +58,9 @@ def _print_help_row(syntax: str, alias: str, desc: str) -> None:
             console.print(f"    [{THEME_TOKENS['muted']}]{alias_str}[/{THEME_TOKENS['muted']}]")
         console.print(f"    [{THEME_TOKENS['label']}]{fit_text(desc, max(20, term_w - 6))}[/{THEME_TOKENS['label']}]")
         return
+    syntax_shown = fit_text(syntax, HELP_GRID_SYNTAX_WIDTH)
     console.print(
-        f"    [{THEME_TOKENS['value']}]{syntax:<{HELP_GRID_SYNTAX_WIDTH}}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{alias_str:<{HELP_GRID_ALIAS_WIDTH}}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]{desc}[/{THEME_TOKENS['label']}]"
+        f"    [{THEME_TOKENS['value']}]{syntax_shown:<{HELP_GRID_SYNTAX_WIDTH}}[/{THEME_TOKENS['value']}] [{THEME_TOKENS['muted']}]{alias_str:<{HELP_GRID_ALIAS_WIDTH}}[/{THEME_TOKENS['muted']}] [{THEME_TOKENS['label']}]{desc}[/{THEME_TOKENS['label']}]"
     )
 
 
@@ -187,7 +188,7 @@ class InteractiveShell:
         console.print(Text(rule_str, style=THEME_TOKENS["border"]))
         console.print(status_grid)
         console.print(Text(rule_str, style=THEME_TOKENS["border"]))
-        console.print(Text("  Type help for commands · exit to quit\n", style=THEME_TOKENS["muted"]))
+        console.print(Text("  Type help (or ?) for commands · exit to quit\n", style=THEME_TOKENS["muted"]))
 
     def get_prompt_text(self) -> str:
         """Dynamic prompt reflecting active case context."""
@@ -213,7 +214,7 @@ class InteractiveShell:
             except KeyboardInterrupt:
                 console.print("\n[dim]Ctrl-C pressed. Type 'exit' to quit Trace.[/dim]\n")
             except EOFError:
-                console.print("\n[dim italic]Exiting Trace console.[/dim italic]\n")
+                console.print("\n[dim italic]Exiting Trace console. Stay secure.[/dim italic]\n")
                 break
             except Exception as e:
                 with capture_cli_errors("Execution Error", exit_on_error=False):
@@ -321,9 +322,34 @@ class InteractiveShell:
         if self._handle_registered_command(tokens):
             return
 
+        from trace_core.core.cli.completion import filter_completions
+
+        words = [h.command_name for h in self.registry.all_handlers()]
+        words += [
+            "help",
+            "?",
+            "clear",
+            "cls",
+            "status",
+            "recent",
+            "recents",
+            "back",
+            "b",
+            "exit",
+            "quit",
+            "ls",
+            "sh",
+            "ed",
+        ]
+        matches = filter_completions([(w, w) for w in words], tokens[0].lower(), limit=1)
+        if matches:
+            remediation = f"Did you mean `{matches[0][0]}`? Type `help` for command list."
+        else:
+            remediation = "Type `help` for command list."
         render_error_card(
             "Unknown Command",
-            f"Command '{clean_line}' is not recognized. Type 'help' for command list.",
+            f"Command '{clean_line}' is not recognized.",
+            remediation,
         )
 
     def show_help(self) -> None:
@@ -345,6 +371,20 @@ class InteractiveShell:
         for syntax, alias, desc in CONSOLE_HELP_ENTRIES:
             _print_help_row(syntax, alias, desc)
         console.print("")
+        try:
+            from trace_core.updates.checker import peek_cached_update
+
+            pending = peek_cached_update()
+        except Exception:
+            pending = None
+        if pending:
+            console.print(
+                Text(
+                    f"  ↑ Update {pending['target']} available. Run `trace update install`.",
+                    style=THEME_TOKENS["warning"],
+                )
+            )
+            console.print("")
 
     def show_status(self) -> None:
         """Display frameless system and connection diagnostics."""
@@ -363,6 +403,7 @@ class InteractiveShell:
                 ("Storage", str(settings.storage_root)),
                 ("Active Case", active_str),
                 ("Version", settings.version),
+                ("Diagnostics", Text("Run `trace doctor` for full checks", style=THEME_TOKENS["muted"])),
                 ("Compliance", "UTC · Parameterized SQL · ISO 17025 Ready"),
             ],
         )

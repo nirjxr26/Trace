@@ -7,7 +7,7 @@ from trace_core.audit.service import AuditService
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.database.session import DatabaseSessionManager, db_manager
 from trace_core.core.errors import AuditTamperError
-from trace_core.core.ui.renderers import render_success
+from trace_core.core.ui.renderers import console, render_error_card, render_success
 
 audit_app = typer.Typer(name="audit", help="Inspect, verify, and export tamper-evident audit ledger.")
 
@@ -22,7 +22,8 @@ def _parse_action(action: str | None):  # type: ignore[no-untyped-def]
 
     act = parse_enum_value(AuditAction, action)
     if action and act is None:
-        typer.echo(f"Unknown action '{action}'", err=True)
+        valid = ", ".join(a.value for a in AuditAction)
+        render_error_card("Invalid Action", f"Unknown action '{action}'.", f"Valid actions: {valid}.")
         raise typer.Exit(1)
     return act
 
@@ -97,7 +98,7 @@ def audit_export(
 ) -> None:
     with capture_cli_errors("Audit Export"):
         if fmt.lower() != "jsonl":
-            typer.echo("Only --format jsonl supported in V1", err=True)
+            render_error_card("Invalid Format", f"Unknown format '{fmt}'.", "Expected: jsonl.")
             raise typer.Exit(1)
         svc = _get_service()
         from trace_core.audit.helpers import check_export_dest, do_export, do_export_encrypted, prompt_passphrase
@@ -107,7 +108,8 @@ def audit_export(
             path = do_export_encrypted(svc, out, prompt_passphrase(confirm=True))
         else:
             path = do_export(svc, out)
-        typer.echo(f"Exported audit bundle to {path}")
+        render_success("Audit bundle exported.")
+        console.print(f"[dim]{path}[/dim]")
 
 
 @audit_app.command("decrypt")
@@ -121,7 +123,8 @@ def audit_decrypt(
 
         check_export_dest(out, force)
         path = do_decrypt(inp, out, prompt_passphrase())
-        typer.echo(f"Opened bundle to {path}")
+        render_success("Bundle decrypted.")
+        console.print(f"[dim]{path}[/dim]")
 
 
 @audit_app.command("keys-init")
@@ -155,7 +158,7 @@ def audit_keys_rotate(
 
 
 @audit_app.command("keys-list")
-def audit_keys_list(output: str = typer.Option("table", "--output", "-o", help="Output format: table or json")) -> None:
+def audit_keys_list(output: str = typer.Option("table", "--output", "-o", help="table|json")) -> None:
     """List keystore public keys. No private material is ever displayed."""
     with capture_cli_errors("Key Listing Failed"):
         from trace_core.audit.signing import list_keys

@@ -442,7 +442,7 @@ def create_dual_key_value_grid(
         if i + 1 < len(clean_rows):
             k2, v2 = clean_rows[i + 1]
             v2_txt = v2 if isinstance(v2, Text) else Text(str(v2))
-            grid.add_row(f"  {k1}", v1_txt, f"{k2}", v2_txt)
+            grid.add_row(f"  {k1}", v1_txt, f"  {k2}", v2_txt)
         else:
             grid.add_row(f"  {k1}", v1_txt, "", "")
     return grid
@@ -514,7 +514,7 @@ def render_dossier(
     console.print(Text(rule_str, style=THEME_TOKENS["border"]))
 
     if bp in ("LG", "XL"):
-        details_grid = create_dual_key_value_grid(fields, width=16)
+        details_grid = create_dual_key_value_grid(fields, width=16, padding=table_padding(bp))
     else:
         details_grid = create_key_value_grid(fields, width=kv_width(bp), padding=table_padding(bp))
 
@@ -569,7 +569,7 @@ def prompt_required(label: str, error_msg: str) -> str:
 
     val = ""
     while not val:
-        val = Prompt.ask(f"  [{THEME_TOKENS['label']}]{label}[/{THEME_TOKENS['label']}]").strip()
+        val = Prompt.ask(f"  [{THEME_TOKENS['label']}]{label.strip():<19}[/{THEME_TOKENS['label']}]").strip()
         if not val:
             console.print(f"    [{THEME_TOKENS['danger']}][!] {error_msg}[/{THEME_TOKENS['danger']}]")
     return val
@@ -581,7 +581,7 @@ def prompt_optional(label: str, hint: str = "optional", default: str = "") -> st
 
     hint_str = f"({hint})" if hint else ""
     return Prompt.ask(
-        f"  [{THEME_TOKENS['label']}]{label}[/{THEME_TOKENS['label']}][{THEME_TOKENS['muted']}]{hint_str}[/{THEME_TOKENS['muted']}]",
+        f"  [{THEME_TOKENS['label']}]{label.strip():<19}[/{THEME_TOKENS['label']}][{THEME_TOKENS['muted']}]{hint_str}[/{THEME_TOKENS['muted']}]",
         default=default,
     )
 
@@ -618,7 +618,7 @@ def render_entity_panel(
     bp, term_w = breakpoint_width()
     border = border_style or THEME_TOKENS["border_card"]
     grid = Table.grid(expand=True, padding=table_padding(bp))
-    grid.add_column(style=THEME_TOKENS["label"], width=kv_width(bp, narrow=12, default=20))
+    grid.add_column(style=THEME_TOKENS["label"], width=kv_width(bp))
     grid.add_column(style=THEME_TOKENS["value"], overflow="fold", max_width=max(20, term_w - 30))
 
     for label, val in fields:
