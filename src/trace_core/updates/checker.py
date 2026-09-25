@@ -209,3 +209,16 @@ def cached_check(target: str | Path, channel: str = "stable") -> dict[str, Any]:
             {"manifest_path": key, "channel": channel, "manifest_identity": identity, "payload": payload}
         )
     return payload
+
+
+def peek_cached_update() -> dict[str, Any] | None:
+    from trace_core.updates import cache as check_cache
+
+    try:
+        cached = check_cache.read_check_cache()
+    except Exception:
+        return None
+    payload = (cached or {}).get("payload") or {}
+    if payload.get("available") and payload.get("target"):
+        return payload
+    return None

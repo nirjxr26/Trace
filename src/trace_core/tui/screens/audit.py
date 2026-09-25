@@ -93,6 +93,9 @@ class AuditView(Vertical):
         except Exception:
             pass
         self._last_cursor = table.cursor_row if table.cursor_row is not None else 0
+        from trace_core.tui.theme import table_head_text
+
+        self.query_one("#audit-header", Static).update(f"{table_head_text(list(TABLE_COLUMNS))}  · {len(self._events)}")
         self._render_detail()
 
     def _row_cells(self, event: AuditEventDto, selected: bool) -> list:  # type: ignore[no-untyped-def]
@@ -123,7 +126,12 @@ class AuditView(Vertical):
 
         e = self._selected()
         if e is None:
-            self.query_one("#audit-detail", Static).update(Text("No audit events found", style="dim"))
+            if not self._events:
+                self.query_one("#audit-detail", Static).update(
+                    Text("No audit events found — create or close a case.", style="dim")
+                )
+            else:
+                self.query_one("#audit-detail", Static).update(Text("Select an event…", style="dim"))
             return
         details = parse_details(e.payload_json)
         intact = verify_event(

@@ -120,7 +120,7 @@ def db_init() -> None:
         _require_db()
         db_manager.init_schema()
         tables = get_table_names(db_manager.engine)
-        render_success("Database schema initialized successfully!")
+        render_success("Database schema initialized.")
         console.print(f"[dim]Existing tables: {', '.join(tables)}[/dim]")
 
 
@@ -135,4 +135,4 @@ def db_migrate() -> None:
             for name in applied:
                 console.print(f"  [green]✓[/green] {name}")
         else:
-            console.print("[dim]Database is already up to date. No pending migrations.[/dim]")
+            console.print("[dim]Up to date. No pending migrations.[/dim]")

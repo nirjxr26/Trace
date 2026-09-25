@@ -45,6 +45,7 @@ def render_check_blocked(payload: dict) -> None:
     console.print(f"[yellow]Update {payload['target']} available but deferred: {payload['block_reason']}[/yellow]")
     if payload.get("notes"):
         console.print(payload["notes"])
+    console.print("[dim]See `trace update history` for past attempts.[/dim]")
 
 
 def render_check_card(payload: dict, channel: str) -> None:
@@ -61,6 +62,7 @@ def render_check_card(payload: dict, channel: str) -> None:
         render_check_blocked(payload)
         return
     console.print(f"[green]Update {payload['target']} available[/green] — current {payload['current']} ({channel})")
+    console.print("[dim]Run `trace update install` to update.[/dim]")
 
 
 def render_install_summary(manifest: ReleaseManifest, current: str, bypass_note: str) -> None:
@@ -68,7 +70,7 @@ def render_install_summary(manifest: ReleaseManifest, current: str, bypass_note:
     console.print(f"Product: {manifest.product}")
     console.print(f"Current: v{current}")
     console.print(f"Target:  v{manifest.version}")
-    console.print("Security: Verified")
+    console.print("Signature: Verified")
     if manifest.restart_required:
         console.print("Restart: Required")
     if bypass_note:
@@ -129,6 +131,7 @@ class UpdateProgressDisplay(ProgressCallback):
             console.print("Trace updated successfully.")
             console.print()
             console.print(f"v{dto.from_version} → v{dto.to_version}")
+            console.print("[dim]Run `trace case list` to resume work.[/dim]")
             return
         if dto.rollback:
             self.statuses[Stage.DOWNLOAD] = StageStatus.DONE

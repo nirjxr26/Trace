@@ -441,7 +441,7 @@ class SettingsView(Vertical):
         if not payload["available"]:
             return
         try:
-            self.app.query_one("#hint", Static).update(f"● Update {payload['target']} available")
+            self.app.query_one("#hint", Static).update(f"↑ Update {payload['target']} available")
         except Exception:
             pass
 
@@ -573,6 +573,12 @@ class SettingsView(Vertical):
         if old != new:
             self._paint_item(old, False)
             self._paint_item(new, True)
+            try:
+                from trace_core.tui.app import TAB_HINTS
+
+                self.app.query_one("#hint", Static).update(TAB_HINTS["settings"])
+            except Exception:
+                pass
         self._render_detail()
 
     @on(ListView.Selected)

@@ -249,3 +249,27 @@ def test_ghost_suggestion_case_insensitive() -> None:
     suggested = TraceAutoSuggest(shell)._suggest_from_defaults("Case")
     assert suggested is not None
     assert suggested.text == " list"
+
+
+def test_shell_unknown_suggests_correction(service: CaseService, capsys: pytest.CaptureFixture[str]) -> None:
+    shell = InteractiveShell()
+    shell.service = service
+    shell.execute_line("udpate")
+    assert "Did you mean `update`?" in capsys.readouterr().out
+    shell.execute_line("xyzzy")
+    assert "Type `help` for command list." in capsys.readouterr().out
+
+
+def test_shell_help_shows_pending_update(
+    service: CaseService, capsys: pytest.CaptureFixture[str], temp_storage_root
+) -> None:
+    from trace_core.updates import cache as check_cache
+
+    _ = temp_storage_root
+    check_cache.write_check_cache(
+        {"manifest_path": "x", "channel": "stable", "payload": {"available": True, "target": "9.9.9"}}
+    )
+    shell = InteractiveShell()
+    shell.service = service
+    shell.execute_line("help")
+    assert "Update 9.9.9 available" in capsys.readouterr().out

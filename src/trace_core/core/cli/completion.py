@@ -82,7 +82,21 @@ def filter_completions(candidates: list[tuple[str, str]], query: str, limit: int
         return all(ch in it for ch in q)
 
     fuzzy = [c for c in candidates if _fuzzy(c[0]) and c not in merged]
-    return (merged + fuzzy)[:limit]
+    merged = (merged + fuzzy)[:limit]
+    if len(merged) < limit and len(q) > 3:
+        swapped = set()
+        chars = list(q)
+        for i in range(len(chars) - 1):
+            swapped.add("".join(chars[:i] + [chars[i + 1], chars[i]] + chars[i + 2 :]))
+        for variant in sorted(swapped):
+            for c in candidates:
+                if c not in merged and (c[0].lower().startswith(variant) or variant in c[0].lower()):
+                    merged.append(c)
+                    if len(merged) >= limit:
+                        break
+            if len(merged) >= limit:
+                break
+    return merged[:limit]
 
 
 def rank_cases(cases: list[Any], active_number: str | None = None) -> list[Any]:

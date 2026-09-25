@@ -4,6 +4,7 @@ from pathlib import Path
 import typer
 
 from trace_core.core.cli.error_handler import capture_cli_errors
+from trace_core.core.cli.output import SKIP_CONFIRM_HELP
 from trace_core.core.ui.renderers import console, render_minimalist_table
 from trace_core.updates.dto import UpdateHistoryDto
 from trace_core.updates.manifest import ManifestArtifact, ReleaseManifest
@@ -23,7 +24,7 @@ HISTORY_COLUMNS: list[tuple[str, dict[str, object]]] = [
 
 def history_table_rows(rows: list[UpdateHistoryDto]) -> list[list[str]]:
     """Single source for history table rows. Shared by CLI and REPL shell."""
-    return [[r.from_version, r.to_version, r.channel, r.result, str(r.rollback)] for r in rows]
+    return [[r.from_version, r.to_version, r.channel, r.result, "✓" if r.rollback else "—"] for r in rows]
 
 
 def load_update(manifest: str | None, artifact: str | None) -> tuple[ReleaseManifest, str, str, ManifestArtifact]:
@@ -95,13 +96,14 @@ def update_history(
             history_table_rows(rows),
             empty_message="No updates recorded.",
         )
+        console.print("[dim]Run `trace update check` for the latest state.[/dim]")
 
 
 @update_app.command("install")
 def update_install(
     manifest: str | None = typer.Option(None, "--manifest", help=MANIFEST_PATH_HELP),
     artifact: str | None = typer.Option(None, "--artifact", help=ARTIFACT_PATH_HELP),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    yes: bool = typer.Option(False, "--yes", "-y", help=SKIP_CONFIRM_HELP),
     bypass_minimum: bool = typer.Option(
         False, "--bypass-minimum", help="Override minimum-supported-version with audit"
     ),

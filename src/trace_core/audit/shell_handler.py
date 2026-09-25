@@ -241,7 +241,8 @@ class AuditShellCommandHandler(BaseShellHandler):
                 path = do_export_encrypted(svc, out, prompt_passphrase())
             else:
                 path = do_export(svc, out)
-            render_success(f"Exported to {path}")
+            render_success("Audit bundle exported.")
+            console.print(f"[dim]{path}[/dim]")
 
     def _decrypt(self, svc: AuditService, args: list[str]) -> None:
         _ = svc
@@ -256,4 +257,5 @@ class AuditShellCommandHandler(BaseShellHandler):
 
             check_export_dest(out, has_flag(args, "--force", "-f"))
             path = do_decrypt(inp, out, prompt_passphrase())
-            render_success(f"Opened bundle to {path}")
+            render_success("Bundle decrypted.")
+            console.print(f"[dim]{path}[/dim]")

@@ -76,7 +76,7 @@ def get_or_provision(session: Session, name: str, host: str) -> OperatorModel:
         existing = session.scalar(select(OperatorModel).where(OperatorModel.name == name, OperatorModel.host == host))
     except Exception as exc:
         if _missing_table(exc):
-            raise ApplicationError("Operator store not initialized. Run 'trace db migrate'.") from exc
+            raise ApplicationError("Operator store not initialized. Run `trace db migrate`.") from exc
         raise
     if existing is not None:
         return existing
