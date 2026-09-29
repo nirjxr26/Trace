@@ -93,9 +93,9 @@ class AuditView(Vertical):
         except Exception:
             pass
         self._last_cursor = table.cursor_row if table.cursor_row is not None else 0
-        from trace_core.tui.theme import table_head_text
+        from trace_core.tui.theme import header_with_count
 
-        self.query_one("#audit-header", Static).update(f"{table_head_text(list(TABLE_COLUMNS))}  · {len(self._events)}")
+        self.query_one("#audit-header", Static).update(header_with_count(TABLE_COLUMNS, len(self._events)))
         self._render_detail()
 
     def _row_cells(self, event: AuditEventDto, selected: bool) -> list:  # type: ignore[no-untyped-def]
@@ -181,9 +181,10 @@ class AuditView(Vertical):
 
     def run_command(self, command: str) -> None:
         """Entry for the palette."""
-        if command == "export":
+        action = command.removeprefix("audit-")
+        if action == "export":
             self.action_export()
-        elif command == "anchor":
+        elif action == "anchor":
             self.app.notify("Open the Integrity tab to check an anchor file.")
         else:
             self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")

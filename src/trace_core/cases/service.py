@@ -5,7 +5,14 @@ from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 
-from trace_core.cases.domain import Case, CaseStatus, TransitionError, tracked_snapshot, transition_case
+from trace_core.cases.domain import (
+    Case,
+    CaseStatus,
+    TransitionError,
+    normalise_optional,
+    tracked_snapshot,
+    transition_case,
+)
 from trace_core.cases.dto import (
     CaseCreateDto,
     CaseFilterDto,
@@ -194,12 +201,14 @@ class CaseService(BaseService):
                 case.lead_examiner = dto.lead_examiner
             # None and "" both mean "empty": comparing (and storing) the
             # normalized form keeps no-op edits from minting audit noise.
-            if dto.description is not None and (dto.description or None) != (case.description or None):
+            if dto.description is not None and normalise_optional(dto.description) != normalise_optional(
+                case.description
+            ):
                 changed.append("description")
-                case.description = dto.description or None
-            if dto.notes is not None and (dto.notes or None) != (case.notes or None):
+                case.description = normalise_optional(dto.description)
+            if dto.notes is not None and normalise_optional(dto.notes) != normalise_optional(case.notes):
                 changed.append("notes")
-                case.notes = dto.notes or None
+                case.notes = normalise_optional(dto.notes)
             if dto.tags is not None and dto.tags != case.tags:
                 changed.append("tags")
                 case.tags = dto.tags
@@ -255,7 +264,7 @@ class CaseService(BaseService):
 
                 dto = _record_audit(
                     s,
-                    for_case_closed(updated.number, updated.id, reason, examiner),
+                    for_case_closed(updated.number, updated.id, updated.closure_reason or "", examiner),
                     examiner,
                     claimed=closed_by or actor,
                 )

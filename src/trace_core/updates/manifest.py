@@ -9,7 +9,7 @@ MAX_ARTIFACT_BYTES = 10_737_418_240
 
 
 class ManifestArtifact(BaseModel):
-    filename: str
+    filename: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]*$", max_length=255)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     size: int = Field(ge=1, le=MAX_ARTIFACT_BYTES)
     signature: str | None = None
@@ -25,7 +25,7 @@ class ReleaseManifest(BaseModel):
     version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+([._-][a-zA-Z0-9]+)*(\+[a-zA-Z0-9._-]+)?$", max_length=64)
     release_id: str = Field(min_length=1, max_length=64)
     published_at: str | None = None
-    minimum_supported_version: str | None = None
+    minimum_supported_version: str | None = Field(default=None, min_length=1)
     security_update: bool
     restart_required: bool
     notes: str | None = None

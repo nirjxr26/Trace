@@ -599,6 +599,15 @@ def test_unreadable_anchor_typed_error(session_manager: DatabaseSessionManager) 
         verify_against_anchor(svc, res, "/no/such/anchor.json")
 
 
+def _signed_anchor(payload: dict) -> dict:  # type: ignore[type-arg]
+    """Anchor envelope signed exactly the way _publish_one signs it."""
+    from trace_core.audit.signing import sign_bytes
+    from trace_core.core.canonical import canonical_json
+
+    key_id, signature = sign_bytes(canonical_json(payload))
+    return {**payload, "key_id": key_id, "signature": signature}
+
+
 def test_anchor_mismatch_pure(session_manager: DatabaseSessionManager) -> None:
     from trace_core.audit.anchor import check_anchor_match
     from trace_core.audit.service import AuditService
@@ -610,9 +619,34 @@ def test_anchor_mismatch_pure(session_manager: DatabaseSessionManager) -> None:
     svc = AuditService(session_manager)
     res = svc.verify()
     seq, chain = svc.head()
-    check_anchor_match(res, {"last_seq": seq, "last_chain": chain}, chain)
+    good = {"last_seq": seq, "last_chain": chain}
+    check_anchor_match(res, _signed_anchor(good), chain)
     with pytest.raises(AuditTamperError, match="tail mismatch"):
-        check_anchor_match(res, {"last_seq": seq + 100, "last_chain": chain}, chain)
+        check_anchor_match(res, _signed_anchor({**good, "last_seq": seq + 100}), chain)
+
+
+def test_unsigned_anchor_is_rejected(session_manager: DatabaseSessionManager) -> None:
+    """H-38: a stripped signature must be an error, not a skipped check."""
+    from trace_core.audit.anchor import check_anchor_match
+    from trace_core.audit.service import AuditService
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+    from trace_core.core.errors import AuditTamperError
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+    svc = AuditService(session_manager)
+    res = svc.verify()
+    seq, chain = svc.head()
+    good = {"last_seq": seq, "last_chain": chain}
+    with pytest.raises(AuditTamperError, match="unsigned"):
+        check_anchor_match(res, good, chain)
+    envelope = _signed_anchor(good)
+    without_key = {k: v for k, v in envelope.items() if k != "key_id"}
+    without_signature = {k: v for k, v in envelope.items() if k != "signature"}
+    with pytest.raises(AuditTamperError, match="unsigned"):
+        check_anchor_match(res, without_key, chain)
+    with pytest.raises(AuditTamperError, match="unsigned"):
+        check_anchor_match(res, without_signature, chain)
 
 
 @pytest.mark.anyio
@@ -709,3 +743,311 @@ def test_failed_anchor_intent_cools_down(temp_storage_root, session_manager: Dat
     assert publish_pending_anchors(session_manager) == 1
     with session_manager.session() as s:
         assert s.scalars(select(AnchorIntentModel)).one().status == "confirmed"
+
+
+def test_anchor_signing_failure_is_recorded(
+    temp_storage_root, session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """H-41: an unreadable keystore must land on the intent, so the cooldown engages.
+
+    Signing used to raise outside the try, so attempt_count/last_attempt_at were
+    rolled back and every later close re-paid the full attempt.
+    """
+    import uuid
+
+    from trace_core.audit import signing
+    from trace_core.audit.anchor import _failed_retry_due, publish_pending_anchors
+    from trace_core.audit.models import INTENT_FAILED, AnchorIntentModel
+    from trace_core.core.errors import ApplicationError
+
+    def boom(_data: bytes) -> tuple[str, str]:
+        raise ApplicationError("keystore unavailable")
+
+    monkeypatch.setattr(signing, "sign_bytes", boom)
+    with session_manager.session() as s:
+        s.add(
+            AnchorIntentModel(
+                case_id=uuid.uuid4(),
+                case_number="2026-CR-0001",
+                seq=1,
+                chain_hash="0" * 64,
+            )
+        )
+        s.commit()
+
+    assert publish_pending_anchors(session_manager) == 0
+    with session_manager.session() as s:
+        row = s.scalars(select(AnchorIntentModel)).one()
+        assert row.status == INTENT_FAILED
+        assert row.attempt_count == 1
+        assert row.last_attempt_at is not None
+        assert _failed_retry_due(row) is False
+    assert publish_pending_anchors(session_manager) == 0
+
+
+def _pg_error(psycopg_error: BaseException) -> Exception:
+    from sqlalchemy.exc import ProgrammingError
+
+    return ProgrammingError("SELECT 1", {}, psycopg_error)
+
+
+def test_missing_table_detects_psycopg3_sqlstate() -> None:
+    """H-44: psycopg 3 exposes .sqlstate, not psycopg2's .pgcode."""
+    import psycopg
+
+    from trace_core.core.operators import _missing_table
+
+    assert _missing_table(_pg_error(psycopg.errors.UndefinedTable("missing relation"))) is True
+    assert _missing_table(_pg_error(psycopg.errors.InsufficientPrivilege("nope"))) is False
+
+
+def test_ledger_missing_detects_psycopg3_sqlstate() -> None:
+    import psycopg
+
+    from trace_core.audit.service import _is_ledger_missing
+
+    assert _is_ledger_missing(_pg_error(psycopg.errors.UndefinedTable("missing relation"))) is True
+
+
+def test_manifest_rejects_empty_minimum_supported_version() -> None:
+    """H-23: "" is falsy, so it skipped the minimum-version control entirely."""
+    from trace_core.updates.errors import UpdateVerificationError
+    from trace_core.updates.manifest import load_manifest_dict
+
+    base = {
+        "schema": 1,
+        "product": "trace",
+        "channel": "stable",
+        "version": "0.2.7",
+        "release_id": "r1",
+        "security_update": False,
+        "restart_required": False,
+        "manifest_signature": "",
+        "signing_key_id": "",
+        "artifacts": {},
+    }
+    with pytest.raises(UpdateVerificationError):
+        load_manifest_dict({**base, "minimum_supported_version": ""})
+
+
+def test_history_dto_requires_explicit_result() -> None:
+    """H-22: the default persisted SUCCESS for an update that never happened."""
+    from pydantic import ValidationError
+
+    from trace_core.updates.dto import UpdateHistoryCreateDto
+
+    with pytest.raises(ValidationError):
+        UpdateHistoryCreateDto.model_validate({"from_version": "0.2.6", "to_version": "0.2.7"})
+
+
+def test_manifest_rejects_unsafe_artifact_filename() -> None:
+    """H-01: is_safe_filename only rejects /, \\ and "..", so "." passed."""
+    from trace_core.updates.errors import UpdateVerificationError
+    from trace_core.updates.manifest import load_manifest_dict
+
+    base = {
+        "schema": 1,
+        "product": "trace",
+        "channel": "stable",
+        "version": "0.2.7",
+        "release_id": "r1",
+        "security_update": False,
+        "restart_required": False,
+        "manifest_signature": "",
+        "signing_key_id": "",
+    }
+    artifact = {"filename": ".", "sha256": "a" * 64, "size": 1}
+    with pytest.raises(UpdateVerificationError):
+        load_manifest_dict({**base, "artifacts": {"default": artifact}})
+
+
+def test_non_https_manifest_url_is_policy_blocked() -> None:
+    """H-11: a security refusal must not render as "check your network and retry"."""
+    from trace_core.updates.errors import UpdateNetworkError, UpdatePolicyBlockedError
+    from trace_core.updates.sources import _validate_manifest_url
+
+    with pytest.raises(UpdatePolicyBlockedError):
+        _validate_manifest_url("http://example.invalid/stable.json")
+    assert not issubclass(UpdatePolicyBlockedError, UpdateNetworkError)
+    _validate_manifest_url("https://example.invalid/stable.json")
+
+
+def test_unknown_channel_is_policy_blocked_not_verification_failure() -> None:
+    """H-24: a mistyped channel is caller input, not a trust failure."""
+    from trace_core.updates.errors import UpdatePolicyBlockedError
+    from trace_core.updates.manifest import load_manifest_dict
+    from trace_core.updates.policy import is_installable
+
+    manifest = load_manifest_dict(
+        {
+            "schema": 1,
+            "product": "trace",
+            "channel": "stable",
+            "version": "0.2.7",
+            "release_id": "r1",
+            "security_update": False,
+            "restart_required": False,
+            "manifest_signature": "",
+            "signing_key_id": "",
+            "artifacts": {},
+        }
+    )
+    with pytest.raises(UpdatePolicyBlockedError):
+        is_installable("0.2.6", manifest, channel="nope")
+
+
+def test_history_dto_rejects_overlong_transaction_id() -> None:
+    """H-26: String(36) truncates silently on SQLite, colliding two history rows."""
+    from pydantic import ValidationError
+
+    from trace_core.updates.dto import UpdateHistoryCreateDto
+
+    with pytest.raises(ValidationError):
+        UpdateHistoryCreateDto.model_validate(
+            {"from_version": "0.2.6", "to_version": "0.2.7", "result": "SUCCESS", "transaction_id": "x" * 37}
+        )
+    ok = UpdateHistoryCreateDto.model_validate(
+        {"from_version": "0.2.6", "to_version": "0.2.7", "result": "SUCCESS", "transaction_id": "x" * 36}
+    )
+    assert ok.transaction_id is not None
+
+
+def test_sequence_bound_stays_inside_case_number_grammar() -> None:
+    """H-61: range(10000) emitted a 5-digit number, which CASE_NUMBER_RE rejects."""
+    from trace_core.cases.domain import CASE_NUMBER_RE
+    from trace_core.cases.repository import _MAX_SEQUENCE
+
+    assert CASE_NUMBER_RE.match(f"2026-CR-{_MAX_SEQUENCE:04d}") is not None
+    assert CASE_NUMBER_RE.match(f"2026-CR-{_MAX_SEQUENCE + 1:04d}") is None
+
+
+def test_close_audit_record_uses_sanitised_reason(session_manager: DatabaseSessionManager) -> None:
+    """H-55: the case row was stripped but its own audit record was not."""
+    from trace_core.audit.service import AuditService
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+    from trace_core.core.domain import strip_controls
+
+    svc = CaseService(session_manager)
+    created = svc.create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+    raw = "held\x1b[31mred\x07 in situ"
+    closed = svc.close_case(created.number, reason=raw, closed_by="Ex")
+
+    assert strip_controls(raw) in (closed.closure_reason or "")
+    assert "\x1b" not in (closed.closure_reason or "")
+
+    events = AuditService(session_manager).list_events()
+    close_events = [e for e in events if e.action.value == "CASE_CLOSED"]
+    assert close_events
+    for event in close_events:
+        assert "\\u001b" not in event.payload_json
+        assert "\\u0007" not in event.payload_json
+
+
+def test_post_commit_hook_failure_does_not_propagate(
+    session_manager: DatabaseSessionManager, caplog: pytest.LogCaptureFixture
+) -> None:
+    """H-45: the commit is durable, so reporting failure invites a double-apply."""
+    from trace_core.core.service import BaseService
+
+    service = BaseService(session_manager)
+    reached = False
+    with service.transaction() as uow:
+        uow.on_commit(lambda: (_ for _ in ()).throw(RuntimeError("sink down")))
+
+        def _mark() -> None:
+            nonlocal reached
+            reached = True
+
+        uow.on_commit(_mark)
+    assert reached is True
+
+
+def test_hash_algo_is_the_single_source() -> None:
+    """H-46: HASH_ALGO is written into every payload, so it must select the hasher."""
+    from trace_core.audit import domain
+
+    assert domain.payload_hash({"a": 1}) == domain.chain_hash("0" * 64, "a" * 64, 1)[:0] + domain.payload_hash({"a": 1})
+    original = domain.HASH_ALGO
+    try:
+        domain.HASH_ALGO = "SHA-512"
+        with pytest.raises(KeyError):
+            domain.payload_hash({"a": 1})
+    finally:
+        domain.HASH_ALGO = original
+    assert len(domain.payload_hash({"a": 1})) == 64
+
+
+def test_audit_hash_fields_reject_non_hex(session_manager: DatabaseSessionManager) -> None:
+    """H-49: length-only constraints let uppercase hex through to a != comparison."""
+    from pydantic import ValidationError
+
+    from trace_core.audit.domain import AuditEvent
+    from trace_core.core.clock import now_utc
+
+    fields: dict[str, object] = {
+        "seq": 1,
+        "ts": now_utc(),
+        "action": "CASE_CREATED",
+        "actor": "a",
+        "subject_case_number": "2026-CR-0001",
+        "payload_json": "{}",
+    }
+    upper = "A" * 64
+    for name in ("payload_hash", "prev_chain", "chain_hash_str"):
+        with pytest.raises(ValidationError):
+            AuditEvent.model_validate({**fields, name: upper})
+    AuditEvent.model_validate({**fields, "payload_hash": "a" * 64, "prev_chain": "b" * 64, "chain_hash_str": "c" * 64})
+
+
+def test_repository_purge_refuses_active_case(session_manager: DatabaseSessionManager) -> None:
+    """H-54: the archive-first guard is an invariant, so it belongs in the repository."""
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.repository import SqlAlchemyCaseRepository
+    from trace_core.cases.service import CaseService
+    from trace_core.core.errors import StateTransitionError
+
+    created = CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+    with session_manager.session() as session:
+        repo = SqlAlchemyCaseRepository(session)
+        with pytest.raises(StateTransitionError):
+            repo.purge(created.id, expected_version=created.version)
+
+
+def test_unknown_stored_status_does_not_crash_mapping(session_manager: DatabaseSessionManager) -> None:
+    """H-62: a row from a newer version must not break every case listing."""
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.models import CaseModel
+    from trace_core.cases.repository import SqlAlchemyCaseRepository
+    from trace_core.cases.service import CaseService
+
+    created = CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+    with session_manager.session() as session:
+        row = session.get(CaseModel, created.id)
+        assert row is not None
+        row.status = "SOMETHING_NEWER"
+        session.commit()
+    with session_manager.session() as session:
+        loaded = SqlAlchemyCaseRepository(session).get_by_number(created.number)
+    assert loaded is not None
+    assert loaded.status.value == "OPEN"
+
+
+def test_storage_check_without_probe_writes_nothing(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """H-66: the TUI render path must not write into the evidence storage root."""
+    from trace_core.core.cli.doctor import _storage_check
+    from trace_core.core.settings import settings
+
+    monkeypatch.setattr(settings, "storage_root", str(tmp_path / "store"))
+    name, _detail, passed = _storage_check(probe=False)
+    assert passed is True
+    assert list((tmp_path / "store").iterdir()) == []
+
+
+def test_palette_case_aliases_resolve_to_real_actions() -> None:
+    """H-68: case-close must reach action_seal, and every palette id must exist."""
+    from trace_core.tui.screens.cases import _CASE_COMMAND_ALIASES, CasesView
+
+    for cmd in ("create", "edit", "close", "archive", "purge", "restore", "recent"):
+        name = _CASE_COMMAND_ALIASES.get(cmd, cmd)
+        assert callable(getattr(CasesView, f"action_{name}", None)), cmd

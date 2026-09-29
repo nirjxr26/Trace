@@ -20,7 +20,7 @@ NO_SUCH_TABLE_MESSAGE = "no such table"
 
 def _is_ledger_missing(e: Exception) -> bool:
     orig = getattr(e, "orig", None)
-    if getattr(orig, "pgcode", None) == "42P01":
+    if getattr(orig, "sqlstate", None) == "42P01":
         return True
     msg = str(e).lower()
     if "audit_events" in msg or "audit_chain_state" in msg or NO_SUCH_TABLE_MESSAGE in msg or "no such column" in msg:

@@ -12,6 +12,25 @@ from trace_core.updates.errors import UpdateError
 pytestmark = pytest.mark.unit
 
 
+def test_pip_env_drops_index_and_tls_overrides(monkeypatch):  # type: ignore[no-untyped-def]
+    """PIP_*/CA variables must not reach the installer subprocess."""
+    for name in ("PIP_INDEX_URL", "PIP_TRUSTED_HOST", "PIP_CERT", "SSL_CERT_FILE"):
+        monkeypatch.setenv(name, "http://attacker.invalid")
+    monkeypatch.setenv("TRACE_KEEP_ME", "yes")
+    env = pip_backend._pip_env()
+    for name in ("PIP_INDEX_URL", "PIP_TRUSTED_HOST", "PIP_CERT", "SSL_CERT_FILE"):
+        assert name not in env
+    assert env["TRACE_KEEP_ME"] == "yes"
+
+
+def test_redact_strips_inline_url_credentials():
+    """The failure tail is persisted to update_history, so credentials must not survive."""
+    assert pip_backend._redact("Looking in https://user:hunter2@pypi.example/simple") == (
+        "Looking in https://pypi.example/simple"
+    )
+    assert pip_backend._redact("no credentials here") == "no credentials here"
+
+
 def _manifest(version="0.2.3"):  # type: ignore[no-untyped-def]
     from trace_core.updates.manifest import load_manifest_dict
 

@@ -133,9 +133,10 @@ class SettingsView(Vertical):
         from trace_core.core.ui.theme import THEME_TOKENS
 
         body = Text()
+        from trace_core.core.ui.renderers import rule_width as rule_span
+
         body.append(f"{section}\n", style="#72B7D3")
-        rule_width = max(20, min(60, int(pane_width or 60) - 2))
-        body.append_text(Text("─" * rule_width, style=THEME_TOKENS["border"]))
+        body.append_text(Text("─" * rule_span(int(pane_width or 60), 60), style=THEME_TOKENS["border"]))
         body.append("\n")
         renderer = {
             "Database": self._database_body,
@@ -215,7 +216,9 @@ class SettingsView(Vertical):
             if self._extra:
                 body.append(f"{sanitize_terminal(self._extra)}\n", style="dim")
             return
-        rule = "─" * max(20, min(66, int(width or 60) - 2))
+        from trace_core.core.ui.renderers import rule_width as rule_span
+
+        rule = "─" * rule_span(int(width or 60), 66)
         body.append(Text(rule + "\n", style=THEME_TOKENS["border"]))
         body.append("Update available\n")
         body.append(f"{current}\n")
@@ -371,7 +374,7 @@ class SettingsView(Vertical):
                     checks.append(("Migrations", False, f"{len(snap.pending)} pending"))
                 else:
                     checks.append(("Migrations", True, f"{len(snap.applied)} applied"))
-        name, detail, passed = _storage_check()
+        name, detail, passed = _storage_check(probe=False)
         checks.append((name, passed, detail))
         for label, ok, detail in checks:
             body.append("● " if ok else "× ", style="#5FD18A" if ok else "#D06A73")
@@ -497,9 +500,9 @@ class SettingsView(Vertical):
         from trace_core.updates.lifecycle import UpdateLifecycle
 
         def sync_install():  # type: ignore[no-untyped-def]
-            m, _target, _current, artifact_path, entry, channel = prepare_install(None, None)
+            m, _target, _current, artifact_path, _entry, channel = prepare_install(None, None)
             return UpdateLifecycle(str(uuid.uuid4())).run(
-                m, artifact_path, channel=channel, preverified_sha256=entry.sha256, progress=_TuiProgress(self)
+                m, artifact_path, channel=channel, progress=_TuiProgress(self)
             )
 
         try:

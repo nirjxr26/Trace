@@ -9,12 +9,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = structlog.get_logger()
 
+DEV_SECRET_SENTINEL = "trace-local-dev-key-change-in-production"
+
 
 class Settings(BaseSettings):
     """Trace runtime settings."""
 
     app_name: str = "Trace"
-    version: str = "0.2.6"
+    version: str = "0.2.7"
     # Alias-only binding: the documented TRACE_DEBUG name wins, and a stray
     # bare DEBUG in the environment can no longer crash startup with a bool error.
     debug: bool = Field(default=False, alias="TRACE_DEBUG")
@@ -34,7 +36,7 @@ class Settings(BaseSettings):
     # HMAC-signed audit rows exist — old rows verify against the current value,
     # so rotation reads as ledger tampering. Rotate Ed25519 keys instead.
     secret_key: SecretStr = Field(
-        default=SecretStr("trace-local-dev-key-change-in-production"),
+        default=SecretStr(DEV_SECRET_SENTINEL),
         alias="TRACE_SECRET_KEY",
     )
 
@@ -82,7 +84,7 @@ class Settings(BaseSettings):
             # Sentinel duplicated from signing.py by design: settings cannot import it (cycle).
             if self.database_url == Settings.model_fields["database_url"].default:
                 raise ValueError("Refusing production startup on shipped default database credentials.")
-            if self.secret_key.get_secret_value() == "trace-local-dev-key-change-in-production":
+            if self.secret_key.get_secret_value() == DEV_SECRET_SENTINEL:
                 raise ValueError("Refusing production startup on shipped default secret key.")
 
 

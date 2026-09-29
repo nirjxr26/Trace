@@ -101,6 +101,7 @@ def filter_completions(candidates: list[tuple[str, str]], query: str, limit: int
 
 def rank_cases(cases: list[Any], active_number: str | None = None) -> list[Any]:
     """Active first, then recent (updated_at desc), then OPEN before others."""
+    from trace_core.core.canonical import parse_trailing_seq
 
     def _key(c: Any) -> tuple[int, float, int, int]:
         is_active = 0 if active_number and c.number == active_number else 1
@@ -111,11 +112,7 @@ def rank_cases(cases: list[Any], active_number: str | None = None) -> list[Any]:
         raw_status = getattr(c, "status", "")
         is_open = 0 if getattr(raw_status, "value", raw_status) == "OPEN" else 1
         # tie-breaker: larger case number (more recent) first when ts equal
-        try:
-            seq = int(str(c.number).split("-")[-1])
-        except Exception:
-            seq = 0
-        return (is_active, -ts, is_open, -seq)
+        return (is_active, -ts, is_open, -(parse_trailing_seq(str(c.number)) or 0))
 
     return sorted(cases, key=_key)
 

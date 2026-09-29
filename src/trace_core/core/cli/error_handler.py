@@ -4,8 +4,10 @@ from collections.abc import Generator
 from contextlib import contextmanager
 
 import typer
+from pydantic import ValidationError as PydanticValidationError
 
-from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_NOT_FOUND, EXIT_VERIFY_FAILED
+from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_NOT_FOUND, EXIT_USAGE, EXIT_VERIFY_FAILED
+from trace_core.core.domain import DomainError
 from trace_core.core.errors import (
     ApplicationError,
     AuditTamperError,
@@ -15,6 +17,15 @@ from trace_core.core.errors import (
     StateTransitionError,
 )
 from trace_core.core.ui.renderers import render_error_card
+
+
+def _format_pydantic_error(e: PydanticValidationError) -> str:
+    """Flatten pydantic's error list into one line; the card renderer takes a single message."""
+    parts = []
+    for err in e.errors()[:5]:
+        loc = ".".join(str(item) for item in err["loc"]) or "input"
+        parts.append(f"{loc}: {err['msg']}")
+    return "; ".join(parts)
 
 
 def _resolve_unexpected_error(
@@ -121,6 +132,20 @@ def _typed_error(e: Exception, operation_title: str | None, default_remediation:
         )
     if isinstance(e, StateTransitionError):
         return operation_title or "Invalid State Transition", str(e), default_remediation, EXIT_ERROR
+    if isinstance(e, DomainError):
+        return (
+            operation_title or "Invalid Input",
+            str(e),
+            default_remediation or "Correct the highlighted field and retry.",
+            EXIT_USAGE,
+        )
+    if isinstance(e, PydanticValidationError):
+        return (
+            operation_title or "Invalid Input",
+            _format_pydantic_error(e),
+            default_remediation or "Correct the highlighted field and retry.",
+            EXIT_USAGE,
+        )
     if isinstance(e, AuditTamperError):
         return (
             operation_title or "Audit Verification Failed",

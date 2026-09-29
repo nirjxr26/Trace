@@ -1,22 +1,24 @@
 """Textual theme mapped from the forensic workstation tokens. Single source: core/ui/theme."""
 
+from collections.abc import Sequence
+
 from rich.text import Text
 from textual.theme import Theme
 
-from trace_core.core.ui.theme import THEME_TOKENS
+from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
 
 TRACE_THEME = Theme(
     name="trace",
-    primary="#72B7D3",
-    secondary="#5B8DB8",
-    warning="#D7B765",
-    error="#D06A73",
-    success="#63D391",
-    accent="#72B7D3",
-    foreground="#E3E7EA",
-    background="#0C0C0C",
-    surface="#0C0C0C",
-    panel="#1E2328",
+    primary=THEME_HEX["blue"],
+    secondary=THEME_HEX["blue_deep"],
+    warning=THEME_HEX["amber"],
+    error=THEME_HEX["red"],
+    success=THEME_HEX["green"],
+    accent=THEME_HEX["blue"],
+    foreground=THEME_HEX["value"],
+    background=THEME_HEX["background"],
+    surface=THEME_HEX["surface"],
+    panel=THEME_HEX["border_card"],
     dark=True,
     variables={
         "muted": THEME_TOKENS["muted"],
@@ -32,15 +34,24 @@ STATUS_COLORS = {
     "CLOSED": THEME_TOKENS["status_closed"],
     "ARCHIVED": THEME_TOKENS["status_archived"],
 }
+STATUS_FALLBACK = THEME_HEX["value"]
+
+
+def status_label(status, is_deleted: bool = False) -> str:  # type: ignore[no-untyped-def]
+    """Single source for the status label, including the review abbreviation."""
+    label = "ARCHIVED" if is_deleted else str(getattr(status, "value", status))
+    return "REVIEW" if label == "UNDER_REVIEW" else label
+
+
+def status_style(status, is_deleted: bool = False) -> str:  # type: ignore[no-untyped-def]
+    """Single source for the status colour."""
+    key = "ARCHIVED" if is_deleted else str(getattr(status, "value", status))
+    return STATUS_COLORS.get(key, STATUS_FALLBACK)
 
 
 def status_text(status, is_deleted: bool = False):  # type: ignore[no-untyped-def]
     """Single source for TUI status labels. Byte-identical to CasesView._status_text."""
-    label = "ARCHIVED" if is_deleted else str(getattr(status, "value", status))
-    color = STATUS_COLORS.get("ARCHIVED" if is_deleted else label, "#E5EAF0")
-    if label == "UNDER_REVIEW":
-        label = "REVIEW"
-    return Text(label, style=color)
+    return Text(status_label(status, is_deleted), style=status_style(status, is_deleted))
 
 
 def health_dot(ok: bool):  # type: ignore[no-untyped-def]
@@ -50,9 +61,9 @@ def health_dot(ok: bool):  # type: ignore[no-untyped-def]
 
 SELECT_PREFIX = "› "
 
-DOT_OK = "#5FD18A"
-DOT_BAD = "#D06A73"
-DOT_INFO = "#72B7D3"
+DOT_OK = THEME_HEX["green"]
+DOT_BAD = THEME_HEX["red"]
+DOT_INFO = THEME_HEX["blue"]
 
 
 def dot_line(ok: bool, label: str):  # type: ignore[no-untyped-def]
@@ -107,3 +118,9 @@ def table_head_text(columns: list[tuple[str, int]]) -> str:
     .datatable--header are ignored by Textual (proven by probe).
     """
     return (" " + "  ".join(label.ljust(width) for label, width in columns)).rstrip()
+
+
+def header_with_count(columns: Sequence[tuple[str, int]], count: int) -> str:
+    """Header row plus the `· N` count suffix. Single source for the two views
+    that each assembled this separately in on_mount and again on refresh."""
+    return f"{table_head_text(list(columns))}  · {count}"

@@ -16,6 +16,7 @@ GENESIS_CHAIN: str = "0" * 64
 SPEC_VERSION = "trace-audit-v1"
 CANONICAL_VERSION = "trace-canonical-json-v1"
 HASH_ALGO = "SHA-256"
+_HASHERS: Final[dict[str, Any]] = {"SHA-256": hashlib.sha256}
 AUDIT_LEDGER_NOT_INITIALIZED_MESSAGE = "Audit ledger not initialized. Run `trace db migrate`."
 
 
@@ -38,9 +39,15 @@ ACTION_TITLES: Final[dict[str, str]] = {
 }
 
 
+def _hasher() -> Any:
+    """Single source for the ledger hash. Resolves through HASH_ALGO so the declared
+    algorithm and the one actually applied cannot drift apart."""
+    return _HASHERS[HASH_ALGO]
+
+
 def payload_hash(payload: dict[str, Any]) -> str:
     """SHA-256 of canonical JSON payload."""
-    return hashlib.sha256(canonical_json(payload)).hexdigest()
+    return _hasher()(canonical_json(payload)).hexdigest()
 
 
 def chain_hash(prev_chain: str, p_hash: str, seq: int) -> str:
@@ -49,7 +56,7 @@ def chain_hash(prev_chain: str, p_hash: str, seq: int) -> str:
     Binding the previous head AND the sequence number means an attacker cannot
     reorder events or splice two valid chains together without breaking the link.
     """
-    return hashlib.sha256(f"{prev_chain}{p_hash}{seq}".encode()).hexdigest()
+    return _hasher()(f"{prev_chain}{p_hash}{seq}".encode()).hexdigest()
 
 
 class AuditEvent(BaseModel):
@@ -62,9 +69,9 @@ class AuditEvent(BaseModel):
     subject_case_number: str = Field(min_length=1, max_length=100)
     subject_case_id: UUID | None = None
     payload_json: str
-    payload_hash: str = Field(min_length=64, max_length=64)
-    prev_chain: str = Field(min_length=64, max_length=64)
-    chain_hash_str: str = Field(min_length=64, max_length=64, alias="chain_hash")
+    payload_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    prev_chain: str = Field(pattern=r"^[0-9a-f]{64}$")
+    chain_hash_str: str = Field(pattern=r"^[0-9a-f]{64}$", alias="chain_hash")
     key_id: str | None = None
     signature: str | None = None
 

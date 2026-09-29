@@ -65,7 +65,7 @@ def current_identity() -> tuple[str, str]:
 
 
 def _missing_table(exc: Exception) -> bool:
-    return "no such table" in str(exc).lower() or getattr(getattr(exc, "orig", None), "pgcode", None) == "42P01"
+    return "no such table" in str(exc).lower() or getattr(getattr(exc, "orig", None), "sqlstate", None) == "42P01"
 
 
 def get_or_provision(session: Session, name: str, host: str) -> OperatorModel:

@@ -33,10 +33,10 @@ def is_installable(
     forensic_active: bool = False,
     allow_minimum_bypass: bool = False,
 ) -> tuple[bool, str | None]:
-    from trace_core.updates.errors import UpdateVerificationError
+    from trace_core.updates.errors import UpdatePolicyBlockedError
 
     if not UpdateChannel.contains(channel):
-        raise UpdateVerificationError(f"unknown channel {channel!r}")
+        raise UpdatePolicyBlockedError(f"unknown channel {channel!r}")
     if forensic_active:
         return False, "forensic operation active"
     if manifest.channel not in CHANNEL_COMPATIBILITY.get(channel, {channel}):

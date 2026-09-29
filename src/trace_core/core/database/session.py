@@ -130,15 +130,25 @@ class DatabaseSessionManager:
             session.close()
 
 
-def sanitized_db_identity(url: str) -> str:
-    """Stable database identity without credentials. Safe for cache keys and logs."""
+def _split_safe(url: str):  # type: ignore[no-untyped-def]
+    """urlsplit plus a normalised host[:port]. Single source for URL display shaping.
+
+    Both sanitizers below rebuild host:port from the parsed parts; that logic lived
+    in each of them separately and had already drifted once.
+    """
     from urllib.parse import urlsplit
 
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if parts.port:
+        host += f":{parts.port}"
+    return parts, host
+
+
+def sanitized_db_identity(url: str) -> str:
+    """Stable database identity without credentials. Safe for cache keys and logs."""
     try:
-        parts = urlsplit(url)
-        host = parts.hostname or ""
-        if parts.port:
-            host += f":{parts.port}"
+        parts, host = _split_safe(url)
         user = parts.username or ""
         return f"{parts.scheme}://{user}@{host}{parts.path or ''}"
     except Exception:
@@ -147,15 +157,12 @@ def sanitized_db_identity(url: str) -> str:
 
 def sanitized_db_url(url: str) -> str:
     """Full database URL with the password masked. Single source for display."""
-    from urllib.parse import urlsplit, urlunsplit
+    from urllib.parse import urlunsplit
 
     try:
-        parts = urlsplit(url)
+        parts, hostport = _split_safe(url)
         if not parts.hostname:
             return url
-        hostport = parts.hostname
-        if parts.port:
-            hostport += f":{parts.port}"
         if parts.username and parts.password:
             netloc = f"{parts.username}:*****@{hostport}"
         elif parts.username:

@@ -7,6 +7,8 @@ file-tree path and never touch this module. Editable installs converge to wheel
 installs on first update; that is intended for release machines.
 """
 
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +18,36 @@ from trace_core.updates.errors import UpdateError
 _PIP_TIMEOUT_SECONDS = 300
 _PROOF_TIMEOUT_SECONDS = 120
 _VERSION_PROBE = "from trace_core.core.settings import settings; print('TRACE_VERSION=' + settings.version)"
+
+_PIP_ENV_DENYLIST = (
+    "PIP_INDEX_URL",
+    "PIP_EXTRA_INDEX_URL",
+    "PIP_FIND_LINKS",
+    "PIP_TRUSTED_HOST",
+    "PIP_CERT",
+    "PIP_CLIENT_CERT",
+    "PIP_CONFIG_FILE",
+    "PIP_REQUIRE_VIRTUALENV",
+    "SSL_CERT_FILE",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+)
+
+
+def _pip_env() -> dict[str, str]:
+    """Process environment with the variables that can redirect or unverify an install removed."""
+    return {k: v for k, v in os.environ.items() if k not in _PIP_ENV_DENYLIST}
+
+
+_CREDENTIAL_URL_RE = re.compile(r"(?<=://)[^/\s@]+@")
+
+
+def _redact(text: str) -> str:
+    """Strip inline URL credentials before the text reaches a console or the history table.
+
+    Applied before truncation so a sliced-off password cannot survive as a fragment.
+    """
+    return _CREDENTIAL_URL_RE.sub("", text)
 
 
 def venv_python() -> Path | None:
@@ -37,7 +69,7 @@ def _run_quiet(cmd: list[str], timeout: int):  # type: ignore[no-untyped-def]
     Callers own exit-code semantics (raise vs None); startup failure is shared.
     """
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False, env=_pip_env())
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -48,7 +80,7 @@ def pip_install_wheel(python: Path, wheel: Path) -> None:
     if proc is None:
         raise UpdateError(f"pip install failed to start for {wheel.name}")
     if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip()[-2000:]
+        tail = _redact(proc.stderr or proc.stdout or "").strip()[-2000:]
         raise UpdateError(f"pip install failed (exit {proc.returncode}): {tail}")
 
 

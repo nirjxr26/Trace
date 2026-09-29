@@ -24,7 +24,9 @@ def _resolve_command(command: str | None, argv_cmd: str) -> str:
     if not command.startswith(_CASE_PREFIX) or not argv_cmd or argv_cmd == command:
         return command or ""
     # enrich placeholder with real argv that has flags
-    if argv_cmd.startswith(_CASE_PREFIX) and (len(argv_cmd) > len(command) or "--" in argv_cmd or " -" in argv_cmd):
+    if argv_cmd.startswith(_CASE_PREFIX) and (
+        len(argv_cmd) > len(command) or any(t.startswith("-") for t in argv_cmd.split())
+    ):
         return argv_cmd
     return command or ""
 

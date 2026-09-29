@@ -21,11 +21,13 @@ class DossierScroll(VerticalScroll):
     """Scrollable dossier pane with live-width muted dividers. Single source."""
 
     def rule_width(self) -> int:
+        from trace_core.core.ui.renderers import rule_width
+
         try:
             width = self.scrollable_content_region.width
         except Exception:
             width = 60
-        return max(20, min(66, width - 2))
+        return rule_width(width, 66)
 
     def divider(self) -> Text:
         """Muted rule sized to this pane. Recalculated on every render."""
