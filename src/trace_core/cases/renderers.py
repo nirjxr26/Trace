@@ -211,7 +211,7 @@ def render_case_detail(case: CaseResponseDto, events: list[Any] | None = None) -
     console.print(divider)
     console.print("")
 
-    console.print(create_key_value_grid(fields, width=max(kv_width(bp), 16), padding=table_padding(bp)))
+    console.print(create_key_value_grid(fields, width=kv_width(bp, min_width=16), padding=table_padding(bp)))
     console.print(divider)
     console.print("")
 

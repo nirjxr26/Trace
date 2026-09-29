@@ -1,10 +1,11 @@
 import hashlib
+import json
 import os
 import shutil
 import time
 from pathlib import Path
 
-from trace_core.core.fs import atomic_write_lines, check_contained, ensure_dir
+from trace_core.core.fs import atomic_write_lines, check_contained, ensure_dir, read_json_record
 from trace_core.updates.errors import UpdateVerificationError
 from trace_core.updates.lock import update_lock
 
@@ -66,16 +67,7 @@ def _binding_path(staging_dir: Path, name: str) -> Path:
 
 
 def _read_binding(staging_dir: Path, name: str) -> dict | None:
-    import json
-
-    target = _binding_path(staging_dir, name)
-    if not target.exists():
-        return None
-    try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
+    return read_json_record(_binding_path(staging_dir, name))
 
 
 def stage_artifact(
@@ -109,8 +101,6 @@ def _stage_artifact_locked(
 def _stage_copy(
     src: Path, staging_dir: Path, dst: Path, tmp: Path, expected_sha256: str | None, binding: dict | None
 ) -> Path:
-    import json
-
     from trace_core.core.fs import atomic_write_lines
 
     offset = 0
@@ -179,8 +169,6 @@ def _stage_release_locked(
     expected: list[str] | None,
     release_meta: dict | None,
 ) -> Path:
-    import json
-
     root = releases_root(base)
     target = root / version
     check_contained(target, root)
@@ -227,16 +215,7 @@ def prune_retention(base: str | Path, keep_backups: int = RETENTION_BACKUPS) -> 
 
 
 def read_release_meta(base: str | Path, version: str) -> dict | None:
-    import json
-
-    target = releases_root(base) / version / "release.json"
-    if not target.exists():
-        return None
-    try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
+    return read_json_record(releases_root(base) / version / "release.json")
 
 
 def _set_active(base: str | Path, version: str) -> None:

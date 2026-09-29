@@ -5,7 +5,7 @@ import typer
 
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.output import SKIP_CONFIRM_HELP
-from trace_core.core.ui.renderers import console, render_minimalist_table
+from trace_core.core.ui.renderers import console, get_success_icon, render_minimalist_table
 from trace_core.updates.dto import UpdateHistoryDto
 from trace_core.updates.manifest import ManifestArtifact, ReleaseManifest
 from trace_core.updates.service import UpdateService
@@ -24,7 +24,8 @@ HISTORY_COLUMNS: list[tuple[str, dict[str, object]]] = [
 
 def history_table_rows(rows: list[UpdateHistoryDto]) -> list[list[str]]:
     """Single source for history table rows. Shared by CLI and REPL shell."""
-    return [[r.from_version, r.to_version, r.channel, r.result, "✓" if r.rollback else "—"] for r in rows]
+    yes = get_success_icon()
+    return [[r.from_version, r.to_version, r.channel, r.result, yes if r.rollback else "—"] for r in rows]
 
 
 def load_update(manifest: str | None, artifact: str | None) -> tuple[ReleaseManifest, str, str, ManifestArtifact]:
@@ -151,7 +152,6 @@ def update_install(
                 artifact_path,
                 channel=channel,
                 allow_minimum_bypass=bypass_minimum,
-                preverified_sha256=entry.sha256,
             )
             display.finish(dto, current)
         finally:

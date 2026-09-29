@@ -70,7 +70,9 @@ async def test_updates_card_and_recent_activity(
 
     _, manifest_path, _, _ = signed_release()
     monkeypatch.setattr(settings, "update_manifest", str(manifest_path))
-    UpdateService(session_manager).record_history(UpdateHistoryCreateDto(from_version="0.2.2", to_version="0.2.3"))
+    UpdateService(session_manager).record_history(
+        UpdateHistoryCreateDto(from_version="0.2.2", to_version="0.2.3", result="SUCCESS")
+    )
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         await _goto_settings_updates(pilot, app)

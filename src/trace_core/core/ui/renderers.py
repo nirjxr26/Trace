@@ -12,6 +12,7 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
+from trace_core.core.canonical import is_naive
 from trace_core.core.ui.theme import THEME_TOKENS
 
 
@@ -164,9 +165,15 @@ def fit_text(text: str, max_width: int) -> str:
         return text[: max_width - 1] + "…"
 
 
+def rule_width(term_w: int, max_len: int = 66) -> int:
+    """Single source for horizontal rule length. The four TUI copies had drifted
+    to two different caps (66 and 60) and two different indents."""
+    return max(20, min(max_len, term_w - 4))
+
+
 def rule_line(term_w: int, max_len: int = 66) -> str:
     """Single source for horizontal rule length across banner/dossier/timeline."""
-    return "  " + (get_rule_char() * max(20, min(max_len, term_w - 4)))
+    return "  " + (get_rule_char() * rule_width(term_w, max_len))
 
 
 def table_padding(bp: str) -> tuple[int, int]:
@@ -174,9 +181,14 @@ def table_padding(bp: str) -> tuple[int, int]:
     return (0, 2) if bp == "XL" else (0, 1)
 
 
-def kv_width(bp: str, narrow: int = 14, default: int = 19) -> int:
-    """Single source for key-value label width: narrow on XS."""
-    return narrow if bp == "XS" else default
+def kv_width(bp: str, narrow: int = 14, default: int = 19, min_width: int = 0) -> int:
+    """Single source for key-value label width: narrow on XS, never below min_width.
+
+    min_width exists because two call sites wrapped this in `max(kv_width(bp), 16)`
+    and a third in the same function did not, so the floor was a per-site decision.
+    """
+    width = narrow if bp == "XS" else default
+    return max(width, min_width)
 
 
 def is_compact_view(bp: str | None = None) -> bool:
@@ -259,11 +271,14 @@ def _status_styles() -> dict[str, tuple[str, str]]:
     return _STATUS_STYLES
 
 
+def _assume_utc(dt: datetime) -> datetime:
+    """Attach UTC to a naive datetime, convert an aware one. Shared by every timestamp formatter."""
+    return dt.replace(tzinfo=UTC) if is_naive(dt) else dt.astimezone(UTC)
+
+
 def _to_ist(dt: datetime) -> datetime:
     """Normalize any datetime to IST, assuming UTC when naive."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt.astimezone(IST)
+    return _assume_utc(dt).astimezone(IST)
 
 
 def format_india_datetime(dt: datetime | None, include_seconds: bool = True) -> str:
@@ -294,7 +309,7 @@ def format_ledger_time(ts: Any) -> str:
 def format_utc_zulu(ts: Any) -> str:
     """UTC Zulu string for court-facing timestamps."""
     try:
-        return ts.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return _assume_utc(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
     except Exception:
         return str(ts)
 

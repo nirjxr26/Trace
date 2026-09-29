@@ -58,4 +58,12 @@ class BaseService:
 
             # Execute optional external side effects only after successful commit
             for post_hook in uow.post_commit_hooks:
-                post_hook()
+                try:
+                    post_hook()
+                except Exception as exc:
+                    import structlog
+
+                    structlog.get_logger().error(
+                        "Post-commit hook failed after durable commit; work is already persisted",
+                        error=str(exc),
+                    )

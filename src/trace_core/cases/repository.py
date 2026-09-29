@@ -12,7 +12,9 @@ from trace_core.cases.models import CaseModel, CaseSequenceModel, PurgedNumberMo
 from trace_core.core.canonical import parse_trailing_seq
 from trace_core.core.clock import now_utc
 from trace_core.core.database.repository import SqlAlchemyBaseRepository, ilike_literal, paginate
-from trace_core.core.domain import ensure_utc
+from trace_core.core.domain import ensure_utc, parse_enum_value
+
+_MAX_SEQUENCE = 9999
 
 
 class CaseRepository(Protocol):
@@ -54,7 +56,8 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
             number=model.number,
             title=model.title,
             lead_examiner=model.lead_examiner,
-            status=CaseStatus(model.status),
+            status=parse_enum_value(CaseStatus, model.status)
+            or (CaseStatus.CLOSED if model.closed_at else CaseStatus.OPEN),
             opened_at=ensure_utc(model.opened_at) or now_utc(),
             closed_at=ensure_utc(model.closed_at),
             closed_by=model.closed_by,
@@ -218,12 +221,21 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         return True
 
     def purge(self, case_id: uuid.UUID, expected_version: int) -> bool:
-        """Permanently delete a case record."""
+        """Permanently delete a case record. Archive-first is enforced here, not only
+        at the service, so no repository caller can hard-delete an active case."""
+        from trace_core.core.errors import StateTransitionError
+
         model = self._fetch(case_id)
         if not model:
             return False
 
         self._guard_version(model, expected_version, "Case", str(model.number))
+        if not model.is_deleted:
+            raise StateTransitionError(
+                "ACTIVE",
+                "PURGED",
+                f"Forensic safety violation: Case '{model.number}' must be archived before it can be purged.",
+            )
 
         purged_number = str(model.number)
         self.session.delete(model)
@@ -295,7 +307,7 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         stmt = select(CaseSequenceModel).where(CaseSequenceModel.year == current_year).with_for_update()
         seq_record = self._ensure_seq_record(current_year, self.session.scalar(stmt))
 
-        for _ in range(10000):
+        for _ in range(_MAX_SEQUENCE):
             seq_record.last_sequence += 1
             self.session.flush()
             candidate = f"{prefix}{seq_record.last_sequence:04d}"

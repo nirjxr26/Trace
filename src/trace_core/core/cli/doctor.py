@@ -27,8 +27,13 @@ def _python_check() -> tuple[str, str, bool]:
     return ("Python runtime", detail, passed)
 
 
-def _storage_check() -> tuple[str, str, bool]:
-    """Storage root exists and accepts writes. Returns (name, detail, passed)."""
+def _storage_check(*, probe: bool = True) -> tuple[str, str, bool]:
+    """Storage root exists and accepts writes. Returns (name, detail, passed).
+
+    probe=False checks the directory only. The TUI render path calls it on every
+    repaint, and writing into the evidence storage root on each one is both slow
+    and a source of stray files if the process dies mid-probe.
+    """
     from pathlib import Path
 
     from trace_core.core.settings import settings
@@ -36,9 +41,11 @@ def _storage_check() -> tuple[str, str, bool]:
     root = Path(settings.storage_root)
     try:
         root.mkdir(parents=True, exist_ok=True)
-        probe = root / ".trace-write-probe"
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink(missing_ok=True)
+        if not probe:
+            return ("Storage", str(root), True)
+        probe_path = root / ".trace-write-probe"
+        probe_path.write_text("ok", encoding="utf-8")
+        probe_path.unlink(missing_ok=True)
         return ("Storage", str(root), True)
     except OSError as exc:
         return ("Storage", f"{root} ({exc})", False)

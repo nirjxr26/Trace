@@ -5,6 +5,13 @@
 # --- Internal Documentation & Process Artifacts ---
 /docs
 process/
+CODE-AUDIT.md
+
+# --- Runtime Trust Store ---
+# Derived from storage_root's parent; lands here when TRACE_STORAGE_ROOT is a
+# single-segment relative path, which is what CI and tests/conftest.py both set.
+# Ed25519 release keys must never be committable.
+/trust/
 
 # --- Local Developer Scripts (never committed) ---
 /check-pr.ps1

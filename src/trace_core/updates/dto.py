@@ -12,7 +12,7 @@ class UpdateHistoryCreateDto(BaseDto):
     to_version: str
     started_at: datetime = Field(default_factory=now_utc)
     channel: str = "stable"
-    result: str = "SUCCESS"
+    result: str
 
     @field_validator("channel")
     @classmethod
@@ -61,7 +61,7 @@ class UpdateHistoryCreateDto(BaseDto):
     override_reason: str | None = None
     restart_required: bool = False
     rollback: bool = False
-    transaction_id: str | None = None
+    transaction_id: str | None = Field(default=None, max_length=36)
     release_id: str | None = None
 
 

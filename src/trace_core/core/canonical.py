@@ -6,11 +6,16 @@ from datetime import UTC, datetime
 from typing import Any
 
 
+def is_naive(dt: datetime) -> bool:
+    """True when a datetime carries no usable UTC offset. Single source for the naive check."""
+    return dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None
+
+
 def coerce_utc(dt: datetime | None) -> datetime | None:
     """Coerce naive datetime to UTC, pass through aware as UTC. Single source."""
     if dt is None:
         return None
-    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+    if is_naive(dt):
         return dt.replace(tzinfo=UTC)
     return dt.astimezone(UTC)
 

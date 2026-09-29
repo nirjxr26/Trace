@@ -46,7 +46,7 @@ def test_history_json_shape(session_manager, temp_storage_root, monkeypatch):
 
     monkeypatch.setattr("trace_core.updates.commands.UpdateService", lambda: UpdateService(session_manager))
     svc = UpdateService(session_manager)
-    svc.record_history(UpdateHistoryCreateDto(from_version="0.1.0", to_version="1.5.0"))
+    svc.record_history(UpdateHistoryCreateDto(from_version="0.1.0", to_version="1.5.0", result="SUCCESS"))
     res = CliRunner().invoke(app, ["update", "history", "--output", "json"])
     assert res.exit_code == 0
     rows = json.loads(res.output)

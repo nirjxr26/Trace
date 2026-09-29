@@ -18,20 +18,6 @@ def anchor_path(case_number: str, seq: int) -> Path:
     return check_contained(base / f"anchor-{case_number}-{seq}.json", base, what="anchor path")
 
 
-def write_anchor(case_number: str, seq: int, chain_hash: str) -> Path:
-    """Persist an anchor record for the ledger head. Returns the written path."""
-    payload = {
-        "case": case_number,
-        "last_seq": seq,
-        "last_chain": chain_hash,
-        "anchored_at": canonical_ts(now_utc()),
-        "spec": SPEC_VERSION,
-    }
-    path = anchor_path(case_number, seq)
-    atomic_write_lines(path, [json.dumps(payload, indent=2)])
-    return path
-
-
 def read_anchor(anchor: str | Path) -> dict[str, Any]:
     """Load and parse an anchor file. Raises on unreadable content."""
     return json.loads(Path(anchor).read_text(encoding="utf-8"))
@@ -68,19 +54,24 @@ def check_anchor_match(res, data: dict, latest_chain: str) -> None:  # type: ign
     """Pure anchor comparison. Raises AuditTamperError; performs no printing or exiting."""
     from trace_core.core.errors import AuditTamperError
 
+    if not res.is_valid:
+        return
     exp_seq = data.get("last_seq")
     exp_chain = data.get("last_chain")
-    if res.is_valid and res.last_seq != exp_seq:
+    if res.last_seq != exp_seq:
         raise AuditTamperError(f"Anchor tail mismatch: DB last_seq {res.last_seq} != anchor {exp_seq}")
-    if res.is_valid and exp_chain and latest_chain != exp_chain:
+    if exp_chain and latest_chain != exp_chain:
         raise AuditTamperError("Anchor chain mismatch")
-    if res.is_valid and data.get("signature") and data.get("key_id"):
-        from trace_core.audit.signing import verify_bytes
-        from trace_core.core.canonical import canonical_json
+    signature = data.get("signature")
+    key_id = data.get("key_id")
+    if not (signature and key_id):
+        raise AuditTamperError("Anchor is unsigned; refusing to trust an unverifiable envelope")
+    from trace_core.audit.signing import verify_bytes
+    from trace_core.core.canonical import canonical_json
 
-        unsigned = {k: v for k, v in data.items() if k not in ("key_id", "signature")}
-        if not verify_bytes(data["key_id"], canonical_json(unsigned), data["signature"]):
-            raise AuditTamperError("Anchor signature invalid")
+    unsigned = {k: v for k, v in data.items() if k not in ("key_id", "signature")}
+    if not verify_bytes(key_id, canonical_json(unsigned), signature):
+        raise AuditTamperError("Anchor signature invalid")
 
 
 def verify_against_anchor(svc, res, anchor: str | None) -> None:  # type: ignore[no-untyped-def]
@@ -144,10 +135,6 @@ def latest_intent_status(session, case_number: str) -> str | None:  # type: igno
 def _publish_one(session, intent, extra_sinks: list[str] | None) -> None:  # type: ignore[no-untyped-def]
     """Sign, write locally, fan out to sinks. Marks CONFIRMED only when all land."""
     from trace_core.audit.models import INTENT_CONFIRMED, INTENT_FAILED
-    from trace_core.audit.signing import sign_bytes
-    from trace_core.core.canonical import canonical_json
-    from trace_core.core.clock import now_utc
-    from trace_core.core.fs import ensure_dir
 
     intent.attempt_count += 1
     intent.last_attempt_at = now_utc()
@@ -159,10 +146,14 @@ def _publish_one(session, intent, extra_sinks: list[str] | None) -> None:  # typ
         "anchored_at": canonical_ts(now_utc()),
         "spec": SPEC_VERSION,
     }
-    key_id, signature = sign_bytes(canonical_json(payload))
-    envelope = {**payload, "key_id": key_id, "signature": signature}
-    body = json.dumps(envelope, indent=2)
     try:
+        from trace_core.audit.signing import sign_bytes
+        from trace_core.core.canonical import canonical_json
+        from trace_core.core.fs import ensure_dir
+
+        key_id, signature = sign_bytes(canonical_json(payload))
+        envelope = {**payload, "key_id": key_id, "signature": signature}
+        body = json.dumps(envelope, indent=2)
         path = anchor_path(intent.case_number, intent.seq)
         atomic_write_lines(path, [body])
         for sink in extra_sinks or []:
@@ -193,7 +184,6 @@ def _failed_retry_due(intent) -> bool:  # type: ignore[no-untyped-def]
 
     from trace_core.audit.models import INTENT_FAILED
     from trace_core.core.canonical import coerce_utc
-    from trace_core.core.clock import now_utc
 
     if intent.status != INTENT_FAILED:
         return True

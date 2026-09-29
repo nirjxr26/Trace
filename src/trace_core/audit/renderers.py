@@ -75,10 +75,11 @@ def render_audit_table(events: list[AuditEventDto]) -> None:
         cases = len({e.subject_case_number for e in events})
         actors = len({e.actor for e in events})
         if bp == "XS" and term_w < 60:
-            console.print(f"[dim]Chain: ✓ VALID · {len(events)} events[/dim]\n")
+            console.print(f"[dim]Chain: {len(events)} events · run `trace audit verify` for integrity[/dim]\n")
         else:
             console.print(
-                f"[dim]Chain: ✓ VALID · SHA-256 · {len(events)} events · {cases} cases, {actors} actors[/dim]\n"
+                f"[dim]Chain: SHA-256 · {len(events)} events · {cases} cases, "
+                f"{actors} actors · run `trace audit verify` for integrity[/dim]\n"
             )
 
 
@@ -114,7 +115,7 @@ def render_case_audit_header(case_number: str, title: str, status: str, events: 
     console.print(
         Text(f"  Status: {status} · Events: {len(events)} · Created: {created} · Last: {last}", style=TOK["muted"])
     )
-    console.print(Text("  Chain ✓ VALID", style=TOK["success"]))
+    console.print(Text("  Chain integrity: run `trace audit verify`", style=TOK["muted"]))
     console.print(Text(f"  {rule}", style=TOK["border"]))
     console.print("")
 
@@ -233,7 +234,9 @@ def render_audit_detail(e: AuditEventDto) -> None:
         f"{sanitize_terminal(e.subject_case_number)} · {format_india_datetime(e.ts)}",
     )
     console.print(
-        create_key_value_grid(_detail_fields(e, details, utc_display), width=kv_width(bp), padding=table_padding(bp))
+        create_key_value_grid(
+            _detail_fields(e, details, utc_display), width=kv_width(bp, min_width=16), padding=table_padding(bp)
+        )
     )
 
     changed = details.get("changed", [])
@@ -285,22 +288,12 @@ def render_audit_detail(e: AuditEventDto) -> None:
     seal = "✓ VERIFIED" if intact else "✗ MISMATCH"
     render_section_title(f"INTEGRITY · {seal}", style=TOK["accent"] if intact else TOK["danger"])
     console.print(
-        create_key_value_grid(_integrity_rows(e, term_w), width=max(kv_width(bp), 16), padding=table_padding(bp))
+        create_key_value_grid(_integrity_rows(e, term_w), width=kv_width(bp, min_width=16), padding=table_padding(bp))
     )
     console.print("")
     if not intact:
         console.print("[dim]Row failed its self-check — run `audit verify` for the full chain.[/dim]")
     render_raw_tip(f"audit show --seq {e.seq} --output json for the raw payload")
-
-
-def _how_text(details: dict) -> str:
-    cmd = details.get("command") or "-"
-    ver = details.get("trace_version") or "-"
-    if ver == "-":
-        return cmd
-    if cmd != "-":
-        return f"{cmd} · v{ver}"
-    return f"v{ver}"
 
 
 def _detail_fields(e: AuditEventDto, details: dict, utc_display: str) -> list[tuple[str, Any]]:

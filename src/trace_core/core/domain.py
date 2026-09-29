@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from trace_core.core.canonical import coerce_utc
+from trace_core.core.canonical import coerce_utc, is_naive
 from trace_core.core.clock import now_utc
 
 _CONTROLS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -28,7 +28,7 @@ def require_utc(dt: datetime | None) -> datetime | None:
     """Reject naive timestamps, coerce aware to UTC. Single source for validators."""
     if dt is None:
         return None
-    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+    if is_naive(dt):
         raise InvariantViolationError("All timestamps must be timezone-aware UTC.")
     return dt.astimezone(UTC)
 

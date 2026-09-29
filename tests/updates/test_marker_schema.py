@@ -39,6 +39,14 @@ def test_roundtrip(temp_storage_root, tmp_path):
     assert data["state"] == "STAGED"
 
 
+def test_caller_cannot_override_schema(temp_storage_root, tmp_path):
+    """A caller-supplied marker_schema must not displace the enforced version."""
+    path = tmp_path / "m.json"
+    write_marker({"transaction_id": "t1", "state": "IDLE", "marker_schema": 999}, path)
+    assert json.loads(path.read_text(encoding="utf-8"))["marker_schema"] == MARKER_SCHEMA
+    assert read_marker(path)["marker_schema"] == MARKER_SCHEMA
+
+
 def test_partial_binding_mismatch_discards(temp_storage_root, tmp_path):
     import json as _json
 

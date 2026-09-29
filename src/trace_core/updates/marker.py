@@ -25,7 +25,7 @@ def write_marker(data: dict[str, Any], path: str | Path | None = None) -> Path:
     missing = [k for k in ("transaction_id", "state") if k not in data]
     if missing:
         raise UpdateError(f"marker missing fields: {missing}")
-    record = {"marker_schema": MARKER_SCHEMA, **data}
+    record = {**data, "marker_schema": MARKER_SCHEMA}
     return atomic_write_lines(target, [json.dumps(record, indent=2)])
 
 

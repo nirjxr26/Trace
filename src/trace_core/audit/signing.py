@@ -9,11 +9,11 @@ import hmac
 import re
 
 from trace_core.core.errors import ApplicationError
+from trace_core.core.settings import DEV_SECRET_SENTINEL
 
 HMAC_KEY_ID = "hmac-v1"
 ED25519_PREFIX = "ed25519:"
 _KEY_SUFFIX_RE = re.compile(r"^[0-9a-f]{16}$")
-_DEV_KEY_SENTINEL = "trace-local-dev-key-change-in-production"
 _KEYSTORE_UNAVAILABLE_MESSAGE = (
     "Ledger signing key {key_id} unavailable in keystore; case writes are paused until it is restored."
 )
@@ -209,6 +209,6 @@ def sign_bytes(data: bytes) -> tuple[str, str]:
         except (OSError, ValueError) as e:
             raise ApplicationError(_KEYSTORE_UNAVAILABLE_MESSAGE.format(key_id=key_id)) from e
     secret = _secret()
-    if secret.decode("utf-8", "replace") == _DEV_KEY_SENTINEL:
+    if secret.decode("utf-8", "replace") == DEV_SECRET_SENTINEL:
         _warn_default_key()
     return HMAC_KEY_ID, hmac.new(secret, data, hashlib.sha256).hexdigest()

@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from trace_core.core.fs import atomic_write_lines, check_contained, sha256_file
+from trace_core.core.fs import atomic_write_lines, read_json_record, sha256_file
 
 REQUIRED_KEYS = (
     "release_id",
@@ -28,20 +28,13 @@ def write_staged_record(staging_dir: str | Path, record: dict[str, Any]) -> Path
     if missing:
         raise UpdateError(f"incomplete staged record: {missing}")
     target = staged_record_path(staging_dir)
-    check_contained(target, staging_dir)
     record = {**record, "staged_schema": 1}
     return atomic_write_lines(target, [json.dumps(record, indent=2)])
 
 
 def read_staged_record(staging_dir: str | Path) -> dict[str, Any] | None:
-    target = staged_record_path(staging_dir)
-    if not target.exists():
-        return None
-    try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(data, dict) or any(k not in data for k in REQUIRED_KEYS):
+    data = read_json_record(staged_record_path(staging_dir))
+    if data is None or any(k not in data for k in REQUIRED_KEYS):
         return None
     return data
 

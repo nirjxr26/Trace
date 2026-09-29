@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from trace_core.core.fs import atomic_write_lines, check_contained
+from trace_core.core.fs import atomic_write_lines
 from trace_core.core.settings import settings
 
 TTL_SECONDS = 3600
@@ -36,7 +36,6 @@ def write_check_cache(data: dict[str, Any]) -> Path:
     from trace_core.updates.errors import UpdateError
 
     target = cache_path()
-    check_contained(target, settings.storage_root)
     try:
         payload = json.dumps({**data, "checked_at": time.time()}, indent=2)
     except (TypeError, ValueError) as e:

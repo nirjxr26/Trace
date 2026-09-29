@@ -424,21 +424,21 @@ class CaseShellCommandHandler(BaseShellHandler):
 
             # 5W1H diff preview before confirm
             from trace_core.audit.renderers import format_change_value
-            from trace_core.cases.domain import changed_fields, tracked_snapshot
+            from trace_core.cases.domain import changed_fields, normalise_optional, tracked_snapshot
 
             before = tracked_snapshot(case)
             # Same empty-normalization as the service (None == ""), so legacy ""
             # rows don't preview a change the service will skip.
             before = {
                 **before,
-                "description": before["description"] or None,
-                "notes": before["notes"] or None,
+                "description": normalise_optional(before["description"]),
+                "notes": normalise_optional(before["notes"]),
             }
             after_vals = {
                 "title": new_title,
                 "lead_examiner": new_examiner,
-                "description": cleared_desc or None,
-                "notes": cleared_notes or None,
+                "description": normalise_optional(cleared_desc),
+                "notes": normalise_optional(cleared_notes),
                 "tags": tag_list,
             }
             changed = changed_fields(before, after_vals)

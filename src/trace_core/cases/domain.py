@@ -241,6 +241,16 @@ def tracked_snapshot(case: Any) -> dict[str, Any]:
     return {k: (list(getattr(case, k)) if k == "tags" else getattr(case, k)) for k in CASE_TRACKED_FIELDS}
 
 
+def normalise_optional(value: str | None) -> str | None:
+    """None and "" both mean empty. Single source for the normalisation rule.
+
+    The service and the shell handler each carried their own copy of this rule, and
+    they had drifted: both normalised description/notes but neither normalised the
+    other free-text fields, while both comments claimed to describe one shared rule.
+    """
+    return value or None
+
+
 def changed_fields(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
     """Field names whose snapshot values differ. Single source for diff detection."""
     return [k for k in before if before[k] != after.get(k)]

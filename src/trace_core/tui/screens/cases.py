@@ -15,14 +15,16 @@ from trace_core.cases.service import CaseService
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.errors import ApplicationError
 from trace_core.core.ui.renderers import format_india_datetime, sanitize_terminal
+from trace_core.core.ui.theme import THEME_TOKENS
 from trace_core.tui.actions import run_guarded
 from trace_core.tui.forms import CaseForm, RawModal, TextInputModal, TypedConfirmModal, YesNoModal
-from trace_core.tui.theme import STATUS_COLORS, THEME_TOKENS, status_text, table_head_text
+from trace_core.tui.theme import header_with_count, status_text
 from trace_core.tui.widgets import DossierScroll
 
 TABLE_ID = "case-table"
 CASE_HEADER_ID = "case-header"
 TABLE_COLUMNS = (("Case #", 16), ("Status", 10))
+_CASE_COMMAND_ALIASES = {"close": "seal"}
 _NO_SELECTION = "Select a case first."
 _TITLE_STYLE = "bold #E5EAF0"
 
@@ -101,9 +103,7 @@ class CasesView(Vertical):
         except Exception:
             pass
         self._last_cursor = table.cursor_row if table.cursor_row is not None else 0
-        self.query_one(f"#{CASE_HEADER_ID}", Static).update(
-            f"{table_head_text(list(TABLE_COLUMNS))}  · {len(self._cases)}"
-        )
+        self.query_one(f"#{CASE_HEADER_ID}", Static).update(header_with_count(TABLE_COLUMNS, len(self._cases)))
         self._render_dossier()
 
     def _row_cells(self, case: CaseResponseDto, selected: bool) -> list:  # type: ignore[no-untyped-def]
@@ -140,11 +140,12 @@ class CasesView(Vertical):
             return
         events = self._dossier_events(case)
         rule = self.query_one("#cases-right", DossierScroll).divider()
-        status_label = "ARCHIVED" if case.is_deleted else str(getattr(case.status, "value", case.status))
-        status_color = STATUS_COLORS.get("ARCHIVED" if case.is_deleted else status_label, "#E5EAF0")
+        from trace_core.tui.theme import status_label, status_style
 
         body = Text()
-        self._append_head(body, case, rule, status_label, status_color)
+        self._append_head(
+            body, case, rule, status_label(case.status, case.is_deleted), status_style(case.status, case.is_deleted)
+        )
         self._append_meta(body, case, rule)
         self._append_integrity(body, events, rule)
         self._append_history(body, case, events)
@@ -247,7 +248,8 @@ class CasesView(Vertical):
 
     def run_command(self, command: str) -> None:
         """Entry for the palette. Unknown ids toast instead of vanishing."""
-        action = getattr(self, f"action_{command.replace('case-', '')}", None)
+        name = _CASE_COMMAND_ALIASES.get(command.removeprefix("case-"), command.removeprefix("case-"))
+        action = getattr(self, f"action_{name}", None)
         if callable(action) and getattr(action, "__name__", "").startswith("action_"):
             action()
         else:
@@ -367,13 +369,12 @@ class CasesView(Vertical):
         )
 
     def _sealed(self, number: str, reason: str = "") -> None:
-        from trace_core.audit.anchor import latest_intent_status
+        from trace_core.audit.anchor import describe_anchor
 
         def _seal() -> str:
             self._cases_svc.close_case(number, reason=reason, actor=None)
-            with self._cases_svc.session_manager.session() as session:
-                state = latest_intent_status(session, number)
-            return f"Case {number} sealed. Anchor: {state or 'UNKNOWN'}."
+            anchor = describe_anchor(self._cases_svc.session_manager, number)
+            return f"Case {number} sealed. {anchor or 'Anchor: UNKNOWN.'}"
 
         run_guarded(self, _seal)
 

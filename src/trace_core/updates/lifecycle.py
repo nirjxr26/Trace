@@ -117,7 +117,6 @@ class UpdateLifecycle:
         gate: ForensicOperationGate | None = None,
         backup_dir: str | Path | None = None,
         allow_minimum_bypass: bool = False,
-        preverified_sha256: str | None = None,
         progress: ProgressCallback | None = None,
     ) -> UpdateHistoryCreateDto:
         from trace_core.core.domain import now_utc
@@ -149,7 +148,6 @@ class UpdateLifecycle:
                     current,
                     started_at,
                     allow_minimum_bypass,
-                    preverified_sha256,
                     progress,
                 )
             except UpdatePolicyBlockedError:
@@ -159,6 +157,7 @@ class UpdateLifecycle:
 
                 from trace_core.updates.domain import UpdateFailureStage, can_transition
 
+                failure_stage = UpdateFailureStage.from_state(self.state)
                 if can_transition(self.state, UpdateState.FAILED):
                     self.transition(UpdateState.FAILED)
                 try:
@@ -168,7 +167,7 @@ class UpdateLifecycle:
                             to_version=manifest.version,
                             channel=channel,
                             result=UpdateResult.FAILED,
-                            failure_stage=UpdateFailureStage.from_state(self.state),
+                            failure_stage=failure_stage,
                             failure_reason=str(e),
                             override_reason=self._override_note(current, manifest, allow_minimum_bypass),
                             transaction_id=self.transaction_id,
@@ -184,6 +183,7 @@ class UpdateLifecycle:
 
                 from trace_core.updates.domain import UpdateFailureStage, can_transition
 
+                failure_stage = UpdateFailureStage.from_state(self.state)
                 if can_transition(self.state, UpdateState.FAILED):
                     try:
                         self.transition(UpdateState.FAILED)
@@ -196,7 +196,7 @@ class UpdateLifecycle:
                             to_version=manifest.version,
                             channel=channel,
                             result=UpdateResult.FAILED,
-                            failure_stage=UpdateFailureStage.from_state(self.state),
+                            failure_stage=failure_stage,
                             failure_reason=f"interrupted: {type(e).__name__}",
                             transaction_id=self.transaction_id,
                             release_id=manifest.release_id,
@@ -212,23 +212,9 @@ class UpdateLifecycle:
                 with contextlib.suppress(UpdateError):
                     finish_update_migration(self.transaction_id)
 
-    def _verify_stage(
-        self, manifest: ReleaseManifest, artifact_path: str | Path, preverified_sha256: str | None = None
-    ) -> None:
-        from trace_core.core.fs import sha256_file
-        from trace_core.updates.verifier import resolve_artifact, verify_manifest
+    def _verify_stage(self, manifest: ReleaseManifest, artifact_path: str | Path) -> None:
+        from trace_core.updates.verifier import verify_manifest
 
-        if preverified_sha256 is not None:
-            artifact = resolve_artifact(manifest, Path(artifact_path))
-            if artifact.sha256 == preverified_sha256:
-                try:
-                    if sha256_file(artifact_path) == artifact.sha256:
-                        from trace_core.updates.signing import verify_artifact_signature_file
-
-                        verify_artifact_signature_file(artifact_path, artifact.signature, artifact.signing_key_id)
-                        return
-                except OSError:
-                    pass
         verify_manifest(manifest, Path(artifact_path))
 
     def _download_stage(self, manifest: ReleaseManifest, artifact_path: str | Path, staging_dir: Path) -> Path:
@@ -325,7 +311,6 @@ class UpdateLifecycle:
         current: str,
         started_at: datetime,
         allow_minimum_bypass: bool = False,
-        preverified_sha256: str | None = None,
         progress: ProgressCallback = SILENT,
     ) -> UpdateHistoryCreateDto:
         from trace_core.core.database.health import fetch_db_snapshot
@@ -368,7 +353,7 @@ class UpdateLifecycle:
                 raise UpdatePolicyBlockedError(reason or "update blocked by policy")
             self.transition(UpdateState.AVAILABLE)
             self.transition(UpdateState.READY_TO_INSTALL)
-            self._verify_stage(manifest, artifact_path, preverified_sha256)
+            self._verify_stage(manifest, artifact_path)
             from trace_updater.updater import install_root as _install_root
 
             base = _install_root()

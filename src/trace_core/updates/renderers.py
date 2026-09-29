@@ -3,7 +3,7 @@ import time
 from rich.live import Live
 from rich.text import Text
 
-from trace_core.core.ui.renderers import console
+from trace_core.core.ui.renderers import console, get_success_icon
 from trace_core.updates.dto import UpdateHistoryCreateDto
 from trace_core.updates.manifest import ReleaseManifest
 from trace_core.updates.stages import (
@@ -22,7 +22,7 @@ DRAW_INTERVAL = 0.25
 RESTART_REQUIRED_MESSAGE = "Trace will restart to complete this update."
 
 _STAGE_GLYPH = {
-    StageStatus.DONE: "✓",
+    StageStatus.DONE: get_success_icon(),
     StageStatus.ACTIVE: "◌",
     StageStatus.FAILED: "✕",
 }
@@ -71,7 +71,6 @@ def render_install_summary(manifest: ReleaseManifest, current: str, bypass_note:
     console.print(f"Product: {manifest.product}")
     console.print(f"Current: v{current}")
     console.print(f"Target:  v{manifest.version}")
-    console.print("Signature: Verified")
     if manifest.restart_required:
         console.print("Restart: Required")
     if bypass_note:

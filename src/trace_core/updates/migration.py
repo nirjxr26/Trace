@@ -70,7 +70,6 @@ def marker_state() -> tuple[str, dict | None]:
 
 def begin_update_migration(transaction_id: str) -> None:
     target = migration_marker_path()
-    check_contained(target, settings.storage_root)
     atomic_write_lines(target, [json.dumps({"transaction_id": transaction_id})])
 
 

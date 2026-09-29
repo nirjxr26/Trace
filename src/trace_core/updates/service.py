@@ -64,10 +64,7 @@ class UpdateService(BaseService):
         from trace_core.updates.errors import RecoveryError
         from trace_core.updates.marker import marker_path, read_marker
 
-        target = Path(path) if path else marker_path()
-        if not target.exists():
-            return None
         try:
-            return read_marker(target)
+            return read_marker(Path(path) if path else marker_path())
         except RecoveryError:
             return None

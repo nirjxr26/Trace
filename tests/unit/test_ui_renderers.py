@@ -25,6 +25,33 @@ from trace_core.core.ui.renderers import (
 pytestmark = pytest.mark.unit
 
 
+def test_utc_zulu_treats_naive_as_utc() -> None:
+    """SQLite returns naive datetimes; the court-facing UTC string must still be UTC.
+
+    Without the guard, naive.astimezone(UTC) reads the value as local time and a
+    10:00:00Z row renders as 04:30:00Z on a +05:30 host.
+    """
+    from trace_core.core.ui.renderers import format_utc_zulu
+
+    aware = datetime(2026, 9, 27, 10, 0, tzinfo=UTC)
+    naive = datetime(2026, 9, 27, 10, 0)
+    assert format_utc_zulu(aware) == "2026-09-27T10:00:00Z"
+    assert format_utc_zulu(naive) == "2026-09-27T10:00:00Z"
+
+
+def test_domain_violation_is_reported_as_usage_error() -> None:
+    """Invariant violations are user-input failures, never 'unexpected operational error'."""
+    from trace_core.core.cli.exit_codes import EXIT_USAGE
+    from trace_core.core.domain import InvariantViolationError
+
+    title, message, _remed, code = _resolve_error_details(
+        InvariantViolationError("tag exceeds maximum length of 50 characters."), None, None
+    )
+    assert code == EXIT_USAGE
+    assert title == "Invalid Input"
+    assert message == "tag exceeds maximum length of 50 characters."
+
+
 def test_rule_char() -> None:
     char = get_rule_char()
     assert char in ("─", "-")

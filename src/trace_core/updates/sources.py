@@ -25,14 +25,6 @@ class LocalManifestSource(ManifestSource):
         return self.path.read_bytes()
 
 
-class TestManifestSource(ManifestSource):
-    def __init__(self, data: bytes):
-        self.data = data
-
-    def fetch(self, channel: str) -> bytes:
-        return self.data
-
-
 class _NotModified(Exception):
     pass
 
@@ -61,7 +53,7 @@ class _HttpsRedirectGuard(urllib.request.HTTPRedirectHandler):
 def _validate_manifest_url(url: str) -> None:
     from urllib.parse import urlparse
 
-    from trace_core.updates.errors import UpdateNetworkError
+    from trace_core.updates.errors import UpdatePolicyBlockedError
 
     if url.startswith(_HTTPS_PREFIX):
         return
@@ -71,7 +63,7 @@ def _validate_manifest_url(url: str) -> None:
         host = ""
     if url.startswith(_HTTP_PREFIX) and host.lower() in _LOOPBACK_HOSTS:
         return
-    raise UpdateNetworkError(f"refusing non-https manifest url {url!r}")
+    raise UpdatePolicyBlockedError(f"refusing non-https manifest url {url!r}")
 
 
 _JSON_SUFFIX = ".json"
@@ -175,16 +167,6 @@ def stream_artifact_to_file(
         return dest_tmp
 
     return _with_retries(_download)
-
-
-def fetch_artifact_bytes(base_url: str, filename: str, max_bytes: int, timeout: float = 30.0) -> bytes:
-    """Single source for small artifact download. Delegates to streaming helper for one code path."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory(prefix="trace-artifact-") as tmpdir:
-        tmp = Path(tmpdir) / "artifact.bin"
-        stream_artifact_to_file(base_url, filename, tmp, max_bytes, timeout)
-        return tmp.read_bytes()
 
 
 class HttpManifestSource(ManifestSource):

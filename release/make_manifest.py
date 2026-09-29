@@ -1,4 +1,4 @@
-import hashlib
+import argparse
 import json
 import os
 import sys
@@ -6,40 +6,19 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 
-from trace_core.core.fs import check_contained, ensure_dir
+from trace_core.core.fs import check_contained, ensure_dir, sha256_file
 
 
 def _parse_manifest_args(argv: list[str]) -> tuple[str, str, str, str, str | None, str | None]:
-    positionals: list[str] = []
-    options: dict[str, str] = {}
-    names = ("--min-version", "--notes")
-    idx = 0
-    while idx < len(argv):
-        arg = argv[idx]
-        matched = False
-        for name in names:
-            if arg == name and idx + 1 < len(argv):
-                options[name] = argv[idx + 1]
-                idx += 2
-                matched = True
-                break
-            if arg.startswith(name + "="):
-                options[name] = arg.split("=", 1)[1]
-                idx += 1
-                matched = True
-                break
-        if not matched:
-            positionals.append(arg)
-            idx += 1
-    if len(positionals) != 4:
-        raise SystemExit("usage: make_manifest.py <tag> <channel> <release_id> <out> [--min-version X] [--notes Y]")
-    min_version = options.get("--min-version", os.environ.get("TRACE_MANIFEST_MIN_VERSION"))
-    notes = options.get("--notes", os.environ.get("TRACE_MANIFEST_NOTES"))
-    if min_version is not None and not min_version.strip():
-        min_version = None
-    if notes is not None and not notes.strip():
-        notes = None
-    return positionals[0], positionals[1], positionals[2], positionals[3], min_version, notes
+    parser = argparse.ArgumentParser(prog="make_manifest.py")
+    parser.add_argument("tag")
+    parser.add_argument("channel")
+    parser.add_argument("release_id")
+    parser.add_argument("out")
+    parser.add_argument("--min-version", default=os.environ.get("TRACE_MANIFEST_MIN_VERSION"))
+    parser.add_argument("--notes", default=os.environ.get("TRACE_MANIFEST_NOTES"))
+    ns = parser.parse_args(argv)
+    return ns.tag, ns.channel, ns.release_id, ns.out, ns.min_version or None, ns.notes or None
 
 
 def main() -> None:
@@ -58,13 +37,9 @@ def main() -> None:
     for path in sorted(Path("dist").glob("*.whl")):
         if not path.is_file():
             continue
-        h = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                h.update(chunk)
         artifacts[path.name] = {
             "filename": path.name,
-            "sha256": h.hexdigest(),
+            "sha256": sha256_file(path),
             "size": path.stat().st_size,
             "signature": "",
             "signing_key_id": "",
