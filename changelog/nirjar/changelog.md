@@ -2622,3 +2622,12 @@ The second problem was that the release could not verify itself on a clean machi
 The trust store write now goes through atomic_write_lines with mode 0600 rather than shutil.copy2, matching how every other key in the codebase is written and avoiding the non-atomic copy that could leave a half-written public key behind. A missing trust bundle and a malformed bundle line are both explicit errors rather than being skipped, and the script's entry point now prints a readable failure instead of a bare traceback.
 
 Two regression guards. One asserts every file in release/trusted-keys derives its own stem, so the invariant is pinned in CI rather than only inside a release script. The other exercises the rejection path with a deliberately renamed anchor and then re-runs with the correct name, so the check cannot pass vacuously. The second guard was confirmed to fail when the key-content check is removed, which is the property that makes it worth having.
+---
+
+## 2026-09-29 - Trust bundle is assembled before self-verification, not after
+
+Scope: release/v0.2.7 follow-up to the trust-anchor fix, correcting a step-ordering bug that fix exposed. One workflow file. The 0.2.7 tag push failed at self-verify with `missing trusted-keys.bundle; the release must publish its own trust anchor` before this change.
+
+The trust-anchor work made release/verify_release require the published trusted-keys.bundle, because that is the point: a release must be verifiable from the artifacts it publishes rather than from files that happen to sit in the runner checkout. The workflow assembled the bundle in a later step, "Build channel + trust assets", which ran after self-verification. The old ordering only ever worked because the verifier trusted the repository copy of the keys, so the two steps were accidentally decoupled and nobody noticed the bundle was not part of what verification actually checked.
+
+Bundle assembly is now its own step immediately before signing, so the manifest is signed, then verified against the exact bundle that will be uploaded, and only then are the channel assets built. Splitting "channel assets" from "trust assets" makes the ordering explicit rather than incidental. A release that ships a bundle nobody verified now fails at self-verify instead of at an installer's update.

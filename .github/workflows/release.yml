@@ -72,16 +72,18 @@ jobs:
       - name: Assert update floor (fail closed without min-version + notes)
         run: |
           python -c "import json; m=json.load(open('release-manifest.json')); assert m.get('minimum_supported_version'), 'manifest missing minimum_supported_version'; assert m.get('notes'), 'manifest missing migration notes'; print('floor ok:', m['minimum_supported_version'])"
+      - name: Assemble trust bundle
+        run: |
+          for f in release/trusted-keys/*.pub; do echo "$(basename "$f" .pub) $(cat "$f")"; done > trusted-keys.bundle
       - name: Sign release (fail closed without key)
         run: python release/sign_release.py release-manifest.json
         env:
           TRACE_RELEASE_SIGNING_KEY: ${{ secrets.TRACE_RELEASE_SIGNING_KEY }}
       - name: Self-verify with client verifier
         run: python release/verify_release.py release-manifest.json "${GITHUB_REF_NAME}"
-      - name: Build channel + trust assets
+      - name: Build channel assets
         run: |
           cp release-manifest.json stable.json
-          for f in release/trusted-keys/*.pub; do echo "$(basename "$f" .pub) $(cat "$f")"; done > trusted-keys.bundle
       - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: release-artifacts
