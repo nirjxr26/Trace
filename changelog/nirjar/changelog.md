@@ -2609,3 +2609,16 @@ The fourth candidate was examined and not applied, and recording why matters mor
 Two entries in the audit were also found to be stale in the course of this pass: the pluralisation finding cites line numbers where the idiom no longer appears in three places, and the redundant-import finding describes the count as though all of it were safe to remove. Both are flagged in the audit rather than quietly worked around.
 
 Files touched: src/trace_core/core/ui/renderers.py, tui/theme.py, tui/widgets.py, tui/screens/settings.py, tui/screens/audit.py, tui/screens/cases.py, CODE-AUDIT.md, changelog/nirjar/changelog.md. Verification: ruff format --check . clean over 151 files, ruff check . clean, mypy src tests clean over 149 source files, pytest 359 passed 11 skipped.
+---
+
+## 2026-09-29 - Release trust anchor: the key's own filename is now verified against its content
+
+Scope: release/v0.2.7, adding to the 0.2.7 release before publication. Two source files and one test file. Suite 362 to 364 passed with 11 skipped, integration 3 of 3 against PostgreSQL 16, coverage 77.03% against a 70% gate, pip-audit clean. No comments added to source.
+
+The burned-in trust anchor is a filename, and nothing in the pipeline checked that the filename agreed with the key inside the file. release.yml assembles trusted-keys.bundle with basename, so a renamed or substituted file ships a key that no install will ever match, and the failure mode is a trust error at update time rather than a build failure. verify_release now derives the key id from the key bytes with key_id_for_pubkey and refuses when the two disagree, which turns a silent mis-shipment into a failed release. The same derivation is applied to the bundle, so the artifact the release publishes is validated on the way out rather than only the file in the repository.
+
+The second problem was that the release could not verify itself on a clean machine. The signing key is imported only from release/trusted-keys, which the runner happens to have, so the dry run passed while a fresh checkout with an empty trust store would fail with an unknown release key and no way to self-verify. The published trusted-keys.bundle is now also read as a source of anchors, and the manifest's own signing key is required to be present in it and to derive the key id the manifest claims. A release can therefore be verified from its own published artifacts alone, which is the property the verification step exists to provide.
+
+The trust store write now goes through atomic_write_lines with mode 0600 rather than shutil.copy2, matching how every other key in the codebase is written and avoiding the non-atomic copy that could leave a half-written public key behind. A missing trust bundle and a malformed bundle line are both explicit errors rather than being skipped, and the script's entry point now prints a readable failure instead of a bare traceback.
+
+Two regression guards. One asserts every file in release/trusted-keys derives its own stem, so the invariant is pinned in CI rather than only inside a release script. The other exercises the rejection path with a deliberately renamed anchor and then re-runs with the correct name, so the check cannot pass vacuously. The second guard was confirmed to fail when the key-content check is removed, which is the property that makes it worth having.

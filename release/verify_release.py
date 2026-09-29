@@ -31,14 +31,70 @@ def _verify_artifact_integrity(manifest: object, cwd: Path) -> None:
 
 
 def _sync_trusted_keys() -> None:
-    import shutil
+    """Import the burned-in keys the manifest was signed with.
 
+    The filename is the trust anchor, and nothing else in the pipeline checks it
+    against the key's own content: the bundle is assembled with `basename`, so a
+    renamed file would ship a key that no install can ever match. Derive the id
+    from the key bytes and refuse on mismatch.
+    """
+    from trace_core.updates.signing import key_id_for_pubkey
     from trace_core.updates.trust import trust_root
 
+    sources: list[tuple[str, str]] = []
     for pub in Path("release/trusted-keys").glob("*.pub"):
+        sources.append((pub.stem, pub.read_text(encoding="utf-8").strip()))
+    bundle = Path("trusted-keys.bundle")
+    if bundle.exists():
+        for line in bundle.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                parts = line.split()
+                if len(parts) == 2:
+                    sources.append((parts[0], parts[1]))
+    if not sources:
+        raise SystemExit("no trust anchors found in release/trusted-keys or trusted-keys.bundle")
+
+    for stem, hexpub in sources:
+        raw = bytes.fromhex(hexpub)
+        derived = key_id_for_pubkey(raw)
+        if derived.removeprefix("ed25519:") != stem:
+            raise SystemExit(f"trust anchor {stem!r} does not match its own key content: key derives {derived!r}")
         # revoked/ is runtime-only; source-of-truth keys that were revoked must not be re-trusted.
-        if not (trust_root() / "revoked" / pub.stem).exists():
-            shutil.copy2(pub, trust_root() / pub.name)
+        if not (trust_root() / "revoked" / stem).exists():
+            dest = trust_root() / f"{stem}.pub"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            from trace_core.core.fs import atomic_write_lines
+
+            atomic_write_lines(dest, [hexpub], mode=0o600)
+
+
+def _verify_trust_bundle(manifest: object, cwd: Path) -> None:
+    """The published bundle must contain the key the manifest was signed with.
+
+    Without this the release cannot be verified on a clean machine, because the
+    trust store starts empty and `load_release_pubkey` finds nothing.
+    """
+    from trace_core.core.fs import check_contained
+    from trace_core.updates.signing import key_id_for_pubkey
+
+    bundle = check_contained(Path("trusted-keys.bundle"), cwd)
+    if not bundle.exists():
+        raise SystemExit("missing trusted-keys.bundle; the release must publish its own trust anchor")
+    entries = {}
+    for line in bundle.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        parts = line.split()
+        if len(parts) != 2:
+            raise SystemExit(f"malformed trusted-keys.bundle line: {line!r}")
+        entries[parts[0]] = parts[1]
+    signing_key_id = getattr(manifest, "signing_key_id", "")
+    stem = signing_key_id.removeprefix("ed25519:")
+    if stem not in entries:
+        raise SystemExit(f"bundle does not carry the manifest signing key {signing_key_id!r}")
+    raw = bytes.fromhex(entries[stem])
+    if key_id_for_pubkey(raw) != signing_key_id:
+        raise SystemExit(f"bundle key {stem!r} does not derive {signing_key_id!r}")
 
 
 def main() -> None:
@@ -59,6 +115,7 @@ def main() -> None:
     if py_version != expected:
         raise SystemExit(f"package/version mismatch: {py_version} != {expected}")
     _verify_artifact_integrity(manifest, Path.cwd())
+    _verify_trust_bundle(manifest, Path.cwd())
     _sync_trusted_keys()
     for key in manifest.artifacts:
         verify_manifest(
@@ -70,4 +127,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit as exc:
+        print(f"release self-verify FAILED: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
