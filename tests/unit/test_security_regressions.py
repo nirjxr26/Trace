@@ -5,6 +5,9 @@ Covers: number grammar, anchor containment, markup/ANSI-safe rendering,
 control-character policy. See docs/security/assessment-2026-09-17.md.
 """
 
+import shutil
+from pathlib import Path
+
 import pytest
 from sqlalchemy import select
 
@@ -1051,3 +1054,53 @@ def test_palette_case_aliases_resolve_to_real_actions() -> None:
     for cmd in ("create", "edit", "close", "archive", "purge", "restore", "recent"):
         name = _CASE_COMMAND_ALIASES.get(cmd, cmd)
         assert callable(getattr(CasesView, f"action_{name}", None)), cmd
+
+
+def test_burned_in_trust_anchor_matches_its_own_key_content() -> None:
+    """The .pub filename IS the trust anchor, and nothing else checks it against the key.
+
+    release.yml builds trusted-keys.bundle with `basename`, so a renamed file ships a
+    key that no install can ever match. This pins filename == key_id_for_pubkey(content).
+    """
+    from trace_core.updates.signing import key_id_for_pubkey
+
+    keys = sorted(Path("release/trusted-keys").glob("*.pub"))
+    assert keys, "no burned-in trust anchors found"
+    for pub in keys:
+        raw = bytes.fromhex(pub.read_text(encoding="utf-8").strip())
+        derived = key_id_for_pubkey(raw).removeprefix("ed25519:")
+        assert derived == pub.stem, f"{pub.name} derives {derived}"
+
+
+def test_verify_release_refuses_a_mismatched_trust_anchor(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A renamed anchor must fail closed, not silently produce an unverifiable release."""
+    import importlib.util
+
+    repo = Path(__file__).resolve().parents[2]
+    src = repo / "release" / "trusted-keys"
+    if not src.is_dir():
+        pytest.skip("release/trusted-keys not present")
+    good = next(iter(sorted(src.glob("*.pub"))), None)
+    if good is None:
+        pytest.skip("no anchor to rename")
+
+    spec = importlib.util.spec_from_file_location("verify_release", repo / "release" / "verify_release.py")
+    assert spec is not None and spec.loader is not None
+    verify_release = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(verify_release)
+
+    work = tmp_path / "work"
+    (work / "release" / "trusted-keys").mkdir(parents=True)
+    shutil.copyfile(good, work / "release" / "trusted-keys" / "deadbeefdeadbeef.pub")
+    monkeypatch.chdir(work)
+    monkeypatch.setenv("TRACE_STORAGE_ROOT", str(tmp_path / "store"))
+
+    with pytest.raises(SystemExit) as exc:
+        verify_release._sync_trusted_keys()
+    assert "does not match its own key content" in str(exc.value)
+
+    # And the real filename must be accepted, proving the check is not vacuous.
+    shutil.rmtree(work / "release" / "trusted-keys")
+    (work / "release" / "trusted-keys").mkdir(parents=True)
+    shutil.copyfile(good, work / "release" / "trusted-keys" / good.name)
+    verify_release._sync_trusted_keys()
