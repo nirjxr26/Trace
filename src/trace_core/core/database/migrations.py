@@ -5,10 +5,10 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Column, Connection, DateTime, Engine, Integer, MetaData, String, Table, inspect, select, text
+from sqlalchemy import Column, Connection, Engine, Integer, MetaData, String, Table, inspect, select, text
 
 from trace_core.core.clock import now_utc
-from trace_core.core.database.base import Base
+from trace_core.core.database.base import Base, UTCDateTime
 
 metadata = MetaData()
 
@@ -18,15 +18,25 @@ schema_migrations = Table(
     metadata,
     Column("version", Integer, primary_key=True),
     Column("name", String(255), nullable=False),
-    Column("applied_at", DateTime(timezone=True), nullable=False, default=now_utc),
+    Column("applied_at", UTCDateTime, nullable=False, default=now_utc),
     Column("checksum", String(64), nullable=True),
+    Column("checksum_scheme", String(32), nullable=True),
 )
 
 MigrationAction = Callable[[Engine | Connection], None]
 MigrationVerifier = Callable[[Connection], bool]
 
+# Identity scheme for the recorded checksum. Rows carrying anything else predate
+# canonical migration identity and are upgraded once, explicitly, on first run.
+CHECKSUM_SCHEME = "canonical-v2"
+
 # Migration registry: (version, name, action)
 MIGRATIONS: list[tuple[int, str, MigrationAction]] = []
+
+# Declared schema operations per version. This is what the checksum commits to —
+# never the Python source. A comment, a reformat, or a decorator rewrite leaves it
+# untouched, while a genuine change to what a migration does changes it.
+MIGRATION_OPERATIONS: dict[int, tuple[str, ...]] = {}
 
 # Post-action verifiers: run inside the same transaction; False aborts without recording.
 # Production rule: run migration → verify resulting schema → record on success, abort on failure.
@@ -34,13 +44,21 @@ MIGRATION_VERIFIERS: dict[int, MigrationVerifier] = {}
 
 
 def register_migration(
-    version: int, name: str, verify: MigrationVerifier | None = None
+    version: int,
+    name: str,
+    operations: tuple[str, ...],
+    verify: MigrationVerifier | None = None,
 ) -> Callable[[MigrationAction], MigrationAction]:
-    """Decorator to register a schema migration with an optional post-action verifier."""
+    """Register a migration. `operations` is its declared schema effect and is mandatory.
+
+    Required rather than optional so no migration can be registered without a
+    declared identity; there is no source-text fallback left to regress into.
+    """
 
     def decorator(fn: MigrationAction) -> MigrationAction:
         MIGRATIONS.append((version, name, fn))
         MIGRATIONS.sort(key=lambda m: m[0])
+        MIGRATION_OPERATIONS[version] = operations
         if verify is not None:
             MIGRATION_VERIFIERS[version] = verify
         return fn
@@ -48,7 +66,11 @@ def register_migration(
     return decorator
 
 
-@register_migration(1, "001_initial_case_schema")
+def _create_all(tables: tuple[str, ...]) -> str:
+    return f"create_all:{','.join(tables)}"
+
+
+@register_migration(1, "001_initial_case_schema", operations=(_create_all(("*",)),))
 def _migration_001_initial_schema(bind: Engine | Connection) -> None:
     """Initial schema migration: creates core and case tables."""
     import trace_core.cases.models  # noqa: F401
@@ -77,7 +99,11 @@ def _apply_missing_columns(conn: Connection, existing_cols: set[str]) -> None:
             conn.execute(text(ddl))
 
 
-@register_migration(2, "002_add_concurrency_and_closure_columns")
+@register_migration(
+    2,
+    "002_add_concurrency_and_closure_columns",
+    operations=tuple(ddl for _, ddl in _CASE_COLUMN_DEFINITIONS) + (_create_all(("*",)),),
+)
 def _migration_002_add_columns(bind: Engine | Connection) -> None:
     """Add closure metadata, archived_at, and OCC version columns to existing tables."""
     inspector = inspect(bind)
@@ -93,7 +119,7 @@ def _migration_002_add_columns(bind: Engine | Connection) -> None:
     Base.metadata.create_all(bind=bind)
 
 
-@register_migration(3, "003_create_case_sequences_table")
+@register_migration(3, "003_create_case_sequences_table", operations=(_create_all(("case_sequences",)),))
 def _migration_003_case_sequences(bind: Engine | Connection) -> None:
     """Create case_sequences table for atomic sequence allocation."""
     import trace_core.cases.models  # noqa: F401
@@ -102,7 +128,11 @@ def _migration_003_case_sequences(bind: Engine | Connection) -> None:
         Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables["case_sequences"]])
 
 
-@register_migration(4, "004_add_archived_by_column")
+@register_migration(
+    4,
+    "004_add_archived_by_column",
+    operations=("ALTER TABLE cases ADD COLUMN archived_by VARCHAR(255)",),
+)
 def _migration_004_archived_by(bind: Engine | Connection) -> None:
     """Backfill archived_by for databases that applied 002 before it existed."""
     inspector = inspect(bind)
@@ -116,7 +146,15 @@ def _migration_004_archived_by(bind: Engine | Connection) -> None:
             _ensure_column(conn, "cases", "archived_by", ddl)
 
 
-@register_migration(5, "005_create_audit_ledger")
+@register_migration(
+    5,
+    "005_create_audit_ledger",
+    operations=(
+        _create_all(("audit_chain_state", "audit_events")),
+        "seed audit_chain_state",
+        "install sqlite append-only triggers",
+    ),
+)
 def _migration_005_audit(bind: Engine | Connection) -> None:
     """Create tamper-evident audit ledger and serialized chain head."""
     import trace_core.audit.models  # noqa: F401
@@ -134,7 +172,15 @@ def _migration_005_audit(bind: Engine | Connection) -> None:
         _install_sqlite_audit_triggers(bind)
 
 
-@register_migration(6, "006_add_case_checks", verify=lambda conn: _verify_006_case_checks(conn))
+@register_migration(
+    6,
+    "006_add_case_checks",
+    operations=(
+        "ALTER TABLE cases ADD CHECK (status IN ('OPEN','UNDER_REVIEW','CLOSED'))",
+        "ALTER TABLE cases ADD CHECK (version >= 1)",
+    ),
+    verify=lambda conn: _verify_006_case_checks(conn),
+)
 def _migration_006_case_checks(bind: Engine | Connection) -> None:
     """Add forensic CHECKs for status/version. PostgreSQL-only; SQLite enforces the same
     rules in the domain layer (SQLite has no ALTER TABLE ADD CHECK)."""
@@ -168,7 +214,14 @@ def _verify_006_case_checks(conn: Connection) -> bool:
     return (count or 0) >= 2
 
 
-@register_migration(7, "007_add_perf_indexes")
+@register_migration(
+    7,
+    "007_add_perf_indexes",
+    operations=(
+        "CREATE INDEX IF NOT EXISTS idx_cases_lead_examiner_is_deleted ON cases (lead_examiner, is_deleted)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_case_seq ON audit_events (subject_case_number, seq DESC)",
+    ),
+)
 def _migration_007_perf_indexes(bind: Engine | Connection) -> None:
     """Add perf indexes for audit case+seq and cases examiner. Idempotent."""
 
@@ -194,7 +247,15 @@ def _migration_007_perf_indexes(bind: Engine | Connection) -> None:
                 _try_idx(conn, idx_audit)
 
 
-@register_migration(8, "008_audit_append_only_protection", verify=lambda conn: _verify_008_audit_protection(conn))
+@register_migration(
+    8,
+    "008_audit_append_only_protection",
+    operations=(
+        "install postgresql audit_events append-only trigger",
+        "install sqlite audit_events append-only triggers",
+    ),
+    verify=lambda conn: _verify_008_audit_protection(conn),
+)
 def _migration_008_audit_protection(bind: Engine | Connection) -> None:
     """Enforce the append-only ledger per backend: PostgreSQL trigger plus SQLite
     trigger self-heal (005 installed them; this guarantees them on every database)."""
@@ -277,65 +338,65 @@ def _install_sqlite_audit_triggers(conn: Connection) -> None:
             pass
 
 
-_MIGRATION_CHECKSUM_CACHE: dict[tuple[str, int], str] = {}
+def _migration_checksum(version: int, name: str) -> str:
+    """Canonical identity digest: scheme, version, name, declared operations.
 
-
-def _migration_checksum(name: str) -> str:
-    """Content checksum: migration name + registered source. Detects post-apply edits."""
-    import hashlib
-    import inspect as pyinspect
-
-    action_id = 0
-    source = ""
-    for _, mname, action in MIGRATIONS:
-        if mname == name:
-            action_id = id(action)
-            try:
-                # Normalized: CRLF checkouts must hash identically to LF ones.
-                source = pyinspect.getsource(action).replace("\r\n", "\n")
-            except (OSError, TypeError):
-                source = ""
-            break
-    key = (name, action_id)
-    if key in _MIGRATION_CHECKSUM_CACHE:
-        return _MIGRATION_CHECKSUM_CACHE[key]
-    digest = hashlib.sha256(f"{name}\n{source}".encode()).hexdigest()
-    _MIGRATION_CHECKSUM_CACHE[key] = digest
-    return digest
-
-
-def _legacy_migration_checksum(name: str) -> str:
-    """Pre-content checksum scheme (name only). Upgrade path, never written fresh."""
+    Never hashes Python source. The previous scheme did, so a comment, a reformat,
+    or any rewrite of the @register_migration line changed the digest and hard-failed
+    every deployed install with no escape hatch. What a migration *does* is declared
+    as data and hashed canonically; how it is formatted is not part of its identity.
+    """
     import hashlib
 
-    return hashlib.sha256(name.encode("utf-8")).hexdigest()
+    from trace_core.core.canonical import canonical_json
+
+    payload = {
+        "scheme": CHECKSUM_SCHEME,
+        "version": version,
+        "name": name,
+        "operations": list(MIGRATION_OPERATIONS.get(version, ())),
+    }
+    return hashlib.sha256(canonical_json(payload)).hexdigest()
 
 
 def verify_migration_checksums(engine: Engine) -> list[dict[str, Any]]:
-    """Fail closed when applied migration content drifts from its recorded checksum.
+    """Fail closed on canonical-identity drift; upgrade pre-canonical rows once.
 
-    One-time upgrade: legacy name-only checksums are re-recorded as content
-    checksums (with a warning). Anything else that mismatches raises.
-    Returns the verified records so callers list the ledger once.
+    Controlled upgrade path: a row whose scheme marker is absent or older predates
+    canonical migration identity. Its old digest was a source-text hash we can no
+    longer meaningfully reproduce, so it is re-recorded once with the scheme set,
+    under a warning. From then on the digest is compared strictly. This also means
+    the scheme change itself cannot brick a deployed database, which is the property
+    the old scheme lacked.
     """
     import structlog
 
     records = get_applied_migrations(engine)
+    upgrades: list[tuple[int, str, str]] = []
     for record in records:
-        expected = _migration_checksum(record["name"])
-        if record["checksum"] == expected:
+        expected = _migration_checksum(record["version"], record["name"])
+        if record.get("checksum_scheme") == CHECKSUM_SCHEME:
+            if record["checksum"] != expected:
+                raise RuntimeError(
+                    f"Migration {record['name']} declared operations drifted from the recorded "
+                    "canonical identity; refusing to proceed."
+                )
             continue
-        if record["checksum"] == _legacy_migration_checksum(record["name"]) or record["checksum"] is None:
-            structlog.get_logger().warning("Upgrading legacy migration checksum bookkeeping", name=record["name"])
-            with engine.begin() as conn:
+        upgrades.append((record["version"], record["name"], expected))
+    if upgrades:
+        structlog.get_logger().warning(
+            "Upgrading migration checksum bookkeeping to canonical identity",
+            migrations=[name for _, name, _ in upgrades],
+        )
+        with engine.begin() as conn:
+            for version, _name, expected in upgrades:
                 conn.execute(
                     schema_migrations.update()
-                    .where(schema_migrations.c.version == record["version"])
-                    .values(checksum=expected)
+                    .where(schema_migrations.c.version == version)
+                    .values(checksum=expected, checksum_scheme=CHECKSUM_SCHEME)
                 )
-            record["checksum"] = expected
-            continue
-        raise RuntimeError(f"Migration {record['name']} content drift detected; refusing to proceed.")
+        for record in records:
+            record["checksum_scheme"] = CHECKSUM_SCHEME
     return records
 
 
@@ -355,6 +416,12 @@ def ensure_migration_table(engine: Engine) -> None:
         _ensure_column(
             conn, "schema_migrations", "checksum", "ALTER TABLE schema_migrations ADD COLUMN checksum VARCHAR(64)"
         )
+        _ensure_column(
+            conn,
+            "schema_migrations",
+            "checksum_scheme",
+            "ALTER TABLE schema_migrations ADD COLUMN checksum_scheme VARCHAR(32)",
+        )
 
 
 def get_applied_migrations(engine: Engine) -> list[dict[str, Any]]:
@@ -362,26 +429,22 @@ def get_applied_migrations(engine: Engine) -> list[dict[str, Any]]:
     ensure_migration_table(engine)
     with engine.connect() as conn:
         cols = _column_names(conn, "schema_migrations")
-        if "checksum" in cols:
-            stmt = select(
-                schema_migrations.c.version,
-                schema_migrations.c.name,
-                schema_migrations.c.applied_at,
-                schema_migrations.c.checksum,
-            ).order_by(schema_migrations.c.version.asc())
-        else:
-            stmt = select(
-                schema_migrations.c.version,
-                schema_migrations.c.name,
-                schema_migrations.c.applied_at,
-            ).order_by(schema_migrations.c.version.asc())
+        has_checksum = "checksum" in cols
+        has_scheme = "checksum_scheme" in cols
+        selected = [schema_migrations.c.version, schema_migrations.c.name, schema_migrations.c.applied_at]
+        if has_checksum:
+            selected.append(schema_migrations.c.checksum)
+        if has_scheme:
+            selected.append(schema_migrations.c.checksum_scheme)
+        stmt = select(*selected).order_by(schema_migrations.c.version.asc())
         rows = conn.execute(stmt).fetchall()
         return [
             {
                 "version": r[0],
                 "name": r[1],
                 "applied_at": r[2] if isinstance(r[2], datetime) else None,
-                "checksum": r[3] if len(r) > 3 else None,
+                "checksum": r[3] if has_checksum else None,
+                "checksum_scheme": r[4] if has_scheme else None,
             }
             for r in rows
         ]
@@ -452,7 +515,9 @@ def apply_migrations(engine: Engine) -> list[str]:
                         "applied_at": now_utc(),
                     }
                     if "checksum" in cols:
-                        values["checksum"] = _migration_checksum(name)
+                        values["checksum"] = _migration_checksum(version, name)
+                    if "checksum_scheme" in cols:
+                        values["checksum_scheme"] = CHECKSUM_SCHEME
                     conn.execute(schema_migrations.insert().values(**values))
                 applied_names.append(name)
 
@@ -465,7 +530,7 @@ def get_table_names(engine: Engine) -> list[str]:
     return inspector.get_table_names()
 
 
-@register_migration(9, "009_create_purged_numbers_tombstone")
+@register_migration(9, "009_create_purged_numbers_tombstone", operations=(_create_all(("purged_numbers",)),))
 def _migration_009_purged_numbers(bind: Engine | Connection) -> None:
     """Tombstone purged case numbers so they can never be re-registered."""
     import trace_core.cases.models  # noqa: F401
@@ -492,7 +557,14 @@ ROLE_DDL: tuple[str, ...] = (
 )
 
 
-@register_migration(10, "010_add_ledger_signature_columns")
+@register_migration(
+    10,
+    "010_add_ledger_signature_columns",
+    operations=(
+        "ALTER TABLE audit_events ADD COLUMN key_id VARCHAR(64)",
+        "ALTER TABLE audit_events ADD COLUMN signature VARCHAR(128)",
+    ),
+)
 def _migration_010_signature(bind: Engine | Connection) -> None:
     """HMAC envelope columns for ledger authenticity (nullable: legacy rows verify chain-only)."""
     cols = (
@@ -508,7 +580,7 @@ def _migration_010_signature(bind: Engine | Connection) -> None:
                 _ensure_column(conn, "audit_events", col_name, ddl)
 
 
-@register_migration(11, "011_create_least_privilege_roles")
+@register_migration(11, "011_create_least_privilege_roles", operations=ROLE_DDL)
 def _migration_011_roles(bind: Engine | Connection) -> None:
     """Create NOLOGIN app/reader/migrator roles and revoke ledger mutation. PostgreSQL only."""
     if isinstance(bind, Connection):
@@ -524,7 +596,7 @@ def _migration_011_roles(bind: Engine | Connection) -> None:
                 conn.execute(text(stmt))
 
 
-@register_migration(12, "012_create_operators_table")
+@register_migration(12, "012_create_operators_table", operations=(_create_all(("operators",)),))
 def _migration_012_operators(bind: Engine | Connection) -> None:
     """Operator registry for workstation RBAC (auto-provisioned, first-ever is admin)."""
     import trace_core.core.operators  # noqa: F401
@@ -533,7 +605,7 @@ def _migration_012_operators(bind: Engine | Connection) -> None:
         Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables["operators"]])
 
 
-@register_migration(13, "013_create_anchor_intents_outbox")
+@register_migration(13, "013_create_anchor_intents_outbox", operations=(_create_all(("anchor_intents",)),))
 def _migration_013_anchor_intents(bind: Engine | Connection) -> None:
     """Durable anchor outbox so closes never report anchors that were never written."""
     import trace_core.audit.models  # noqa: F401
@@ -542,7 +614,7 @@ def _migration_013_anchor_intents(bind: Engine | Connection) -> None:
         Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables["anchor_intents"]])
 
 
-@register_migration(14, "014_create_update_history")
+@register_migration(14, "014_create_update_history", operations=(_create_all(("update_history",)),))
 def _migration_014_update_history(bind: Engine | Connection) -> None:
     import trace_core.updates.models  # noqa: F401
 
@@ -550,7 +622,14 @@ def _migration_014_update_history(bind: Engine | Connection) -> None:
         Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables["update_history"]])
 
 
-@register_migration(15, "015_update_history_provenance")
+@register_migration(
+    15,
+    "015_update_history_provenance",
+    operations=(
+        "ALTER TABLE update_history ADD COLUMN backup_path TEXT",
+        "ALTER TABLE update_history ADD COLUMN override_reason TEXT",
+    ),
+)
 def _migration_015_update_provenance(bind: Engine | Connection) -> None:
     for column, ddl in (
         ("backup_path", "ALTER TABLE update_history ADD COLUMN backup_path TEXT"),
@@ -608,7 +687,19 @@ def _run_migration_016(conn: Connection) -> None:
     _migration_016_ensure_indexes(conn)
 
 
-@register_migration(16, "016_update_history_roundtrip")
+@register_migration(
+    16,
+    "016_update_history_roundtrip",
+    operations=(
+        "ALTER TABLE update_history ADD COLUMN artifact_sha256 VARCHAR(64)",
+        "ALTER TABLE update_history ADD COLUMN signing_key_id VARCHAR(64)",
+        "ALTER TABLE update_history ADD COLUMN failure_reason TEXT",
+        "ALTER TABLE update_history ADD COLUMN restart_required BOOLEAN",
+        "backfill restart_required/rollback from NULL",
+        "CREATE INDEX ix_update_history_transaction_id ON update_history (transaction_id)",
+        "CREATE INDEX ix_update_history_started_at ON update_history (started_at)",
+    ),
+)
 def _migration_016_update_roundtrip(bind: Engine | Connection) -> None:
     """History round-trip: transaction index + provenance columns for read DTO parity."""
     if isinstance(bind, Connection):

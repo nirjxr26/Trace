@@ -5,15 +5,17 @@ import typer
 from trace_core.audit.dto import AuditFilterDto
 from trace_core.audit.service import AuditService
 from trace_core.core.cli.error_handler import capture_cli_errors
-from trace_core.core.database.session import DatabaseSessionManager, db_manager
+from trace_core.core.cli.exit_codes import EXIT_ERROR
+from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.errors import AuditTamperError
-from trace_core.core.ui.renderers import console, render_error_card, render_success
+from trace_core.core.ui.renderers import console, render_error_card, render_output, render_success
 
 audit_app = typer.Typer(name="audit", help="Inspect, verify, and export tamper-evident audit ledger.")
 
 
 def _get_service(mgr: DatabaseSessionManager | None = None) -> AuditService:
-    return AuditService(mgr or db_manager)
+    """Service factory. BaseService.__init__ already falls back to the global db_manager."""
+    return AuditService(mgr)
 
 
 def _parse_action(action: str | None):  # type: ignore[no-untyped-def]
@@ -24,7 +26,7 @@ def _parse_action(action: str | None):  # type: ignore[no-untyped-def]
     if action and act is None:
         valid = ", ".join(a.value for a in AuditAction)
         render_error_card("Invalid Action", f"Unknown action '{action}'.", f"Valid actions: {valid}.")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_ERROR)
     return act
 
 
@@ -70,7 +72,7 @@ def audit_show(
         svc = _get_service()
         if seq is not None:
             if not show_seq_view(svc, seq, output):
-                raise typer.Exit(1)
+                raise typer.Exit(EXIT_ERROR)
             return
         _show_list(svc, case_number, action, actor, search, limit, offset, output)
 
@@ -99,15 +101,15 @@ def audit_export(
     with capture_cli_errors("Audit Export"):
         if fmt.lower() != "jsonl":
             render_error_card("Invalid Format", f"Unknown format '{fmt}'.", "Expected: jsonl.")
-            raise typer.Exit(1)
+            raise typer.Exit(EXIT_ERROR)
         svc = _get_service()
-        from trace_core.audit.helpers import check_export_dest, do_export, do_export_encrypted, prompt_passphrase
+        from trace_core.audit.helpers import check_export_dest, do_export_encrypted, prompt_passphrase
 
         check_export_dest(out, force)
         if encrypt:
             path = do_export_encrypted(svc, out, prompt_passphrase(confirm=True))
         else:
-            path = do_export(svc, out)
+            path = svc.export(out)
         render_success("Audit bundle exported.")
         console.print(f"[dim]{path}[/dim]")
 
@@ -162,19 +164,20 @@ def audit_keys_list(output: str = typer.Option("table", "--output", "-o", help="
     """List keystore public keys. No private material is ever displayed."""
     with capture_cli_errors("Key Listing Failed"):
         from trace_core.audit.signing import list_keys
-        from trace_core.core.ui.renderers import render_json, render_minimalist_table
+        from trace_core.core.ui.renderers import render_minimalist_table
 
         keys = list_keys()
-        if output.lower() == "json":
-            render_json(keys)
-            return
-        render_minimalist_table(
-            "Signing Keys",
-            [
-                ("Key ID", {"style": "bold", "no_wrap": True}),
-                ("Status", {"no_wrap": True, "max_width": 10}),
-                ("Public Key", {"overflow": "ellipsis"}),
-            ],
-            [[k["key_id"], k["status"], k["public_key"]] for k in keys],
-            empty_message="No signing keys. The HMAC envelope is active.",
+        render_output(
+            output,
+            keys,
+            lambda: render_minimalist_table(
+                "Signing Keys",
+                [
+                    ("Key ID", {"style": "bold", "no_wrap": True}),
+                    ("Status", {"no_wrap": True, "max_width": 10}),
+                    ("Public Key", {"overflow": "ellipsis"}),
+                ],
+                [[k["key_id"], k["status"], k["public_key"]] for k in keys],
+                empty_message="No signing keys. The HMAC envelope is active.",
+            ),
         )

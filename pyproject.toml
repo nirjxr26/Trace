@@ -60,6 +60,7 @@ markers = [
     "unit: Isolated unit tests using in-memory database and mocks",
     "integration: Integration tests requiring external services or databases",
     "slow: Tests with extensive computational or I/O workloads",
+    "anyio: Async tests (registered for --strict-markers; plugin supplies the marker)",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",

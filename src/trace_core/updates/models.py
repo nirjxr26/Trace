@@ -1,12 +1,12 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String, Text, false
+from sqlalchemy import Index, String, Text, false
 from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from trace_core.core.canonical import coerce_utc
-from trace_core.core.database.base import Base
-from trace_core.core.domain import now_utc
+from trace_core.core.clock import now_utc
+from trace_core.core.database.base import Base, UTCDateTime
 
 
 class UpdateHistoryModel(Base):
@@ -33,8 +33,8 @@ class UpdateHistoryModel(Base):
     override_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     restart_required: Mapped[bool] = mapped_column(default=False, server_default=false(), nullable=False)
     rollback: Mapped[bool] = mapped_column(default=False, server_default=false(), nullable=False)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now_utc, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     @validates("started_at", "completed_at")
     def _coerce_utc(self, key: str, value: datetime | None) -> datetime | None:

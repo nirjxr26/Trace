@@ -6,7 +6,7 @@ from typing import Any, TypeVar
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from trace_core.core.domain import now_utc
+from trace_core.core.clock import now_utc
 
 ModelT = TypeVar("ModelT")
 EntityT = TypeVar("EntityT")

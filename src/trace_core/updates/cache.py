@@ -51,7 +51,9 @@ def manifest_identity(target: str) -> dict[str, Any] | None:
     manifest for the full TTL — hiding even security releases. Manifests are
     capped at 1 MiB, so hashing costs milliseconds. Correctness over micro-perf.
     """
-    if target.startswith(("https://", "http://")):
+    from trace_core.updates.sources import is_http_url
+
+    if is_http_url(target):
         return None
     from pathlib import Path as _Path
 

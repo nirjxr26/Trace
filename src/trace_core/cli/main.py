@@ -54,7 +54,7 @@ def version_callback(value: bool) -> None:
 def main(
     ctx: typer.Context,
     version: bool = typer.Option(
-        None,
+        False,
         "--version",
         "-v",
         help="Display Trace version and exit.",

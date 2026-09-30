@@ -5,18 +5,17 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from trace_core.audit.domain import CANONICAL_VERSION, GENESIS_CHAIN, HASH_ALGO, SPEC_VERSION
-from trace_core.audit.models import AuditChainStateModel, AuditEventModel
-from trace_core.core.canonical import canonical_ts
+from trace_core.audit.domain import CANONICAL_VERSION, HASH_ALGO, SPEC_VERSION
+from trace_core.audit.models import AuditEventModel
+from trace_core.core.canonical import _coerce_utc_required, canonical_ts
 from trace_core.core.fs import atomic_write_lines
 
 
 def _ledger_tip(session) -> tuple[int, str]:  # type: ignore[no-untyped-def]
-    """Chain head for the bundle header. Missing head means an empty ledger."""
-    row = session.scalar(select(AuditChainStateModel).where(AuditChainStateModel.id == 1))
-    if row is None:
-        return 0, GENESIS_CHAIN
-    return row.last_seq, row.last_chain_hash
+    """Chain head for the bundle header. Single source: the repository's indexed head row."""
+    from trace_core.audit.repository import SqlAlchemyAuditRepository
+
+    return SqlAlchemyAuditRepository(session).head()
 
 
 def _header(last_seq: int, last_chain: str) -> str:
@@ -38,10 +37,10 @@ def _header(last_seq: int, last_chain: str) -> str:
 
 
 def _record_dict(m) -> dict:  # type: ignore[no-untyped-def]
-    try:
-        ts_str = canonical_ts(m.ts)
-    except Exception:
-        ts_str = str(m.ts)
+    # coerce_utc assumes UTC for naive rows (SQLite storage); the old fallback
+    # str(m.ts) wrote a non-canonical timestamp into the forensic bundle. The
+    # column is non-nullable, so the ts is always present.
+    ts_str = canonical_ts(_coerce_utc_required(m.ts))
     return {
         "seq": m.seq,
         "ts": ts_str,

@@ -10,6 +10,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 logger = structlog.get_logger()
 
 DEV_SECRET_SENTINEL = "trace-local-dev-key-change-in-production"
+# Shipped default database URL. Named once so the guard below cannot drift from the
+# field default if either is rotated (was two reflective model_fields lookups).
+DEV_DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/trace"
 
 
 class Settings(BaseSettings):
@@ -28,7 +31,7 @@ class Settings(BaseSettings):
     # Example PostgreSQL: postgresql+psycopg://postgres:postgres@localhost:5432/trace
     # Example SQLite: sqlite:///trace.db
     database_url: str = Field(
-        default="postgresql+psycopg://postgres:postgres@localhost:5432/trace",
+        default=DEV_DATABASE_URL,
         alias="TRACE_DATABASE_URL",
     )
 
@@ -75,14 +78,13 @@ class Settings(BaseSettings):
                 path=str(self.storage_root),
                 error=str(exc),
             )
-        if self.database_url == Settings.model_fields["database_url"].default:
+        if self.database_url == DEV_DATABASE_URL:
             logger.warning(
                 "Using shipped default database credentials; set TRACE_DATABASE_URL "
                 "with a strong password before production use."
             )
         if self.env.strip().lower() == "production":
-            # Sentinel duplicated from signing.py by design: settings cannot import it (cycle).
-            if self.database_url == Settings.model_fields["database_url"].default:
+            if self.database_url == DEV_DATABASE_URL:
                 raise ValueError("Refusing production startup on shipped default database credentials.")
             if self.secret_key.get_secret_value() == DEV_SECRET_SENTINEL:
                 raise ValueError("Refusing production startup on shipped default secret key.")

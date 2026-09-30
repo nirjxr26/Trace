@@ -1,6 +1,7 @@
 from typer.testing import CliRunner
 
 from trace_core.cli.main import app
+from trace_core.core.cli.exit_codes import EXIT_RECOVERY_FAILED
 
 
 def test_recovery_no_marker_reports_state(temp_storage_root):
@@ -23,7 +24,7 @@ def test_recovery_missing_previous_fails(temp_storage_root, session_manager):
         }
     )
     res = CliRunner().invoke(app, ["recovery"])
-    assert res.exit_code == 15
+    assert res.exit_code == EXIT_RECOVERY_FAILED
 
 
 def test_recovery_restores_previous(temp_storage_root, session_manager, tmp_path, monkeypatch):

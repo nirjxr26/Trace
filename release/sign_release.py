@@ -10,14 +10,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from trace_core.core.fs import check_contained, sha256_file
 from trace_core.updates.manifest import load_manifest_dict
 from trace_core.updates.signing import canonical_manifest_bytes, key_id_for_pubkey
-from trace_core.updates.verifier import assert_safe_filename
+from trace_core.updates.verifier import safe_filename_or_exit
 
 
 def _safe_filename(name: str) -> str:
-    try:
-        return assert_safe_filename(name)
-    except Exception as e:
-        raise SystemExit(f"refusing unsafe artifact filename: {name!r} ({e})") from None
+    return safe_filename_or_exit(name)
 
 
 def main() -> None:

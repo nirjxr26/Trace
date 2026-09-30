@@ -6,6 +6,7 @@ from rich.text import Text
 from textual.theme import Theme
 
 from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
+from trace_core.updates.stages import StageStatus
 
 TRACE_THEME = Theme(
     name="trace",
@@ -54,11 +55,6 @@ def status_text(status, is_deleted: bool = False):  # type: ignore[no-untyped-de
     return Text(status_label(status, is_deleted), style=status_style(status, is_deleted))
 
 
-def health_dot(ok: bool):  # type: ignore[no-untyped-def]
-    """Single source for health pills (db online, verify verdict dots)."""
-    return Text("● ", style="#5FD18A" if ok else "#D06A73")
-
-
 SELECT_PREFIX = "› "
 
 DOT_OK = THEME_HEX["green"]
@@ -87,10 +83,11 @@ def update_status_text(kind: str):  # type: ignore[no-untyped-def]
     return dot_line(True, "Up to date")
 
 
-def stage_line(status: str, label: str):
-    if status == "done":
+def stage_line(status: StageStatus, label: str):
+    """Single source for install-stage ●/×/◌ lines. Typed on StageStatus."""
+    if status == StageStatus.DONE:
         return dot_line(True, label)
-    if status == "failed":
+    if status == StageStatus.FAILED:
         return dot_line(False, label)
     body = Text()
     body.append("◌ ", style=DOT_INFO)
@@ -107,6 +104,11 @@ def append_kv(body: Text, label: str, value: str) -> None:
     """Single source for `Label     value` detail rows shared by Settings sections."""
     body.append(f"{label:<10} ", style="dim")
     body.append(f"{value}\n")
+
+
+def detail_placeholder(has_rows: bool, empty_message: str) -> Text:
+    """Detail-pane placeholder shared by Cases/Audit: empty-list message vs select hint."""
+    return Text(empty_message if not has_rows else "Select an entry…", style="dim")
 
 
 def table_head_text(columns: list[tuple[str, int]]) -> str:

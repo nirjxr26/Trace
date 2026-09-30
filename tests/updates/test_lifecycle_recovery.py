@@ -1,5 +1,6 @@
 import pytest
 
+from trace_core.core.cli.exit_codes import EXIT_RECOVERY_FAILED
 from trace_core.updates.domain import UpdateResult
 from trace_core.updates.errors import UpdateError, UpdatePolicyBlockedError
 from trace_core.updates.gate import GateDecision
@@ -128,5 +129,5 @@ def test_corrupt_marker_recovery(temp_storage_root, session_manager):
     marker = temp_storage_root / "update-result.json"
     marker.write_text("{not-json", encoding="utf-8")
     res = CliRunner().invoke(app, ["recovery"])
-    assert res.exit_code == 15
+    assert res.exit_code == EXIT_RECOVERY_FAILED
     assert "corrupt" in res.output.lower() or "Recovery Failed" in res.output

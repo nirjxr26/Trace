@@ -233,18 +233,20 @@ class AuditShellCommandHandler(BaseShellHandler):
             render_error_card("Missing Output", "Pass --out FILE for the export bundle.")
             return
         with capture_cli_errors("Audit Export", exit_on_error=False):
-            from trace_core.audit.helpers import check_export_dest, do_export, do_export_encrypted, prompt_passphrase
+            from trace_core.audit.helpers import check_export_dest, do_export_encrypted, prompt_passphrase
             from trace_core.core.ui.renderers import render_success
 
             check_export_dest(out, has_flag(args, "--force", "-f"))
             if has_flag(args, "--encrypt"):
                 path = do_export_encrypted(svc, out, prompt_passphrase())
             else:
-                path = do_export(svc, out)
+                path = svc.export(out)
             render_success("Audit bundle exported.")
             console.print(f"[dim]{path}[/dim]")
 
     def _decrypt(self, svc: AuditService, args: list[str]) -> None:
+        # svc unused today; kept in the handler signature so every audit action routes
+        # through the same (service, args) dispatch shape.
         _ = svc
         inp = extract_flag_value(args, "--in")
         out = extract_flag_value(args, "--out")

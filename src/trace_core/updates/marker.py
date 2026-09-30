@@ -13,6 +13,12 @@ SCHEMA_REQUIRED_KEYS: dict[int, tuple[str, ...]] = {
 REQUIRED_KEYS = SCHEMA_REQUIRED_KEYS[MARKER_SCHEMA]
 
 
+def storage_state_path(name: str) -> Path:
+    """Path under <storage>/state/ for update bookkeeping. Single source for the layout
+    documented in trace_updater.updater.install_root (update-active.json, update.lock, artifacts/)."""
+    return Path(settings.storage_root) / "state" / name
+
+
 def marker_path() -> Path:
     return Path(settings.storage_root) / "update-result.json"
 

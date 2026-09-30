@@ -64,6 +64,13 @@ class UpdateChannel(StrEnum):
         """Single choke point for channel validation. Shared by manifest/policy."""
         return value in (cls.STABLE, cls.BETA)
 
+    @classmethod
+    def validate(cls, value: str) -> str:
+        """Return the value when known, else ValueError naming it. Single source for DTO/manifest validators."""
+        if not cls.contains(value):
+            raise ValueError(f"unknown channel {value!r}")
+        return value
+
 
 class UpdateResult(StrEnum):
     SUCCESS = "SUCCESS"

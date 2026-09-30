@@ -62,7 +62,7 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
         view = self.query_one("#palette-list", ListView)
         view.clear()
         for cmd, meta in items:
-            view.append(ListItem(Static(f"{meta}"), id=f"cmd-{cmd}"))
+            view.append(ListItem(Static(f"{meta}"), id=cmd))
 
     @on(Input.Changed)
     def _typed(self, event: Input.Changed) -> None:
@@ -75,12 +75,12 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
         target = highlighted.id if highlighted is not None else None
         if target is None and view.children:
             target = view.children[0].id
-        self.dismiss(target.removeprefix("cmd-") if target else None)
+        self.dismiss(target if target else None)
 
     @on(ListView.Selected)
     def _selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id if event.item is not None else None
-        self.dismiss(item_id.removeprefix("cmd-") if item_id else None)
+        self.dismiss(item_id if item_id else None)
 
 
 class KeysModal(_BaseModal, ModalScreen[None]):
@@ -125,14 +125,10 @@ class KeysModal(_BaseModal, ModalScreen[None]):
                 ("m", "apply migrations  (Settings · Database)"),
                 ("c", "check updates  (Settings · Updates)"),
                 ("u", "install update  (Settings · Updates)"),
-                ("u", "install update  (Settings · Updates)"),
                 ("v", "verify chain  (Settings · Integrity)"),
             ),
         ),
     )
-
-    # kept for tests that import KEYS
-    KEYS: tuple[tuple[str, str], ...] = tuple(k for _, g in GROUPS for k in g)
 
     def compose(self) -> ComposeResult:
         from rich.text import Text

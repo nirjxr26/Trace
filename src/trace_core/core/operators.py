@@ -13,12 +13,12 @@ import socket
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, UniqueConstraint
+from sqlalchemy import String, UniqueConstraint, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from trace_core.core.clock import now_utc
-from trace_core.core.database.base import Base
+from trace_core.core.database.base import Base, UTCDateTime
 from trace_core.core.errors import ApplicationError, AuthorizationError
 
 ROLE_INVESTIGATOR = "investigator"
@@ -46,7 +46,7 @@ class OperatorModel(Base):
     role: Mapped[str] = mapped_column(String(16), default=ROLE_INVESTIGATOR, nullable=False)
     public_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default=STATUS_ACTIVE, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now_utc, nullable=False)
 
     __table_args__ = (UniqueConstraint("name", "host", name="uq_operators_name_host"),)
 
@@ -70,8 +70,6 @@ def _missing_table(exc: Exception) -> bool:
 
 def get_or_provision(session: Session, name: str, host: str) -> OperatorModel:
     """Fetch the operator row, creating it (first-ever becomes admin)."""
-    from sqlalchemy import select
-
     try:
         existing = session.scalar(select(OperatorModel).where(OperatorModel.name == name, OperatorModel.host == host))
     except Exception as exc:
@@ -103,9 +101,13 @@ def current_operator(session: Session) -> OperatorModel:
 
 
 def require_role(session: Session, *roles: str, action: str = DEFAULT_ACTION) -> OperatorModel:
-    """Enforce roles for one operation. Inactive operators are always denied."""
+    """Enforce roles for one operation. Inactive operators are always denied.
+
+    Roles are compared normalised so a stored `Admin ` or `admin` still matches,
+    matching the .upper() convention every other lookup in this codebase uses.
+    """
     operator = current_operator(session)
-    if operator.status != STATUS_ACTIVE or operator.role not in roles:
+    if operator.status != STATUS_ACTIVE or operator.role.upper() not in {r.upper() for r in roles}:
         raise AuthorizationError(f"Operator '{operator.name}' with role '{operator.role}' may not {action}.")
     return operator
 

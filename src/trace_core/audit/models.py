@@ -3,11 +3,11 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from trace_core.core.clock import now_utc
-from trace_core.core.database.base import Base
+from trace_core.core.database.base import Base, UTCDateTime
 
 
 class AuditChainStateModel(Base):
@@ -37,10 +37,10 @@ class AnchorIntentModel(Base):
     chain_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(16), default=INTENT_PENDING, nullable=False)
     attempt_count: Mapped[int] = mapped_column(default=0, nullable=False)
-    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     failure_code: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now_utc, nullable=False)
 
 
 class AuditEventModel(Base):
@@ -49,7 +49,7 @@ class AuditEventModel(Base):
     __tablename__ = "audit_events"
 
     seq: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
-    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    ts: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, index=True)
     action: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     actor: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     subject_case_number: Mapped[str] = mapped_column(Text, nullable=False, index=True)

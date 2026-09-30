@@ -15,14 +15,15 @@ from trace_core.cases.service import CaseService
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_SUCCESS
 from trace_core.core.cli.output import SKIP_CONFIRM_HELP
-from trace_core.core.database.session import DatabaseSessionManager, db_manager
+from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.ui.renderers import console, render_error_card, render_success
 
 case_app = typer.Typer(name="case", help="Create, list, show, edit, and close forensic cases.")
 
 
 def _get_service(session_manager: DatabaseSessionManager | None = None) -> CaseService:
-    return CaseService(session_manager or db_manager)
+    """Service factory. BaseService.__init__ already falls back to the global db_manager."""
+    return CaseService(session_manager)
 
 
 def _confirm_or_exit(prompt: str, action: str) -> None:
@@ -173,9 +174,9 @@ def close_case(
         "Case Closure Failed", default_remediation="Type the exact case number to confirm, and pass --reason."
     ):
         if not force:
-            typed = Prompt.ask(f"Type case number '{identifier}' to confirm close")
-            if typed.strip() != identifier.strip():
-                console.print("[dim]Close cancelled (mismatch).[/dim]")
+            from trace_core.core.ui.renderers import confirm_typed_number
+
+            if not confirm_typed_number(identifier, "close"):
                 raise typer.Exit(EXIT_SUCCESS)
 
         from trace_core.audit.anchor import describe_anchor
@@ -207,9 +208,9 @@ def delete_case(
     ):
         if not force:
             if purge:
-                typed = Prompt.ask(f"Type case number '{identifier}' to confirm purge")
-                if typed.strip() != identifier.strip():
-                    console.print("[dim]Purge cancelled (mismatch).[/dim]")
+                from trace_core.core.ui.renderers import confirm_typed_number
+
+                if not confirm_typed_number(identifier, "purge"):
                     raise typer.Exit(EXIT_SUCCESS)
             else:
                 _confirm_or_exit(f"Are you sure you want to archive case '{identifier}'?", "Archive")

@@ -133,10 +133,11 @@ class CasesView(Vertical):
 
         case = self._selected()
         if case is None:
-            if not self._cases:
-                self.query_one("#case-dossier", Static).update(Text("No cases found — press c to create.", style="dim"))
-            else:
-                self.query_one("#case-dossier", Static).update(Text("Select a case…", style="dim"))
+            from trace_core.tui.theme import detail_placeholder
+
+            self.query_one("#case-dossier", Static).update(
+                detail_placeholder(bool(self._cases), "No cases found — press c to create.")
+            )
             return
         events = self._dossier_events(case)
         rule = self.query_one("#cases-right", DossierScroll).divider()
@@ -237,9 +238,9 @@ class CasesView(Vertical):
         if not events:
             return
         from trace_core.audit.renderers import short_action_label
-        from trace_core.core.ui.renderers import format_ledger_time
+        from trace_core.core.ui.renderers import format_ledger_time, plural
 
-        count = f"{len(events)} event" + ("s" if len(events) != 1 else "")
+        count = plural(len(events), "event")
         body.append(f"HISTORY \u00b7 {count}\n", style=THEME_TOKENS["accent"])
         for e in events[:5]:
             body.append(f"{format_ledger_time(e.ts)}  ", style="dim")

@@ -9,10 +9,10 @@ from sqlalchemy.orm import Session
 
 from trace_core.cases.domain import Case, CaseStatus, normalize_number
 from trace_core.cases.models import CaseModel, CaseSequenceModel, PurgedNumberModel
-from trace_core.core.canonical import parse_trailing_seq
+from trace_core.core.canonical import _coerce_utc_required, coerce_utc, parse_trailing_seq
 from trace_core.core.clock import now_utc
 from trace_core.core.database.repository import SqlAlchemyBaseRepository, ilike_literal, paginate
-from trace_core.core.domain import ensure_utc, parse_enum_value
+from trace_core.core.domain import parse_enum_value
 
 _MAX_SEQUENCE = 9999
 
@@ -58,14 +58,14 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
             lead_examiner=model.lead_examiner,
             status=parse_enum_value(CaseStatus, model.status)
             or (CaseStatus.CLOSED if model.closed_at else CaseStatus.OPEN),
-            opened_at=ensure_utc(model.opened_at) or now_utc(),
-            closed_at=ensure_utc(model.closed_at),
+            opened_at=_coerce_utc_required(model.opened_at),
+            closed_at=coerce_utc(model.closed_at),
             closed_by=model.closed_by,
             closure_reason=model.closure_reason,
-            archived_at=ensure_utc(model.archived_at),
+            archived_at=coerce_utc(model.archived_at),
             archived_by=model.archived_by,
             version=model.version,
-            updated_at=ensure_utc(model.updated_at) or now_utc(),
+            updated_at=_coerce_utc_required(model.updated_at),
             description=model.description,
             notes=model.notes,
             tags=list(model.tags or []),
@@ -196,11 +196,14 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
 
         self._guard_version(model, expected_version, "Case", str(model.number))
 
+        # One clock read for both columns: two calls could differ by microseconds
+        # on the same forensic row.
+        now = now_utc()
         model.is_deleted = True
-        model.archived_at = now_utc()
+        model.archived_at = now
         model.archived_by = archived_by
         model.version += 1
-        model.updated_at = now_utc()
+        model.updated_at = now
         self.session.flush()
         return True
 

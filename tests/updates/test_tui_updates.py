@@ -7,11 +7,6 @@ from trace_core.tui.app import TraceApp
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
 
 
-@pytest.fixture(params=["asyncio"])
-def anyio_backend(request: pytest.FixtureRequest) -> str:
-    return request.param
-
-
 def _text(widget) -> str:  # type: ignore[no-untyped-def]
     renderable = widget.render()
     return renderable.plain if isinstance(renderable, Text) else str(renderable)

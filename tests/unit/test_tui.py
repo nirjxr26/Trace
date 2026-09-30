@@ -11,12 +11,6 @@ from trace_core.tui.app import TraceApp
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
 
 
-@pytest.fixture(params=["asyncio"])
-def anyio_backend(request: pytest.FixtureRequest) -> str:
-    """AnyIO backend for Textual pilot tests."""
-    return request.param
-
-
 @pytest.fixture
 def seeded_manager(session_manager: DatabaseSessionManager) -> DatabaseSessionManager:
     """Two cases (one edited) in the shared in-memory database."""

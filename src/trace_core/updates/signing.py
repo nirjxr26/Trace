@@ -1,9 +1,7 @@
 from trace_core.core.canonical import canonical_json
 from trace_core.updates.errors import UpdateVerificationError
 from trace_core.updates.manifest import ReleaseManifest
-from trace_core.updates.trust import revoked_path, trust_key_path
-
-KEY_PREFIX = "ed25519:"
+from trace_core.updates.trust import KEY_PREFIX, revoked_path, trust_key_path
 
 
 def key_id_for_pubkey(raw_pub: bytes) -> str:
@@ -110,6 +108,7 @@ def import_release_pubkey(raw_pub_hex: str) -> str:
 
 def revoke_release_key(key_id: str) -> None:
     """Revoke takes precedence over the .pub file; both may exist, revoked wins on load."""
+    from trace_core.core.fs import atomic_write_lines
+
     path = revoked_path(key_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("revoked", encoding="utf-8")
+    atomic_write_lines(path, ["revoked"], mode=0o600)

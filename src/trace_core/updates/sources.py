@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Any
 
 _HTTPS_PREFIX = "https://"
+
+
+def is_http_url(url: str) -> bool:
+    """True for an http(s) URL. Single source for the scheme test (checker/cache share it)."""
+    return url.startswith(("https://", "http://"))  # NOSONAR
 _HTTP_PREFIX = "http://"  # NOSONAR
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _GITHUB_CDN_HOSTS = ("github.com", ".githubusercontent.com")

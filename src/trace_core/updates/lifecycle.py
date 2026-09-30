@@ -119,7 +119,7 @@ class UpdateLifecycle:
         allow_minimum_bypass: bool = False,
         progress: ProgressCallback | None = None,
     ) -> UpdateHistoryCreateDto:
-        from trace_core.core.domain import now_utc
+        from trace_core.core.clock import now_utc
         from trace_core.updates.checker import get_installed_version
         from trace_core.updates.errors import UpdateNotAvailableError, UpdatePolicyBlockedError
         from trace_core.updates.policy import is_update_available
@@ -271,7 +271,7 @@ class UpdateLifecycle:
                     failure_stage=UpdateFailureStage.STAGING,
                     failure_reason="staged artifact failed re-verification",
                     transaction_id=self.transaction_id,
-                    started_at=started_at,  # type: ignore[arg-type]
+                    started_at=started_at,
                     release_id=manifest.release_id,
                 )
             )
@@ -439,7 +439,8 @@ class UpdateLifecycle:
                 return dto
             updater_mod.activate(base, manifest.version)
             self._verify_activation(base, manifest)
-            updater_mod.prune_retention(base, keep_backups=3)
+            # ponytail: keep_backups restates updater.RETENTION_BACKUPS; parameter stays for callers
+            updater_mod.prune_retention(base)
             self.transition(UpdateState.COMPLETED)
             dto = UpdateHistoryCreateDto(
                 from_version=current,

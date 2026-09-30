@@ -5,6 +5,7 @@ Covers: number grammar, anchor containment, markup/ANSI-safe rendering,
 control-character policy. See docs/security/assessment-2026-09-17.md.
 """
 
+import re
 import shutil
 from pathlib import Path
 
@@ -18,12 +19,6 @@ from trace_core.cases.service import CaseService
 from trace_core.core.database.session import DatabaseSessionManager
 
 pytestmark = pytest.mark.unit
-
-
-@pytest.fixture(params=["asyncio"])
-def anyio_backend(request: pytest.FixtureRequest) -> str:
-    """AnyIO backend for the pilot test."""
-    return request.param
 
 
 def test_number_grammar_accepts_canonical() -> None:
@@ -523,23 +518,42 @@ def test_migration_checksum_drift_fails_closed(session_manager: DatabaseSessionM
         verify_migration_checksums(session_manager.engine)
 
 
-def test_legacy_checksum_upgrades_once(session_manager: DatabaseSessionManager) -> None:
+def test_pre_canonical_checksum_upgrades_once_then_verifies_strictly(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    """H-57 controlled upgrade: a row with no scheme marker is re-recorded once, then enforced.
+
+    The old scheme hashed Python source, so a reformatted comment changed the digest
+    and hard-failed every deployed install. Those rows cannot be meaningfully
+    re-derived, so the first run under canonical identity re-records them with the
+    scheme set; from then on any drift fails closed.
+    """
     from sqlalchemy import text
 
     from trace_core.core.database.migrations import (
-        _legacy_migration_checksum,
+        CHECKSUM_SCHEME,
         get_applied_migrations,
         verify_migration_checksums,
     )
 
     with session_manager.engine.begin() as conn:
         conn.execute(
-            text("UPDATE schema_migrations SET checksum=:c WHERE version=10"),
-            {"c": _legacy_migration_checksum("010_add_ledger_signature_columns")},
+            text("UPDATE schema_migrations SET checksum=:c, checksum_scheme=NULL WHERE version=10"),
+            # A digest from the retired source-text scheme: unreproducible by design.
+            {"c": "b" * 64},
         )
+
     verify_migration_checksums(session_manager.engine)  # upgrades, does not raise
-    current = {m["version"]: m["checksum"] for m in get_applied_migrations(session_manager.engine)}
-    assert current[10] != _legacy_migration_checksum("010_add_ledger_signature_columns")
+    rows = {m["version"]: m for m in get_applied_migrations(session_manager.engine)}
+    assert rows[10]["checksum_scheme"] == CHECKSUM_SCHEME
+    assert rows[10]["checksum"] != "b" * 64
+
+    # Second run is a no-op, and drift is now fatal.
+    verify_migration_checksums(session_manager.engine)
+    with session_manager.engine.begin() as conn:
+        conn.execute(text("UPDATE schema_migrations SET checksum='0' WHERE version=10"))
+    with pytest.raises(RuntimeError, match="drift"):
+        verify_migration_checksums(session_manager.engine)
 
 
 def test_ensure_dir_restrictive(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -1104,3 +1118,61 @@ def test_verify_release_refuses_a_mismatched_trust_anchor(tmp_path, monkeypatch:
     (work / "release" / "trusted-keys").mkdir(parents=True)
     shutil.copyfile(good, work / "release" / "trusted-keys" / good.name)
     verify_release._sync_trusted_keys()
+
+# --- C-08: the trust anchor must be bootstrapped independently of the release channel.
+
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def _installer_bootstrap_ids() -> dict[str, set[str]]:
+    """The key ids each installer is willing to trust, as literally embedded in it."""
+    sh = (_REPO / "install.sh").read_text(encoding="utf-8")
+    ps = (_REPO / "install.ps1").read_text(encoding="utf-8")
+    sh_ids = set(re.search(r'TRACE_BOOTSTRAP_KEY_IDS="([^"]*)"', sh).group(1).split())
+    ps_ids = set(re.findall(r'"([0-9a-f]{16})"', re.search(r"\$BootstrapKeyIds = @\((.*?)\)", ps, re.S).group(1)))
+    return {"install.sh": sh_ids, "install.ps1": ps_ids}
+
+
+def test_installers_embed_a_bootstrap_anchor_set() -> None:
+    from trace_core.updates.signing import key_id_for_pubkey
+
+    anchors = {p.stem for p in (_REPO / "release" / "trusted-keys").glob("*.pub")}
+    assert anchors, "no burned-in trust anchors found"
+    for installer, embedded in _installer_bootstrap_ids().items():
+        assert embedded == anchors, f"{installer} bootstrap set {embedded} != burned-in anchors {anchors}"
+
+    # The embedded ids must be derivable from the bundled key material, or the
+    # installer would accept a bundle it can never use.
+    for pub in (_REPO / "release" / "trusted-keys").glob("*.pub"):
+        raw = bytes.fromhex(pub.read_text(encoding="utf-8").strip())
+        assert key_id_for_pubkey(raw).removeprefix("ed25519:") == pub.stem
+
+
+@pytest.mark.parametrize("installer", ["install.sh", "install.ps1"])
+def test_installer_never_trusts_a_channel_supplied_key_id(installer: str) -> None:
+    """The bundle's own filename is attacker-controlled; only a content-derived id may be written."""
+    text = (_REPO / installer).read_text(encoding="utf-8")
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if "trusted-keys.bundle" in line)
+    body = lines[start:]
+    derived, wire_id = ("_derived", "$_fp") if installer == "install.sh" else ("$derived", "$parts[0]")
+
+    assert any(re.search(rf"{re.escape(derived)}\s*=", line) for line in body), (
+        f"{installer} never derives an id from key bytes"
+    )
+    writes = [line for line in body if ".pub" in line and (">" in line or "Set-Content" in line)]
+    assert writes, f"{installer} provisions no key at all; the guard would be vacuous"
+    for line in writes:
+        assert wire_id not in line, f"{installer} names a .pub after the wire-supplied id: {line.strip()}"
+        assert derived in line, f"{installer} writes a .pub without the content-derived id: {line.strip()}"
+
+
+def test_channel_cannot_introduce_a_new_trust_root() -> None:
+    """An attacker-chosen key in the bundle is refused because it is not a bootstrap anchor."""
+    from trace_core.updates.signing import key_id_for_pubkey
+
+    embedded = _installer_bootstrap_ids()["install.sh"]
+    attacker_key = bytes(range(32))
+    attacker_id = key_id_for_pubkey(attacker_key).removeprefix("ed25519:")
+    assert attacker_id not in embedded
+    assert not Path("install.sh").read_text(encoding="utf-8").count(f'"{attacker_id}"')

@@ -11,8 +11,8 @@ from trace_core.audit.domain import GENESIS_CHAIN, AuditAction, AuditEvent, buil
 from trace_core.audit.dto import AuditEventDto, AuditFilterDto
 from trace_core.audit.models import AuditChainStateModel, AuditEventModel
 from trace_core.cases.domain import normalize_number
+from trace_core.core.canonical import coerce_utc
 from trace_core.core.database.repository import ilike_literal, paginate
-from trace_core.core.domain import ensure_utc
 
 _APPEND_ATTEMPTS = 3
 
@@ -20,7 +20,7 @@ _APPEND_ATTEMPTS = 3
 def _base_fields(m: AuditEventModel) -> dict[str, Any]:
     return {
         "seq": m.seq,
-        "ts": ensure_utc(m.ts) or m.ts,  # type: ignore[arg-type]
+        "ts": coerce_utc(m.ts),  # type: ignore[arg-type]
         "action": AuditAction(m.action),
         "actor": m.actor,
         "subject_case_number": m.subject_case_number,

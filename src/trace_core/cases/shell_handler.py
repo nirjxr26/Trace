@@ -465,9 +465,10 @@ class CaseShellCommandHandler(BaseShellHandler):
             render_case_detail(updated)
 
     def _confirm_typed(self, ident: str, action: str) -> bool:
-        typed = Prompt.ask(f"  Type case number '{ident}' to confirm {action}")
-        if typed.strip() != ident.strip():
-            console.print(f"\n[dim]{action.capitalize()} cancelled (mismatch).[/dim]\n")
+        from trace_core.core.ui.renderers import confirm_typed_number
+
+        if not confirm_typed_number(ident, action):
+            console.print("")
             return False
         return True
 

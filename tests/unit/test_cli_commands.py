@@ -2,6 +2,7 @@ import pytest
 from typer.testing import CliRunner
 
 from trace_core.cli.main import app
+from trace_core.core.cli.exit_codes import EXIT_ERROR
 from trace_core.core.database.session import DatabaseSessionManager
 
 pytestmark = pytest.mark.unit
@@ -13,7 +14,7 @@ runner = CliRunner()
 def isolated_db(monkeypatch: pytest.MonkeyPatch) -> None:
     session_mgr = DatabaseSessionManager("sqlite:///:memory:")
     session_mgr.init_schema()
-    monkeypatch.setattr("trace_core.cases.commands.db_manager", session_mgr)
+    monkeypatch.setattr("trace_core.core.service.db_manager", session_mgr)
 
 
 def test_cli_version() -> None:
@@ -102,7 +103,7 @@ def test_db_status_offline_renders_clean(monkeypatch: pytest.MonkeyPatch) -> Non
     bad = DatabaseSessionManager("not-a-database-url")
     monkeypatch.setattr("trace_core.core.cli.db_commands.db_manager", bad)
     result = runner.invoke(app, ["db", "status"])
-    assert result.exit_code == 1
+    assert result.exit_code == EXIT_ERROR
     assert "Offline" in result.stdout
     assert "[red]" not in result.stdout
     assert "[/red]" not in result.stdout

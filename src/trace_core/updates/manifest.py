@@ -28,7 +28,7 @@ class ReleaseManifest(BaseModel):
     minimum_supported_version: str | None = Field(default=None, min_length=1)
     security_update: bool
     restart_required: bool
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=2000)
     manifest_signature: str
     signing_key_id: str
     schema_min: int | None = None
@@ -44,9 +44,7 @@ class ReleaseManifest(BaseModel):
     def _channel_known(cls, value: str) -> str:
         from trace_core.updates.domain import UpdateChannel
 
-        if not UpdateChannel.contains(value):
-            raise ValueError(f"unknown release channel {value!r}")
-        return value
+        return UpdateChannel.validate(value)
 
     @model_validator(mode="after")
     def _schema_range_both_or_neither(self) -> "ReleaseManifest":

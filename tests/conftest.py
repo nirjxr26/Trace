@@ -5,7 +5,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 from trace_core.cases.dto import CaseCreateDto, CaseResponseDto
 from trace_core.cases.service import CaseService
@@ -100,6 +99,12 @@ def temp_storage_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+@pytest.fixture(params=["asyncio"])
+def anyio_backend(request: pytest.FixtureRequest) -> str:
+    """Single AnyIO backend fixture for every async test (was copy-pasted in 3 files)."""
+    return request.param
+
+
 @pytest.fixture
 def as_user(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], None]:
     """Run subsequent service calls as another OS user. Returns a setter."""
@@ -134,11 +139,3 @@ def detached_event(session_manager: DatabaseSessionManager):  # type: ignore[no-
             key_id=m.key_id,
             signature=m.signature,
         )
-
-
-@pytest.fixture
-def cli_runner(monkeypatch: pytest.MonkeyPatch, session_manager: DatabaseSessionManager) -> CliRunner:
-    """Provide a Typer CliRunner pre-isolated with an in-memory database."""
-    monkeypatch.setattr("trace_core.cases.commands.db_manager", session_manager)
-    monkeypatch.setattr("trace_core.audit.commands.db_manager", session_manager)
-    return CliRunner()

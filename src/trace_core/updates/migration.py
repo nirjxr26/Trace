@@ -6,7 +6,6 @@ from pathlib import Path
 
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.fs import atomic_write_lines, check_contained
-from trace_core.core.settings import settings
 from trace_core.updates.errors import (
     MigrationCompatibilityError,
     RecoveryError,
@@ -16,7 +15,9 @@ from trace_core.updates.errors import (
 
 
 def migration_marker_path() -> Path:
-    return Path(settings.storage_root) / "state" / "update-active.json"
+    from trace_core.updates.marker import storage_state_path
+
+    return storage_state_path("update-active.json")
 
 
 _local = threading.local()
@@ -116,6 +117,16 @@ def _confine_backup_path(backup_path: str | Path) -> Path:
     return resolved
 
 
+def _pg_env(password: str | None) -> dict[str, str]:
+    """Subprocess environment for pg_dump/psql: ambient env plus PGPASSWORD when split out."""
+    import os
+
+    env = dict(os.environ)
+    if password:
+        env["PGPASSWORD"] = password
+    return env
+
+
 def _pg_parts(url: str) -> tuple[str, str | None]:
     """Single source for PG URL split. Returns (passwordless_url, password_or_None). Never logs password."""
     base_scheme, _, base_rest = url.partition("://")
@@ -165,11 +176,7 @@ def restore_backup(backup_path: str | Path, manager: DatabaseSessionManager) -> 
 
         clean_url, password = _pg_parts(url)
         try:
-            import os as _os
-
-            env = dict(_os.environ)
-            if password:
-                env["PGPASSWORD"] = password
+            env = _pg_env(password)
             with src.open("rb") as handle:
                 subprocess.run(
                     ["psql", clean_url, "-f", "-"],
@@ -222,9 +229,6 @@ def backup_database(manager: DatabaseSessionManager, dest_dir: str | Path) -> Pa
     dest = ensure_dir(dest_dir)
     if url.startswith("sqlite") and ":memory:" not in url:
         out = dest / "trace-backup.db"
-        check_contained(out, dest)
-        if out.exists():
-            out.unlink()
         literal = str(check_contained(out, dest)).replace("'", "''")
         with manager.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.execute(text(f"VACUUM INTO '{literal}'"))
@@ -236,11 +240,7 @@ def backup_database(manager: DatabaseSessionManager, dest_dir: str | Path) -> Pa
         check_contained(out, dest)
         clean_url, password = _pg_parts(url)
         try:
-            import os as _os
-
-            env = dict(_os.environ)
-            if password:
-                env["PGPASSWORD"] = password
+            env = _pg_env(password)
             with out.open("wb") as handle:
                 subprocess.run(
                     ["pg_dump", clean_url],

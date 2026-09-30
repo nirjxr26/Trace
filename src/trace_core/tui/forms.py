@@ -37,8 +37,6 @@ FIELD_LABELS: dict[str, str] = {
 class CaseForm(_BaseModal, ModalScreen[dict[str, str] | None]):
     """Create/edit form. Returns field values or None on cancel."""
 
-    BINDINGS = ESCAPES
-
     CSS = """
     CaseForm { align: center middle; }
     #case-form { width: 84; height: auto; max-height: 90%; border: round $panel 50%; background: $surface; padding: 1 2; }

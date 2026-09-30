@@ -9,6 +9,8 @@ from trace_core.core.ui.renderers import (
     COLUMN_CASE_NUMBER,
     format_india_datetime,
     get_status_style_and_label,
+    get_success_icon,
+    plural,
     render_key_value_grid,
     render_minimalist_table,
     render_output,
@@ -263,7 +265,7 @@ def render_audit_detail(e: AuditEventDto) -> None:
                     Text(new, style=TOK["success"]),
                 ]
             )
-        count = f"{len(changed)} record" + ("s" if len(changed) != 1 else "")
+        count = plural(len(changed), "record")
         render_minimalist_table(
             f"CHANGES · {count}",
             [
@@ -347,7 +349,7 @@ def _render_valid(res: VerifyResultDto, anchor: str | None = None) -> None:
                 Text("No anchor checked — tail truncation is undetectable without one.", style=THEME_TOKENS["warning"]),
             )
         )
-    rows.append(("Result", Text("✓ No tampering. Ledger intact.", style=THEME_TOKENS["success"])))
+    rows.append(("Result", Text(f"{get_success_icon()} No tampering. Ledger intact.", style=THEME_TOKENS["success"])))
     render_key_value_grid("Audit Verify — ✓ VALID", rows)
     console.print("[dim]Tip: export with `audit export --out bundle.jsonl` to preserve chain.[/dim]")
     if res.events_verified > 0 and not res.sequence_gaps:

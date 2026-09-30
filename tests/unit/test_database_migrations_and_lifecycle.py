@@ -39,9 +39,18 @@ def test_settings_storage_error_logging() -> None:
     """Verify Settings.model_post_init logs a warning on OSError rather than crashing."""
     with patch("pathlib.Path.mkdir", side_effect=OSError("Permission denied")):
         with patch("trace_core.core.settings.logger.warning") as mock_warning:
-            s = Settings()
-            assert s is not None
+            Settings()
             mock_warning.assert_called_once()
+
+
+def test_case_column_definitions_match_model() -> None:
+    """Backfill DDL must stay in agreement with the live CaseModel columns."""
+    from trace_core.cases.models import CaseModel
+    from trace_core.core.database.migrations import _CASE_COLUMN_DEFINITIONS
+
+    model_columns = {c.name for c in CaseModel.__table__.columns}
+    for col_name, _ddl in _CASE_COLUMN_DEFINITIONS:
+        assert col_name in model_columns, f"backfill column {col_name!r} missing from CaseModel"
 
 
 def test_migrations_tracking_and_idempotency() -> None:

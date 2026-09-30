@@ -41,6 +41,8 @@ def test_number_group() -> None:
 
     assert number_group("2026-CR-0001") == "CR"
     assert number_group("2026-NR-0001") == "NR"
+    # One-dash input: the trailing token is treated as the group.
+    assert number_group("2026-0001") == "0001"
     assert number_group("no-dashes-here") == "dashes"
     assert number_group("nodashes") == "OTHER"
 

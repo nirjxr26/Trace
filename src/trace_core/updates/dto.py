@@ -19,9 +19,7 @@ class UpdateHistoryCreateDto(BaseDto):
     def _channel_known(cls, value: str) -> str:
         from trace_core.updates.domain import UpdateChannel
 
-        if not UpdateChannel.contains(value):
-            raise ValueError(f"unknown channel {value!r}")
-        return value
+        return UpdateChannel.validate(value)
 
     @field_validator("result")
     @classmethod

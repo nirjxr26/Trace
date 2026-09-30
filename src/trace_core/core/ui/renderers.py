@@ -13,7 +13,7 @@ from rich.table import Table
 from rich.text import Text
 
 from trace_core.core.canonical import is_naive
-from trace_core.core.ui.theme import THEME_TOKENS
+from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
 
 
 def configure_utf8_streams() -> None:
@@ -310,14 +310,19 @@ def format_utc_zulu(ts: Any) -> str:
     """UTC Zulu string for court-facing timestamps."""
     try:
         return _assume_utc(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
-    except Exception:
+    except (AttributeError, TypeError, OSError) as e:
+        # Only format failures land here; structlog-logged so a silently wrong
+        # court-facing timestamp is at least findable after the fact.
+        import structlog
+
+        structlog.get_logger().warning("non-datetime passed to format_utc_zulu", value=repr(ts), error=str(e))
         return str(ts)
 
 
 def get_status_style_and_label(status: Any, is_deleted: bool = False) -> tuple[str, str, str]:
     """Return (label, text_style, border_color) for any status representation."""
     if is_deleted:
-        return "ARCHIVED", THEME_TOKENS["status_archived"], "#D06A73"
+        return "ARCHIVED", THEME_TOKENS["status_archived"], THEME_HEX["red"]
 
     status_str = status.value if hasattr(status, "value") else str(status)
     status_upper = status_str.upper()
@@ -607,6 +612,26 @@ def prompt_confirm(message: str, is_danger: bool = False, default: bool = False)
 
     color = THEME_TOKENS["danger"] if is_danger else THEME_TOKENS["warning"]
     return Confirm.ask(f"  [{color}]{message}[/{color}]", default=default)
+
+
+def confirm_typed_number(identifier: str, action: str) -> bool:
+    """Destructive-action guard: the operator types the identifier back.
+
+    Single source for the CLI close/purge confirmations and the shell's variant,
+    which each carried their own prompt wording and cancel message.
+    """
+    from rich.prompt import Prompt
+
+    typed = Prompt.ask(f"  Type '{identifier}' to confirm {action}")
+    if typed.strip() != identifier.strip():
+        console.print(f"[dim]{action.capitalize()} cancelled (mismatch).[/dim]")
+        return False
+    return True
+
+
+def plural(count: int, word: str) -> str:
+    """`3 events` / `1 event`. Single source for the count labels in three renderers."""
+    return f"{count} {word}" + ("s" if count != 1 else "")
 
 
 def render_wizard_header(title: str, note: str = "fields marked * are required") -> None:

@@ -24,7 +24,7 @@ def _triage_update_marker(svc) -> None:  # type: ignore[no-untyped-def]
     else:
         tx = _corrupt_marker_id()
         _clear_corrupt_marker()
-    from trace_core.core.domain import now_utc
+    from trace_core.core.clock import now_utc
     from trace_core.updates.domain import UpdateFailureStage
     from trace_core.updates.dto import UpdateHistoryCreateDto
 

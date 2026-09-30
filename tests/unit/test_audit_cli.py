@@ -14,9 +14,7 @@ runner = CliRunner()
 
 @pytest.fixture(autouse=True)
 def isolated_audit_db(monkeypatch: pytest.MonkeyPatch, session_manager: DatabaseSessionManager) -> None:
-    monkeypatch.setattr("trace_core.cases.commands.db_manager", session_manager)
-    monkeypatch.setattr("trace_core.audit.commands.db_manager", session_manager)
-    monkeypatch.setattr("trace_core.core.cli.db_commands.db_manager", session_manager)
+    monkeypatch.setattr("trace_core.core.service.db_manager", session_manager)
 
 
 def test_audit_cli_show_verify_export(tmp_path, session_manager: DatabaseSessionManager) -> None:  # type: ignore[no-untyped-def]

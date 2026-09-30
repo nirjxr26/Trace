@@ -122,16 +122,15 @@ class AuditView(Vertical):
 
     def _render_detail(self) -> None:
         from trace_core.audit.verifier import verify_event
-        from trace_core.tui.theme import integrity_line
+        from trace_core.tui.theme import DOT_BAD, DOT_OK, integrity_line
 
         e = self._selected()
         if e is None:
-            if not self._events:
-                self.query_one("#audit-detail", Static).update(
-                    Text("No audit events found — create or close a case.", style="dim")
-                )
-            else:
-                self.query_one("#audit-detail", Static).update(Text("Select an event…", style="dim"))
+            from trace_core.tui.theme import detail_placeholder
+
+            self.query_one("#audit-detail", Static).update(
+                detail_placeholder(bool(self._events), "No audit events found — create or close a case.")
+            )
             return
         details = parse_details(e.payload_json)
         intact = verify_event(
@@ -170,9 +169,9 @@ class AuditView(Vertical):
             body.append(f"\nCHANGES · {len(changed)}\n", style=THEME_TOKENS["accent"])
             for field in changed:
                 body.append(f"{field}\n", style="dim")
-                body.append(f"  {sanitize_terminal(format_change_value(before.get(field)))}", style="#D06A73")
+                body.append(f"  {sanitize_terminal(format_change_value(before.get(field)))}", style=DOT_BAD)
                 body.append("  →  ")
-                body.append(f"{sanitize_terminal(format_change_value(after.get(field)))}\n", style="#5FD18A")
+                body.append(f"{sanitize_terminal(format_change_value(after.get(field)))}\n", style=DOT_OK)
         body.append(rule)
         body.append("\nINTEGRITY\n", style=THEME_TOKENS["accent"])
         body.append_text(integrity_line(intact))
@@ -221,12 +220,11 @@ class AuditView(Vertical):
     def action_raw(self) -> None:
         e = self._selected()
         if e is None:
-            if not self._events:
-                self.query_one("#audit-detail", Static).update(
-                    Text("No audit events found — create or close a case.", style="dim")
-                )
-            else:
-                self.query_one("#audit-detail", Static).update(Text("Select an event…", style="dim"))
+            from trace_core.tui.theme import detail_placeholder
+
+            self.query_one("#audit-detail", Static).update(
+                detail_placeholder(bool(self._events), "No audit events found — create or close a case.")
+            )
             return
         self.app.push_screen(RawModal(f"seq {e.seq} payload", e.payload_json))
 

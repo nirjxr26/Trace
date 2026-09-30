@@ -12,6 +12,7 @@ from trace_core.core.ui.renderers import (
     format_india_table_time,
     format_utc_zulu,
     get_status_style_and_label,
+    plural,
     render_minimalist_table,
     render_output,
     rule_line,
@@ -67,16 +68,9 @@ def _case_table_columns(bp: str, term_w: int) -> list[tuple[str, dict[str, Any]]
 
 def _group_cases(cases: list[CaseResponseDto]) -> tuple[dict[str, list[CaseResponseDto]], list[str]]:
     """Group by middle code CR/NR/CLI, original order inside group, CR first then alphabetical."""
-    from trace_core.core.cli.completion import number_group
+    from trace_core.core.cli.completion import group_by_prefix
 
-    grouped: dict[str, list[CaseResponseDto]] = {}
-    order: list[str] = []
-    for c in cases:
-        pref = number_group(c.number)
-        if pref not in grouped:
-            grouped[pref] = []
-            order.append(pref)
-        grouped[pref].append(c)
+    grouped, order = group_by_prefix(cases)
     order.sort(key=lambda p: (0 if p == "CR" else 1, p))
     return grouped, order
 
@@ -165,7 +159,7 @@ def _render_case_history(case: CaseResponseDto, events: list[Any] | None) -> Non
     from trace_core.core.ui.renderers import console, format_ledger_time, render_section_title
     from trace_core.core.ui.theme import THEME_TOKENS as TOK
 
-    count = f"{len(events)} event" + ("s" if len(events) != 1 else "")
+    count = plural(len(events), "event")
     render_section_title(f"HISTORY · {count}")
     console.print("")
     for e in events[:5]:

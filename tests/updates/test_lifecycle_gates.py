@@ -89,7 +89,7 @@ def test_waiver_recorded_on_advancing_schema(session_manager, signed_release, re
     meta = MetaData()
     Table("waiver_probe", meta, Column("id", Integer, primary_key=True))
 
-    @mig_mod.register_migration(17, "017_test_waiver_probe")
+    @mig_mod.register_migration(17, "017_test_waiver_probe", operations=("create_all:waiver_probe",))
     def _probe(bind):
         meta.create_all(bind=bind)
 
@@ -103,6 +103,7 @@ def test_waiver_recorded_on_advancing_schema(session_manager, signed_release, re
     finally:
         mig_mod.MIGRATIONS[:] = [m for m in mig_mod.MIGRATIONS if m[1] != "017_test_waiver_probe"]
         mig_mod.MIGRATION_VERIFIERS.pop(17, None)
+        mig_mod.MIGRATION_OPERATIONS.pop(17, None)
 
 
 def test_started_at_captured(session_manager, signed_release, release_keys, monkeypatch, tmp_path):

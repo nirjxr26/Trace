@@ -17,6 +17,14 @@ def assert_safe_filename(name: str) -> str:
     return name
 
 
+def safe_filename_or_exit(name: str) -> str:
+    """Release-script variant: a refused filename becomes a clean SystemExit, not a traceback."""
+    try:
+        return assert_safe_filename(name)
+    except Exception as e:
+        raise SystemExit(f"refusing unsafe artifact filename: {name!r} ({e})") from None
+
+
 def verify_artifact_content(path: Path, artifact: ManifestArtifact) -> None:
     assert_safe_filename(artifact.filename)
     size = path.stat().st_size

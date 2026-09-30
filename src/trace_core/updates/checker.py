@@ -5,8 +5,7 @@ from typing import Any
 from trace_core.core.settings import settings
 from trace_core.updates.manifest import ReleaseManifest
 from trace_core.updates.policy import is_installable, is_update_available
-
-_URL_PREFIXES = ("https://", "http://")  # NOSONAR
+from trace_core.updates.sources import is_http_url
 
 
 def default_manifest_target() -> str | None:
@@ -44,7 +43,7 @@ def load_manifest_auto(explicit: str | Path | None, channel: str = "stable") -> 
     from trace_core.updates.sources import source_for
 
     target = resolve_manifest_target(explicit, channel)
-    if target.startswith(_URL_PREFIXES):
+    if is_http_url(target):
         return load_manifest_bytes(source_for(target).fetch(channel)), target
     return load_manifest(target), target
 
@@ -57,7 +56,6 @@ def ensure_artifact_path(
 ) -> Path:
     """Single source for artifact resolution. Explicit path wins, else auto-select + auto-download."""
     from trace_core.core.fs import check_contained, ensure_dir, sha256_file
-    from trace_core.core.settings import settings
     from trace_core.updates.errors import UpdateError
     from trace_core.updates.policy import select_artifact
     from trace_core.updates.sources import split_manifest_url, stream_artifact_to_file
@@ -67,12 +65,14 @@ def ensure_artifact_path(
         return Path(explicit)
     artifact = select_artifact(manifest)
     target = str(manifest_target or resolve_manifest_target(None))
-    if not target.startswith(_URL_PREFIXES):
+    if not is_http_url(target):
         sibling = Path(target).parent / artifact.filename
         if sibling.exists():
             return sibling
         raise UpdateError(f"artifact {artifact.filename} not found beside manifest; pass --artifact") from None
-    cache_dir = ensure_dir(Path(settings.storage_root) / "state" / "artifacts")
+    from trace_core.updates.marker import storage_state_path
+
+    cache_dir = ensure_dir(storage_state_path("artifacts"))
     dest = check_contained(cache_dir / artifact.filename, cache_dir)
     if dest.exists():
         try:
@@ -197,7 +197,7 @@ def cached_check(target: str | Path, channel: str = "stable") -> dict[str, Any]:
         payload = cached.get("payload") or {}
         if payload.get("current") != get_installed_version():
             cached = None  # installed version changed since check; stale result
-    if key.startswith(_URL_PREFIXES):
+    if is_http_url(key):
         return _cached_check_http(key, channel, cached)
     identity = check_cache.manifest_identity(key)
     if cached and identity is not None and check_cache.cache_valid_for(cached, key, channel, identity):

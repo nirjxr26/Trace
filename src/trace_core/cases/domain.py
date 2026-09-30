@@ -77,7 +77,7 @@ STATUS_FILTER_KEYWORDS = ("ALL", "ARCHIVED")
 
 def is_archived_filter(raw: str | None) -> bool:
     """Check if a status filter string requests archived (soft-deleted) records."""
-    return raw is not None and raw.upper() == "ARCHIVED"
+    return raw is not None and raw.upper() == STATUS_FILTER_KEYWORDS[1]
 
 
 def parse_status_value(raw: str | None) -> CaseStatus | None:

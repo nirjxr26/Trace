@@ -209,9 +209,14 @@ class CaseService(BaseService):
             if dto.notes is not None and normalise_optional(dto.notes) != normalise_optional(case.notes):
                 changed.append("notes")
                 case.notes = normalise_optional(dto.notes)
-            if dto.tags is not None and dto.tags != case.tags:
-                changed.append("tags")
-                case.tags = dto.tags
+            if dto.tags is not None:
+                # The domain lowercases tags on validation; comparing the raw DTO list
+                # against the normalised entity value minted phantom "tags" diffs
+                # (e.g. --tags USB on a case holding usb) with before == after.
+                normalised_tags = sorted(set(t.strip().lower() for t in dto.tags if t.strip()))
+                if normalised_tags != sorted(set(case.tags)):
+                    changed.append("tags")
+                    case.tags = list(normalised_tags)
 
             if not changed:
                 return CaseResponseDto.from_domain(case)

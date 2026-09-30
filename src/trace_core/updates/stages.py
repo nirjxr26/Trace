@@ -34,6 +34,13 @@ STAGE_DONE_LABEL = {
     Stage.HEALTH: "Health check passed",
 }
 
+STAGE_FAILED_LABEL = {
+    Stage.DOWNLOAD: "Download failed",
+    Stage.VERIFY: "Verification failed",
+    Stage.INSTALL: "Install failed",
+    Stage.HEALTH: "Health check failed",
+}
+
 
 def stage_from_state(state: UpdateState) -> Stage | None:
     if state == UpdateState.DOWNLOADING:

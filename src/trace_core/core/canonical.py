@@ -20,11 +20,16 @@ def coerce_utc(dt: datetime | None) -> datetime | None:
     return dt.astimezone(UTC)
 
 
+def _coerce_utc_required(dt: datetime) -> datetime:
+    """coerce_utc narrowed to a non-None argument, for type-checked non-optional callers."""
+    coerced = coerce_utc(dt)
+    assert coerced is not None  # coerce_utc returns None only for a None input
+    return coerced
+
+
 def canonical_ts(dt: datetime) -> str:
     """UTC Zulu string single source for hashing, export, and anchors."""
-    coerced = coerce_utc(dt)
-    assert coerced is not None
-    return coerced.isoformat().replace("+00:00", "Z")
+    return _coerce_utc_required(dt).isoformat().replace("+00:00", "Z")
 
 
 def parse_trailing_seq(value: str) -> int | None:
@@ -43,7 +48,8 @@ def _normalize_value(value: Any) -> Any:
     if isinstance(value, datetime):
         return canonical_ts(value)
     if isinstance(value, dict):
-        return {k: _normalize_value(value[k]) for k in sorted(value)}
+        # json.dumps(sort_keys=True) does the ordering; normalisation only recurses.
+        return {k: _normalize_value(value[k]) for k in value}
     if isinstance(value, (list, tuple)):
         return [_normalize_value(v) for v in value]
     return value
