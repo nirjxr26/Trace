@@ -7,6 +7,7 @@ column type, so these tests pin the boundary itself rather than a caller's guard
 """
 
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 import sqlalchemy as sa
@@ -49,7 +50,13 @@ def _zulu(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _write_then_read(engine: sa.Engine, model: type) -> datetime:  # type: ignore[type-arg]
+def _write_then_read(engine: sa.Engine, model: Any) -> datetime:
+    """Round-trip one timestamp column through the boundary.
+
+    `model` is typed `Any` rather than `type` because this helper is called with several
+    distinct ORM classes and reads a different column off each (`ts`, `observed_at`, ...);
+    `type` made every attribute access an error without checking anything real.
+    """
     with Session(engine) as session:
         session.add(model(ts=STAMP))
         session.commit()

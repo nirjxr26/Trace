@@ -1129,9 +1129,7 @@ def test_audit_hash_fields_reject_non_hex(session_manager: DatabaseSessionManage
     for name in ("payload_hash", "prev_chain", "chain_hash"):
         with pytest.raises(ValidationError):
             AuditEventDto.model_validate({**fields, name: upper})
-    AuditEventDto.model_validate(
-        {**fields, "payload_hash": "a" * 64, "prev_chain": "b" * 64, "chain_hash": "c" * 64}
-    )
+    AuditEventDto.model_validate({**fields, "payload_hash": "a" * 64, "prev_chain": "b" * 64, "chain_hash": "c" * 64})
 
 
 def test_repository_purge_refuses_active_case(session_manager: DatabaseSessionManager) -> None:
@@ -1236,6 +1234,7 @@ def test_verify_release_refuses_a_mismatched_trust_anchor(tmp_path, monkeypatch:
     shutil.copyfile(good, work / "release" / "trusted-keys" / good.name)
     verify_release._sync_trusted_keys()
 
+
 # --- C-08: the trust anchor must be bootstrapped independently of the release channel.
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -1245,8 +1244,15 @@ def _installer_bootstrap_ids() -> dict[str, set[str]]:
     """The key ids each installer is willing to trust, as literally embedded in it."""
     sh = (_REPO / "install.sh").read_text(encoding="utf-8")
     ps = (_REPO / "install.ps1").read_text(encoding="utf-8")
-    sh_ids = set(re.search(r'TRACE_BOOTSTRAP_KEY_IDS="([^"]*)"', sh).group(1).split())
-    ps_ids = set(re.findall(r'"([0-9a-f]{16})"', re.search(r"\$BootstrapKeyIds = @\((.*?)\)", ps, re.S).group(1)))
+    sh_match = re.search(r'TRACE_BOOTSTRAP_KEY_IDS="([^"]*)"', sh)
+    ps_match = re.search(r"\$BootstrapKeyIds = @\((.*?)\)", ps, re.S)
+    # Asserted rather than indexed blind: if an installer is edited and the pattern stops
+    # matching, `None.group` would fail as an AttributeError on the regex, which reads like
+    # a broken test instead of "the anchor declaration moved".
+    assert sh_match is not None, "install.sh no longer declares TRACE_BOOTSTRAP_KEY_IDS"
+    assert ps_match is not None, "install.ps1 no longer declares $BootstrapKeyIds"
+    sh_ids = set(sh_match.group(1).split())
+    ps_ids = set(re.findall(r'"([0-9a-f]{16})"', ps_match.group(1)))
     return {"install.sh": sh_ids, "install.ps1": ps_ids}
 
 

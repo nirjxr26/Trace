@@ -114,11 +114,6 @@ def _row_mismatch(m: AuditEventModel, prev_chain: str) -> tuple[str, str, str] |
     return None
 
 
-def _retain_first(first_seq: int | None, seq: int) -> int:
-    """First observed seq wins. Single source for ledger range tracking."""
-    return seq if first_seq is None else first_seq
-
-
 def verify_rows(rows: Iterable[AuditEventModel]) -> VerifyResultDto:
     """Recompute every link from stored payloads. Policy: hash/prev_chain mismatch =
     tamper (fail fast at first seq); missing seqs = gaps (warning — a middle delete
@@ -133,7 +128,8 @@ def verify_rows(rows: Iterable[AuditEventModel]) -> VerifyResultDto:
     has_rows = False
     for idx, m in enumerate(rows):
         has_rows = True
-        first_seq = _retain_first(first_seq, m.seq)
+        if first_seq is None:
+            first_seq = m.seq
         last_seq = m.seq
         _collect_gaps(prev_seq, m.seq, gaps)
         mismatch = _row_mismatch(m, prev_chain)

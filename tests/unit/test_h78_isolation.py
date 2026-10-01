@@ -51,9 +51,7 @@ def test_conftest_session_default_is_not_the_checkout() -> None:
     a relative path. install_root() then became './install' and trust_root()
     './trust/releases' — inside the repository — on every CI run."""
     src = (Path(__file__).resolve().parents[1] / "conftest.py").read_text(encoding="utf-8")
-    line = next(
-        ln for ln in src.splitlines() if ln.strip().startswith('os.environ["TRACE_STORAGE_ROOT"] =')
-    )
+    line = next(ln for ln in src.splitlines() if ln.strip().startswith('os.environ["TRACE_STORAGE_ROOT"] ='))
     assert '"./.test_storage"' not in line, "session default is still the relative in-checkout path"
     # The default must be a real absolute temp dir, not something reconstructed from cwd.
     assert "tmp_path_factory" in src, "session default must come from a temp factory"

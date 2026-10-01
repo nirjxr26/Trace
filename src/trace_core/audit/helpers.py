@@ -88,7 +88,6 @@ def do_verify(svc: AuditService, output: str, anchor: str | None):  # type: igno
     return res
 
 
-
 def fetch_case_with_history(case_svc, identifier: str, limit: int = 6):  # type: ignore[no-untyped-def]
     """Case + recent audit events shared by Typer show and shell show. Events None on ledger miss."""
     from trace_core.core.ui.renderers import console

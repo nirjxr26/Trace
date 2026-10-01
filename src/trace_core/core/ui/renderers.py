@@ -309,7 +309,18 @@ def format_ledger_time(ts: Any) -> str:
 # Explicit tuple, not %b: a forensic header must read the same on every machine, and
 # strftime's abbreviated month follows the process locale.
 _MONTH_ABBR: Final[tuple[str, ...]] = (
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
 )
 
 

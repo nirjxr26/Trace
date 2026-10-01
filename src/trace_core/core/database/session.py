@@ -3,6 +3,7 @@
 import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Engine, create_engine, event
@@ -172,6 +173,32 @@ def sanitized_db_url(url: str) -> str:
         return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
     except Exception:
         return url
+
+
+def sqlite_file_path(url: str) -> Path | None:
+    """Filesystem path behind a file-backed SQLite URL; None otherwise.
+
+    Parsed rather than string-split. Two copies of the split existed (the migration
+    lock and restore_backup) and both were wrong for the `sqlite://host` two-slash
+    form: the whole URL became the path, whose ':' is an illegal filename character on
+    Windows, so the lock raised OSError before any migration ran and restore_backup
+    raised a bare IndexError from a recovery path. The `+pysqlite` driver suffix, which
+    the audit blamed here, was never actually a problem — it splits correctly.
+    """
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import ArgumentError
+
+    if not url.startswith("sqlite"):
+        return None
+    try:
+        database = make_url(url).database
+    except ArgumentError:
+        # Not a parseable SQLAlchemy URL, so not a file-backed SQLite database. A
+        # recovery path must decide this, not raise ArgumentError at its caller.
+        return None
+    if not database or database == ":memory:":
+        return None
+    return Path(database)
 
 
 def db_identity(manager: DatabaseSessionManager | None = None) -> str:

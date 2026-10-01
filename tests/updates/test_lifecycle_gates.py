@@ -81,8 +81,7 @@ def test_activation_mismatch_recorded(session_manager, signed_release, release_k
     rows = svc.list_history()
     assert dto.result == "ROLLED_BACK"
     assert any(
-        r.transaction_id == "tx-gate-5" and r.result == "ROLLED_BACK" and r.failure_stage == "activation"
-        for r in rows
+        r.transaction_id == "tx-gate-5" and r.result == "ROLLED_BACK" and r.failure_stage == "activation" for r in rows
     ), [(r.transaction_id, r.result, r.failure_stage) for r in rows]
 
 

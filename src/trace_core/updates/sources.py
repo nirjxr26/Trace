@@ -11,6 +11,8 @@ _HTTPS_PREFIX = "https://"
 def is_http_url(url: str) -> bool:
     """True for an http(s) URL. Single source for the scheme test (checker/cache share it)."""
     return url.startswith(("https://", "http://"))  # NOSONAR
+
+
 _HTTP_PREFIX = "http://"  # NOSONAR
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 # Exact hosts, compared whole. The previous rule was
@@ -219,9 +221,6 @@ class HttpManifestSource(ManifestSource):
     def fetch(self, channel: str) -> bytes:
         data, _ = self.fetch_with_etag(channel)
         return data
-
-
-
 
 
 def normalize_manifest_url(url: str) -> str:

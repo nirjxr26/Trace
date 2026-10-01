@@ -6,7 +6,7 @@ from contextlib import contextmanager
 import typer
 from pydantic import ValidationError as PydanticValidationError
 
-from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_NOT_FOUND, EXIT_USAGE, EXIT_VERIFY_FAILED
+from trace_core.core.cli.exit_codes import EXIT_CONFLICT, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_USAGE, EXIT_VERIFY_FAILED
 from trace_core.core.domain import DomainError
 from trace_core.core.errors import (
     ApplicationError,
@@ -116,12 +116,15 @@ def _typed_error(e: Exception, operation_title: str | None, default_remediation:
             default_remediation or f"Run 'list' to inspect available {e.resource_type.lower()} records.",
             EXIT_NOT_FOUND,
         )
+    # Checked before ConflictError: it is a subclass, and a version conflict is a
+    # retry-after-reload condition, not a duplicate record. Both used to report
+    # EXIT_ERROR, which left EXIT_CONFLICT declared but unreachable.
     if isinstance(e, ConcurrencyConflictError):
         return (
-            "Concurrency Conflict",
+            operation_title or "Concurrency Conflict",
             str(e),
             default_remediation or "Another process modified this record. Reload the latest state before modifying.",
-            EXIT_ERROR,
+            EXIT_CONFLICT,
         )
     if isinstance(e, ConflictError):
         return (

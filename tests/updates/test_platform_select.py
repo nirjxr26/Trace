@@ -27,13 +27,16 @@ def test_multi_untagged_rejected(signed_release):
         select_artifact(manifest)
 
 
-def test_verify_manifest_pins_key(signed_release):
+def test_verify_manifest_resolves_by_filename_and_refuses_unresolvable(signed_release):
+    """The update API no longer takes a platform_key: it was widened only for the
+    release script. Resolution is by filename, and an unresolvable artifact is still
+    refused rather than silently accepted."""
     from trace_core.updates.verifier import verify_manifest
 
     manifest, _, art_path, _ = signed_release()
-    verify_manifest(manifest, art_path, platform_key="default")
+    verify_manifest(manifest, art_path)
     with pytest.raises(UpdateVerificationError):
-        verify_manifest(manifest, art_path, platform_key="nope")
+        verify_manifest(manifest, art_path.parent / "does-not-exist.bin")
 
 
 def test_explicit_filename_resolves_despite_ambiguity(signed_release, release_keys, tmp_path):

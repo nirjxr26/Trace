@@ -52,6 +52,10 @@ def decrypt_bytes(blob: bytes, passphrase: str) -> bytes:
         raise ValidationError("A non-empty passphrase is required to open this bundle.")
     try:
         envelope = json.loads(blob.decode("ascii"))
+        if envelope.get("alg") != _ALG:
+            # The writer stamps alg and the reader ignored it, so a bundle claiming a
+            # different algorithm opened without complaint. Reject rather than ignore.
+            raise ValidationError("Bundle algorithm does not match this build.")
         iterations = int(envelope.get("iterations", 0))
         if not MIN_KDF_ITERATIONS <= iterations <= MAX_KDF_ITERATIONS:
             raise ValidationError("Bundle parameters outside acceptable range.")

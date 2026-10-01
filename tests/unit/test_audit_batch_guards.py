@@ -121,9 +121,7 @@ def test_future_timestamp_is_treated_as_expired(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
     cache_mod.cache_path().parent.mkdir(parents=True, exist_ok=True)
-    cache_mod.cache_path().write_text(
-        json.dumps({"checked_at": cache_mod._now() + 10_000}), encoding="utf-8"
-    )
+    cache_mod.cache_path().write_text(json.dumps({"checked_at": cache_mod._now() + 10_000}), encoding="utf-8")
     assert cache_mod.read_check_cache(max_age=3600) is None
 
 

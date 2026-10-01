@@ -45,7 +45,9 @@ _FAILED_STAGE = {
 def render_check_blocked(payload: dict) -> None:
     # Manifest fields are untrusted until verified: safe_text sanitizes AND escapes
     # before Rich interprets the f-string (sanitize_terminal alone leaves [markup] live).
-    console.print(f"[yellow]Update {safe_text(payload['target'])} available but deferred: {safe_text(payload['block_reason'])}[/yellow]")
+    console.print(
+        f"[yellow]Update {safe_text(payload['target'])} available but deferred: {safe_text(payload['block_reason'])}[/yellow]"
+    )
     if payload.get("notes"):
         console.print(safe_text(payload["notes"]))
     console.print("[dim]See `trace update history` for past attempts.[/dim]")
@@ -64,7 +66,9 @@ def render_check_card(payload: dict, channel: str) -> None:
     if not payload["installable"]:
         render_check_blocked(payload)
         return
-    console.print(f"[green]Update {safe_text(payload['target'])} available[/green] — current {safe_text(payload['current'])} ({channel})")
+    console.print(
+        f"[green]Update {safe_text(payload['target'])} available[/green] — current {safe_text(payload['current'])} ({channel})"
+    )
     console.print("[dim]Run `trace update install` to update.[/dim]")
 
 

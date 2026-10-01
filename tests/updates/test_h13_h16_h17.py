@@ -56,7 +56,7 @@ def test_rollback_advances_previous_version(session_manager, temp_storage_root: 
     So a second `trace recovery` rolled back a second time to the same version. The
     failed release becomes the new previous-version: the file keeps meaning "the release
     to return to if the next update fails", which is what rollback reads.
-"""
+    """
     from trace_core.updates import migration as mig_mod
     from trace_updater import updater as updater_mod
 
@@ -74,11 +74,15 @@ def test_rollback_advances_previous_version(session_manager, temp_storage_root: 
 
 def test_rollback_does_not_advance_when_versions_match(temp_storage_root: Path) -> None:
     from trace_core.updates.migration import _advance_previous
+    from trace_updater.updater import previous_path
 
-    # No-op cases must not write the file at all.
-    assert _advance_previous(temp_storage_root, None, "0.2.9") is None
-    assert _advance_previous(temp_storage_root, "0.2.8", None) is None
-    assert _advance_previous(temp_storage_root, "0.2.8", "0.2.8") is None
+    # No-op cases must not write the file at all, so this asserts on the file rather than
+    # on a return value. `_advance_previous` is declared `-> None`, so `is None` on its call
+    # result was a type error — and worse, it would have kept passing if the early return
+    # that makes these cases no-ops were deleted.
+    for restored, failed in ((None, "0.2.9"), ("0.2.8", None), ("0.2.8", "0.2.8")):
+        _advance_previous(temp_storage_root, restored, failed)
+        assert not previous_path(temp_storage_root).exists()
 
 
 def tmp_releases_base(storage_root: Path, updater_mod) -> Path:  # type: ignore[no-untyped-def]

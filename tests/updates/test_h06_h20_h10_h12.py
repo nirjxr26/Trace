@@ -60,7 +60,12 @@ def test_h12_cross_host_redirect_guard_blocks_impostor(monkeypatch) -> None:  # 
         guard.redirect_request(req, None, 302, "", {}, to_impostor)  # type: ignore[arg-type]
     # the genuine CDN still works
     ok = guard.redirect_request(
-        req, None, 302, "", {}, "https://objects.githubusercontent.com/manifest.json"  # type: ignore[arg-type]
+        req,
+        None,
+        302,
+        "",
+        {},
+        "https://objects.githubusercontent.com/manifest.json",  # type: ignore[arg-type]
     )
     assert ok is not None
 
@@ -80,9 +85,7 @@ def test_h10_partial_download_is_removed(tmp_path, monkeypatch) -> None:  # type
     monkeypatch.setattr(sources.urllib.request, "build_opener", lambda *_a, **_k: _Opener())
     monkeypatch.setattr(sources, "_validate_manifest_url", lambda _u: None)
     with pytest.raises(UpdateNetworkError, match="too large"):
-        sources.stream_artifact_to_file(
-            "https://example.test/base", "a.whl", dest, max_bytes=1 << 20
-        )
+        sources.stream_artifact_to_file("https://example.test/base", "a.whl", dest, max_bytes=1 << 20)
     assert not Path(dest).exists(), "partial artifact must not survive a failed download"
 
 
@@ -97,9 +100,7 @@ def test_h10_legitimate_download_still_writes(tmp_path, monkeypatch) -> None:  #
 
     monkeypatch.setattr(sources.urllib.request, "build_opener", lambda *_a, **_k: _Opener())
     monkeypatch.setattr(sources, "_validate_manifest_url", lambda _u: None)
-    got = sources.stream_artifact_to_file(
-        "https://example.test/base", "a.whl", dest, max_bytes=1 << 20
-    )
+    got = sources.stream_artifact_to_file("https://example.test/base", "a.whl", dest, max_bytes=1 << 20)
     assert Path(got).read_bytes() == b"payload-bytes"
 
 
@@ -120,6 +121,7 @@ def test_h07_oversized_artifact_is_refused_before_read(tmp_path) -> None:  # typ
 
     big = tmp_path / "big.bin"
     big.write_bytes(b"0")
+
     class _Stat:
         st_size = MAX_ARTIFACT_BYTES + 1
 
@@ -294,6 +296,4 @@ def test_h10_urllib_error_still_propagates(tmp_path, monkeypatch) -> None:  # ty
     monkeypatch.setattr(sources.urllib.request, "build_opener", lambda *_a, **_k: _Opener())
     monkeypatch.setattr(sources, "_validate_manifest_url", lambda _u: None)
     with pytest.raises(Exception):
-        sources.stream_artifact_to_file(
-            "https://example.test/base", "a.whl", dest, max_bytes=1 << 20
-        )
+        sources.stream_artifact_to_file("https://example.test/base", "a.whl", dest, max_bytes=1 << 20)

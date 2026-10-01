@@ -48,14 +48,27 @@ def test_illegal_transitions_fail(a, b):
 
 
 def test_lifecycle_persists_state_for_restart(session_manager, temp_storage_root):
+    """The durable marker is the recovery surface.
+
+    UpdateLifecycle.load() was deleted rather than repaired: it restored state from the
+    marker and then _run_locked unconditionally transitioned to CHECKING, which _ALLOWED
+    forbids from every non-idle state — so wiring it would have raised
+    `illegal update transition DOWNLOADING -> CHECKING`. Interrupted updates are handled by
+    `trace recovery`, which reads this same marker.
+    """
     from trace_core.updates.lifecycle import UpdateLifecycle
+    from trace_core.updates.marker import read_marker
     from trace_core.updates.service import UpdateService
 
     svc = UpdateService(session_manager)
     life = UpdateLifecycle("tx-state-1", svc)
     life.transition(UpdateState.CHECKING)
     life.transition(UpdateState.AVAILABLE)
-    recovered = UpdateLifecycle.load("tx-state-1", svc)
-    assert recovered.state == UpdateState.AVAILABLE
-    with pytest.raises(UpdateError):
-        UpdateLifecycle.load("tx-missing", svc)
+
+    marker = read_marker()
+    assert marker["transaction_id"] == "tx-state-1"
+    assert marker["state"] == str(UpdateState.AVAILABLE)
+    assert UpdateState(marker["state"]) is UpdateState.AVAILABLE
+
+    # No speculative resume() shim survives as a second state machine.
+    assert not hasattr(UpdateLifecycle, "load")

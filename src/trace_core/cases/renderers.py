@@ -258,9 +258,7 @@ def _render_case_next(case: CaseResponseDto) -> None:
     number = sanitize_terminal(case.number)
     read_steps = [f"audit show --case {number}", f"case show {number} --output json"]
     steps = (
-        read_steps
-        if case.status == CaseStatus.CLOSED
-        else [f"case edit {number}", f"case close {number}", *read_steps]
+        read_steps if case.status == CaseStatus.CLOSED else [f"case edit {number}", f"case close {number}", *read_steps]
     )
 
     render_section_title("NEXT ACTIONS")

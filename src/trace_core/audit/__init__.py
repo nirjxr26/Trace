@@ -1,5 +1,5 @@
 """Audit package exports."""
 
-from trace_core.audit.domain import AuditAction, AuditEvent
+from trace_core.audit.domain import AuditAction
 
-__all__ = ["AuditAction", "AuditEvent"]
+__all__ = ["AuditAction"]

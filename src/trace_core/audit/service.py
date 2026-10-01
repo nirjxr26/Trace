@@ -12,26 +12,9 @@ from trace_core.audit.domain import AUDIT_LEDGER_NOT_INITIALIZED_MESSAGE, AuditA
 from trace_core.audit.dto import AuditEventDto, AuditFilterDto, VerifyResultDto
 from trace_core.audit.events import Context, Subject
 from trace_core.audit.models import AuditEventModel
+from trace_core.core.database.health import is_missing_relation_error
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.service import BaseService
-
-NO_SUCH_TABLE_MESSAGE = "no such table"
-
-
-def _is_ledger_missing(e: Exception) -> bool:
-    orig = getattr(e, "orig", None)
-    if getattr(orig, "sqlstate", None) == "42P01":
-        return True
-    msg = str(e).lower()
-    if "audit_events" in msg or "audit_chain_state" in msg or NO_SUCH_TABLE_MESSAGE in msg or "no such column" in msg:
-        return True
-    try:
-        arg0 = getattr(orig, "args", [None])[0] if orig is not None else None
-        if isinstance(arg0, str) and (NO_SUCH_TABLE_MESSAGE in arg0.lower() or "no such column" in arg0.lower()):
-            return True
-    except Exception:
-        pass
-    return False
 
 
 def _check_ledger_error(e: Exception) -> None:
@@ -41,7 +24,7 @@ def _check_ledger_error(e: Exception) -> None:
 
     # DBAPIError covers OperationalError (SQLite) and ProgrammingError (fresh PG raises
     # UndefinedTable, not OperationalError) — both must map to the migrate guidance.
-    if isinstance(e, DBAPIError) and _is_ledger_missing(e):
+    if isinstance(e, DBAPIError) and is_missing_relation_error(e):
         raise ApplicationError(AUDIT_LEDGER_NOT_INITIALIZED_MESSAGE) from e
     raise e
 
