@@ -270,9 +270,8 @@ class SettingsView(Vertical):
             body.append_text(stage_line(status, label))
             body.append("\n")
 
-    def _integrity_body(self, body: Text, width: int) -> None:
+    def _integrity_body(self, body: Text, _width: int) -> None:
         """Uniform section signature (body, width); this section ignores width."""
-        _ = width
         from trace_core.audit.service import AuditService
         from trace_core.tui.theme import DOT_BAD, DOT_OK
 
@@ -333,9 +332,8 @@ class SettingsView(Vertical):
             append_kv(body, label, sanitize_terminal(fit_text(value, max(20, width - 14))))
         body.append("\nRead-only paths.\n", style="dim")
 
-    def _operator_body(self, body: Text, width: int) -> None:
+    def _operator_body(self, body: Text, _width: int) -> None:
         # Uniform section signature (body, width); this section ignores width.
-        _ = width
         from trace_core.core.operators import current_identity
         from trace_core.core.settings import settings
         from trace_core.core.ui.renderers import sanitize_terminal
@@ -362,9 +360,8 @@ class SettingsView(Vertical):
         ):
             append_kv(body, label, sanitize_terminal(str(value)))
 
-    def _diagnostics_body(self, body: Text, width: int) -> None:
+    def _diagnostics_body(self, body: Text, _width: int) -> None:
         """Uniform section signature (body, width); this section ignores width."""
-        _ = width
         from trace_core.core.cli.doctor import _python_check, _storage_check
         from trace_core.core.database.health import fetch_db_snapshot
 
@@ -417,7 +414,7 @@ class SettingsView(Vertical):
 
         channel = resolve_channel(None)
         try:
-            target = resolve_manifest_target(None, channel)
+            target = resolve_manifest_target(None)
         except Exception:
             return get_installed_version(), "—", "failed", "No update manifest configured (TRACE_UPDATE_MANIFEST)."
         payload = cached_check(target, channel)
@@ -445,7 +442,7 @@ class SettingsView(Vertical):
 
         try:
             channel = resolve_channel(None)
-            target = resolve_manifest_target(None, channel)
+            target = resolve_manifest_target(None)
         except Exception:
             return
         try:

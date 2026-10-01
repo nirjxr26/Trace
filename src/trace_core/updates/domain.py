@@ -86,6 +86,8 @@ class UpdateFailureStage(StrEnum):
     HEALTH = "health"
     RECOVERY = "recovery"
     MIGRATION = "migration"
+    # The pointer is flipped and the DB migrated, but the post-activation check failed.
+    ACTIVATION = "activation"
 
     @classmethod
     def from_state(cls, state: UpdateState) -> str:

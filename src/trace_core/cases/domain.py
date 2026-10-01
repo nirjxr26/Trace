@@ -10,6 +10,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from trace_core.core.domain import (
     BaseEntity,
+    DomainError,
     InvariantViolationError,
     now_utc,
     parse_enum_value,
@@ -47,8 +48,13 @@ class CaseStatus(StrEnum):
     CLOSED = "CLOSED"
 
 
-class TransitionError(Exception):
-    """Raised when an illegal case lifecycle state transition is attempted."""
+class TransitionError(DomainError):
+    """Raised when an illegal case lifecycle state transition is attempted.
+
+    Inherits DomainError like InvariantViolationError, so it is routed by the typed
+    error ladder and rendered as invalid input. As a bare Exception it escaped
+    capture_cli_errors, which has no branch for it, and surfaced as an internal fault.
+    """
 
     def __init__(self, current: CaseStatus, target: CaseStatus, reason: str = ""):
         message = f"Illegal transition from {current.value} to {target.value}"
@@ -195,7 +201,7 @@ class Case(BaseEntity):
     @field_validator("tags")
     @classmethod
     def validate_tags(cls, v: list[str]) -> list[str]:
-        """Strip whitespace, lowercase, discard empty tags, deduplicate, cap 50 tags ×50 chars."""
+        """Strip whitespace, lowercase, discard empty tags, deduplicate, cap 50 tags Ã—50 chars."""
         cleaned: list[str] = []
         for tag in v:
             stripped = strip_controls(tag).strip().lower()

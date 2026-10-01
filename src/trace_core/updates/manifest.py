@@ -5,7 +5,9 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 MAX_MANIFEST_BYTES = 1_048_576
-MAX_ARTIFACT_BYTES = 10_737_418_240
+# Ed25519 needs the whole message in memory, so this cap is the memory bound.
+# A release publishes a wheel plus an sdist; 10 GiB only made the happy path OOM-prone.
+MAX_ARTIFACT_BYTES = 512 * 1_048_576
 
 
 class ManifestArtifact(BaseModel):

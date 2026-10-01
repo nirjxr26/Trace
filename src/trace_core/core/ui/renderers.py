@@ -3,7 +3,7 @@ import re
 import sys
 import textwrap
 from datetime import UTC, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Final
 
 from rich import box
 from rich.console import Console, Group
@@ -304,6 +304,42 @@ def format_ledger_time(ts: Any) -> str:
         return format_india_table_time(ts)  # type: ignore[arg-type]
     except Exception:
         return format_india_datetime(ts)  # type: ignore[arg-type]
+
+
+# Explicit tuple, not %b: a forensic header must read the same on every machine, and
+# strftime's abbreviated month follows the process locale.
+_MONTH_ABBR: Final[tuple[str, ...]] = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+
+
+def format_field_name(field: Any) -> str:
+    """`lead_examiner` → `Lead Examiner`.
+
+    Field names reach the reader as prose in the audit timeline (`Changed: Title, Lead
+    Examiner`) and in the edit review gate, where a bare `lead_examiner` reads as a bug
+    rather than a list. One source so the two views cannot disagree on what a field is
+    called.
+    """
+    return sanitize_terminal(str(getattr(field, "value", field)).replace("_", " ").title())
+
+
+def format_history_date(dt: datetime | None) -> str:
+    """Day plus abbreviated month for a history header: `01 Oct`. Year is dropped on
+    purpose — a header listing every event does not repeat it on each row, and the full
+    date stays in `--output json` and in the per-event view."""
+    if dt is None:
+        return "-"
+    ist_dt = _to_ist(dt)
+    return f"{ist_dt.day:02d} {_MONTH_ABBR[ist_dt.month - 1]}"
+
+
+def format_history_clock(dt: datetime | None) -> str:
+    """Wall-clock time only, no seconds and no zone: `03:49 PM`. Seconds are noise at
+    history-row granularity; the exact instant stays in `--output json`."""
+    if dt is None:
+        return "-"
+    return _to_ist(dt).strftime("%I:%M %p")
 
 
 def format_utc_zulu(ts: Any) -> str:

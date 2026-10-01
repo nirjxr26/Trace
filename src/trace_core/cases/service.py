@@ -3,7 +3,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from trace_core.cases.domain import (
     Case,
@@ -52,6 +52,14 @@ class DuplicateCaseNumberError(ConflictError, CaseError):
     def __init__(self, number: str):
         super().__init__(resource_type="Case", field="number", value=number)
         self.number = number
+
+
+class CaseSequenceContentionError(ConflictError, CaseError):
+    """Raised when year-sequence allocation loses the write lock to a concurrent transaction."""
+
+    def __init__(self, message: str):
+        super().__init__(resource_type="Case sequence", field="allocation", value=message)
+        self.message = message
 
 
 class InvalidCaseStateError(StateTransitionError, CaseError):
@@ -104,24 +112,27 @@ class CaseService(BaseService):
             require_mutator(uow.session, action="create cases")
             repo = SqlAlchemyCaseRepository(uow.session)
 
-            case_number = dto.number.strip() if dto.number else repo.get_next_sequence_number()
-
-            # Check duplicate case number upfront; tombstoned numbers stay reserved
-            if repo.get_by_number(case_number) or repo.is_purged(case_number):
-                raise DuplicateCaseNumberError(case_number)
-
-            case_entity = Case(
-                id=uuid.uuid4(),
-                number=case_number,
-                title=dto.title,
-                lead_examiner=dto.lead_examiner,
-                description=dto.description,
-                notes=dto.notes,
-                tags=dto.tags,
-                status=CaseStatus.OPEN,
-            )
-
             try:
+                # Allocation locks the year row, so it contends. It sat outside this
+                # handler, which leaked a raw IntegrityError on the savepoint race and
+                # SQLite's "database is locked" OperationalError to the caller.
+                case_number = dto.number.strip() if dto.number else repo.get_next_sequence_number()
+
+                # Check duplicate case number upfront; tombstoned numbers stay reserved
+                if repo.get_by_number(case_number) or repo.is_purged(case_number):
+                    raise DuplicateCaseNumberError(case_number)
+
+                case_entity = Case(
+                    id=uuid.uuid4(),
+                    number=case_number,
+                    title=dto.title,
+                    lead_examiner=dto.lead_examiner,
+                    description=dto.description,
+                    notes=dto.notes,
+                    tags=dto.tags,
+                    status=CaseStatus.OPEN,
+                )
+
                 created = repo.create(case_entity)
                 if dto.number:
                     repo.note_manual_number(case_number)
@@ -149,6 +160,12 @@ class CaseService(BaseService):
                 if "number" in err_msg or "uq_cases_number" in err_msg:
                     raise DuplicateCaseNumberError(case_number) from e
                 raise ApplicationError(f"Database constraint violation: {e}") from e
+            except OperationalError as e:
+                # Narrow: only SQLite's write-lock contention maps to a transient error.
+                # A blanket OperationalError catch would relabel real bugs as contention.
+                if "locked" not in str(e).lower():
+                    raise ApplicationError(f"Database unavailable: {e}") from e
+                raise CaseSequenceContentionError("Case number allocation is contended; retry.") from e
 
     def get_case(self, identifier: str) -> CaseResponseDto:
         """Retrieve a case by UUID or Case Number."""

@@ -93,21 +93,6 @@ class UpdateLifecycle:
         if updater_mod.read_active(base) != manifest.version:
             raise UpdateError(f"activation not reflected for {manifest.version}")
 
-    @classmethod
-    def load(cls, transaction_id: str, service: UpdateService | None = None) -> "UpdateLifecycle":
-        from trace_core.updates.errors import RecoveryError
-        from trace_core.updates.marker import read_marker
-
-        svc = service or UpdateService()
-        marker = read_marker()
-        if marker.get("transaction_id") != transaction_id:
-            raise RecoveryError(f"no recoverable state for transaction {transaction_id}")
-        try:
-            state = UpdateState(marker["state"])
-        except ValueError as e:
-            raise RecoveryError(f"unrecognized marker state {marker['state']!r}") from e
-        return cls(transaction_id, svc, state=state)
-
     def run(
         self,
         manifest: ReleaseManifest,
@@ -242,6 +227,7 @@ class UpdateLifecycle:
         current: str,
         started_at: datetime,
     ) -> None:
+        from trace_core.core.fs import sha256_file
         from trace_core.updates import staging as staging_mod
         from trace_core.updates.verifier import resolve_artifact
 
@@ -252,29 +238,22 @@ class UpdateLifecycle:
                 "release_id": manifest.release_id,
                 "version": manifest.version,
                 "filename": staged.name,
+                # Measured from the staged bytes. This used to record the manifest's
+                # own claim into a field named "actual", so staging.is_verified_stage
+                # compared the expected hash against itself and always agreed.
                 "expected_sha256": artifact.sha256,
-                "actual_sha256": artifact.sha256,
+                "actual_sha256": sha256_file(staged),
                 "signing_key_id": manifest.signing_key_id,
                 "verification": "passed",
             },
         )
         if not staging_mod.is_verified_stage(staging_dir, staged):
+            # H-14: this transitioned to FAILED *and* wrote a history row before raising, so
+            # run()'s generic handler wrote a second FAILED row for the same transaction_id.
+            # The caller owns both the transition and the history for a raise; this only
+            # raises, which also keeps the stage label accurate (STAGED -> "staging").
             from trace_core.updates.errors import UpdateVerificationError
 
-            self.transition(UpdateState.FAILED)
-            self.service.record_history(
-                UpdateHistoryCreateDto(
-                    from_version=current,
-                    to_version=manifest.version,
-                    channel=channel,
-                    result=UpdateResult.FAILED,
-                    failure_stage=UpdateFailureStage.STAGING,
-                    failure_reason="staged artifact failed re-verification",
-                    transaction_id=self.transaction_id,
-                    started_at=started_at,
-                    release_id=manifest.release_id,
-                )
-            )
             raise UpdateVerificationError("staged artifact failed re-verification")
 
     def _install_stage(self, staged: Path, base: Path, manifest: ReleaseManifest) -> None:
@@ -357,11 +336,12 @@ class UpdateLifecycle:
             from trace_updater.updater import install_root as _install_root
 
             base = _install_root()
-            schema_before: int | None
-            try:
-                schema_before = current_schema_version(self.service.session_manager)
-            except Exception:
-                schema_before = None
+            # H-19: this swallowed the error and substituted None, a value known to be wrong.
+            # `_check_release_health` then failed the schema check against it and rolled
+            # back a perfectly healthy update. A verdict computed from a substituted value
+            # is not a verdict, so call it for its DB-failure side effect and discard the
+            # number — the post-migration `schema_after` is the one the health check reads.
+            current_schema_version(self.service.session_manager)
             staging_dir = base / "staging" / self.transaction_id
             self.transition(UpdateState.DOWNLOADING)
             staged = self._download_stage(manifest, artifact_path, staging_dir)
@@ -387,11 +367,9 @@ class UpdateLifecycle:
             progress.on_stage(Stage.INSTALL, StageStatus.DONE)
             progress.on_stage(Stage.HEALTH, StageStatus.ACTIVE)
             snap = fetch_db_snapshot(self.service.session_manager)
-            schema_after: int | None
-            try:
-                schema_after = current_schema_version(self.service.session_manager)
-            except Exception:
-                schema_after = schema_before
+            # H-19: same defect as schema_before — a substituted schema_after silently passed the
+            # post-migration check, so a migration that did not reach its target looked healthy.
+            schema_after = current_schema_version(self.service.session_manager)
             health = self._check_release_health(base, manifest, snap, schema_after, staged=staged)
             if health != "passed":
                 from trace_core.updates.migration import rollback_release
@@ -438,7 +416,56 @@ class UpdateLifecycle:
                 self.service.record_history(dto)
                 return dto
             updater_mod.activate(base, manifest.version)
-            self._verify_activation(base, manifest)
+            try:
+                self._verify_activation(base, manifest)
+            except Exception as e:
+                # H-15: the pointer is already flipped and the DB already migrated, so a
+                # failed post-activation verify left half-applied state marked FAILED with
+                # no reconciliation path. Activation is not the point of no return —
+                # roll back exactly as the health-check failure path does.
+                from trace_core.updates.migration import rollback_release
+
+                self.transition(UpdateState.ROLLING_BACK)
+                try:
+                    rollback_release(base, self.service.session_manager, migration["backup"])
+                except (OSError, UpdateError):
+                    self.transition(UpdateState.RECOVERY_REQUIRED)
+                    dto = UpdateHistoryCreateDto(
+                        from_version=current,
+                        to_version=manifest.version,
+                        channel=channel,
+                        result=UpdateResult.FAILED,
+                        failure_stage=UpdateFailureStage.ACTIVATION,
+                        failure_reason=f"post-activation verification failed ({e}); rollback failed",
+                        migration_range=f"{migration['schema']}",
+                        health_check_result=health,
+                        backup_path=migration["backup"],
+                        override_reason=override_note,
+                        transaction_id=self.transaction_id,
+                        started_at=started_at,
+                        release_id=manifest.release_id,
+                    )
+                    self.service.record_history(dto)
+                    return dto
+                self.transition(UpdateState.ROLLED_BACK)
+                dto = UpdateHistoryCreateDto(
+                    from_version=current,
+                    to_version=manifest.version,
+                    channel=channel,
+                    result=UpdateResult.ROLLED_BACK,
+                    failure_stage=UpdateFailureStage.ACTIVATION,
+                    failure_reason=f"post-activation verification failed: {e}",
+                    migration_range=f"{migration['schema']}",
+                    health_check_result=f"passed; reverted after activation check failed: {e}",
+                    backup_path=migration["backup"],
+                    override_reason=override_note,
+                    rollback=True,
+                    transaction_id=self.transaction_id,
+                    started_at=started_at,
+                    release_id=manifest.release_id,
+                )
+                self.service.record_history(dto)
+                return dto
             # ponytail: keep_backups restates updater.RETENTION_BACKUPS; parameter stays for callers
             updater_mod.prune_retention(base)
             self.transition(UpdateState.COMPLETED)

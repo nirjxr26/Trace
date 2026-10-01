@@ -64,16 +64,14 @@ def current_identity() -> tuple[str, str]:
     return user, host
 
 
-def _missing_table(exc: Exception) -> bool:
-    return "no such table" in str(exc).lower() or getattr(getattr(exc, "orig", None), "sqlstate", None) == "42P01"
-
-
 def get_or_provision(session: Session, name: str, host: str) -> OperatorModel:
     """Fetch the operator row, creating it (first-ever becomes admin)."""
     try:
         existing = session.scalar(select(OperatorModel).where(OperatorModel.name == name, OperatorModel.host == host))
     except Exception as exc:
-        if _missing_table(exc):
+        from trace_core.core.database.health import is_missing_relation_error
+
+        if is_missing_relation_error(exc):
             raise ApplicationError("Operator store not initialized. Run `trace db migrate`.") from exc
         raise
     if existing is not None:

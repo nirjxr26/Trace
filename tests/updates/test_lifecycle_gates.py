@@ -68,13 +68,22 @@ def test_activation_mismatch_recorded(session_manager, signed_release, release_k
     manifest, _, art_path, _ = signed_release()
     svc = UpdateService(session_manager)
     monkeypatch.setattr(updater_mod, "activate", lambda base, version: None)
-    from trace_core.updates.errors import UpdateError
-
     life = UpdateLifecycle("tx-gate-5", svc)
-    with pytest.raises(UpdateError, match="activation not reflected"):
-        life.run(manifest, art_path)
+    # H-15: the pointer is flipped and the DB migrated by this point, so a failed
+    # post-activation check must roll back rather than return FAILED with half-applied
+    # state. It no longer raises to the caller; it reports ROLLED_BACK.
+    from trace_core.updates import migration as mig_mod
+
+    # ctivate is stubbed out above, so nothing was actually flipped or migrated; stub the
+    # rollback too, so this test asserts the control flow rather than real FS/DB state.
+    monkeypatch.setattr(mig_mod, "rollback_release", lambda *a, **k: "restored")
+    dto = life.run(manifest, art_path)
     rows = svc.list_history()
-    assert any(r.transaction_id == "tx-gate-5" and r.result == "FAILED" for r in rows)
+    assert dto.result == "ROLLED_BACK"
+    assert any(
+        r.transaction_id == "tx-gate-5" and r.result == "ROLLED_BACK" and r.failure_stage == "activation"
+        for r in rows
+    ), [(r.transaction_id, r.result, r.failure_stage) for r in rows]
 
 
 def test_waiver_recorded_on_advancing_schema(session_manager, signed_release, release_keys, monkeypatch, tmp_path):

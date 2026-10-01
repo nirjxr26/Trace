@@ -96,7 +96,6 @@ def _verify_trust_bundle(manifest: object, cwd: Path) -> None:
 
 def main() -> None:
     from trace_core.core.fs import check_contained
-    from trace_core.updates.verifier import verify_manifest
 
     if len(sys.argv) != 3:
         raise SystemExit("usage: verify_release.py <manifest> <tag>")
@@ -114,12 +113,14 @@ def main() -> None:
     _verify_artifact_integrity(manifest, Path.cwd())
     _verify_trust_bundle(manifest, Path.cwd())
     _sync_trusted_keys()
-    for key in manifest.artifacts:
-        verify_manifest(
-            manifest,
-            check_contained(Path("dist") / _safe_filename(manifest.artifacts[key].filename), Path.cwd()),
-            platform_key=key,
-        )
+    from trace_core.updates.verifier import verify_artifact as verify_one_artifact
+    from trace_core.updates.verifier import verify_manifest_signature
+
+    verify_manifest_signature(manifest)
+    # Selects each artifact by its own manifest key rather than asking the client-side
+    # resolver for it, so the update API is not widened for a build-time tool.
+    for key, entry in manifest.artifacts.items():
+        verify_one_artifact(check_contained(Path("dist") / _safe_filename(entry.filename), Path.cwd()), entry)
     print(f"release self-verify passed: {manifest.version} ({len(manifest.artifacts)} artifacts, signatures ok)")
 
 

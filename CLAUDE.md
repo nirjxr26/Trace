@@ -1,4 +1,4 @@
-# AGENTS.md — Mandatory Rules for AI Agents
+# CLAUDE.md — Mandatory Rules for AI Agents
 
 These rules are binding, not advisory. The keywords MUST, MUST NOT, and NEVER are used in
 their strict sense. If you cannot comply with a rule, STOP and report why. Do not proceed
@@ -152,7 +152,7 @@ Before declaring a task done you MUST:
 3. Add or update tests for changed behavior, following existing test patterns.
 4. Review your final diff line by line.
 
-Commands (fill in / keep accurate): 
+Commands (fill in / keep accurate):
 
 ```
 test:    <command>

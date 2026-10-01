@@ -17,7 +17,9 @@ ESCAPES: list[Binding | tuple[str, str] | tuple[str, str, str]] = [("escape", "d
 class _BaseModal(ModalScreen):
     """Centered, Esc-dismissable, round-bordered. Single source for all modals."""
 
-    BINDINGS = ESCAPES  # type: ignore[assignment]
+    # Copied per class: assigning the shared list by reference meant an append on one
+    # subclass mutated every other modal's bindings.
+    BINDINGS = list(ESCAPES)  # type: ignore[assignment]
 
     def action_dismiss_cancel(self) -> None:
         self.dismiss(None)  # type: ignore[attr-defined]
@@ -34,7 +36,7 @@ FIELD_LABELS: dict[str, str] = {
 }
 
 
-class CaseForm(_BaseModal, ModalScreen[dict[str, str] | None]):
+class CaseForm(_BaseModal):
     """Create/edit form. Returns field values or None on cancel."""
 
     CSS = """
@@ -124,7 +126,7 @@ class CaseForm(_BaseModal, ModalScreen[dict[str, str] | None]):
         self.dismiss(None)
 
 
-class RawModal(_BaseModal, ModalScreen[None]):
+class RawModal(_BaseModal):
     """Scrollable raw JSON drawer. Esc backs out."""
 
     CSS = """
@@ -148,7 +150,7 @@ class RawModal(_BaseModal, ModalScreen[None]):
                 yield Static(self._body)
 
 
-class TextInputModal(_BaseModal, ModalScreen[str | None]):
+class TextInputModal(_BaseModal):
     """Single path/value prompt. Returns stripped text or None on cancel."""
 
     CSS = """
@@ -191,7 +193,7 @@ class TextInputModal(_BaseModal, ModalScreen[str | None]):
         self.dismiss(None)
 
 
-class TypedConfirmModal(_BaseModal, ModalScreen[bool]):
+class TypedConfirmModal(_BaseModal):
     """Type-the-number confirm for close/purge. Returns True only on exact match."""
 
     CSS = """
@@ -240,7 +242,7 @@ class TypedConfirmModal(_BaseModal, ModalScreen[bool]):
         self.dismiss(False)
 
 
-class YesNoModal(_BaseModal, ModalScreen[bool]):
+class YesNoModal(_BaseModal):
     """y/N confirm for archive/restore. Returns True on yes."""
 
     CSS = """
@@ -263,6 +265,11 @@ class YesNoModal(_BaseModal, ModalScreen[bool]):
             with Horizontal():
                 yield Button("Yes", variant="primary", id="yes")
                 yield Button("No", id="no")
+
+    def on_mount(self) -> None:
+        # Default to No. Without this, focus lands on the first focusable widget
+        # (#yes), so Enter immediately confirmed an archive, restore, or purge.
+        self.query_one("#no", Button).focus()
 
     @on(Button.Pressed, "#yes")
     def _yes(self) -> None:

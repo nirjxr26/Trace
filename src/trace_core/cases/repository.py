@@ -298,10 +298,6 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
                 raise
             return seq_record
 
-    def _is_candidate_free(self, candidate: str) -> bool:
-        """Candidate unused and not tombstoned. Single source for allocator guard."""
-        return self.get_by_number(candidate) is None and not self.is_purged(candidate)
-
     def get_next_sequence_number(self, year: int | None = None) -> str:
         """Atomically allocate the next sequential case number for the year (e.g. '2026-CR-0001')."""
         current_year = year or now_utc().year
@@ -314,6 +310,7 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
             seq_record.last_sequence += 1
             self.session.flush()
             candidate = f"{prefix}{seq_record.last_sequence:04d}"
-            if self._is_candidate_free(candidate):
+            # Candidate must be unused and not tombstoned.
+            if self.get_by_number(candidate) is None and not self.is_purged(candidate):
                 return candidate
         raise ValueError(f"Case sequence exhausted for year {current_year} (check for manual number crowding).")

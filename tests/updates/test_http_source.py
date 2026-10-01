@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from trace_core.updates.errors import UpdateError
-from trace_core.updates.sources import HttpManifestSource, source_for
+from trace_core.updates.sources import HttpManifestSource
 
 pytestmark = pytest.mark.unit
 
@@ -101,9 +101,17 @@ def test_redirect_to_same_host_ok(serve, manifest_bytes):
     assert json.loads(data)["product"] == "trace"
 
 
-def test_source_for_routing(tmp_path):
-    assert type(source_for("https://x.example.com/r/stable.json")).__name__ == "HttpManifestSource"
-    assert type(source_for(str(tmp_path / "m.json"))).__name__ == "LocalManifestSource"
+def test_source_routing(tmp_path):
+    """Routing is decided where the channel is known, so there is one HTTP branch.
+
+    H-05 removed `source_for`, which picked a source and threw away the channel encoded in
+    the URL — the wrong half of a decision that `load_manifest_auto` now makes in one place.
+    """
+    from trace_core.updates.sources import HttpManifestSource, LocalManifestSource
+
+    assert HttpManifestSource("https://x.example.com/r").__class__.__name__ == "HttpManifestSource"
+    assert LocalManifestSource(str(tmp_path / "m.json")).__class__.__name__ == "LocalManifestSource"
+    assert not hasattr(__import__("trace_core.updates.sources", fromlist=["x"]), "source_for")
 
 
 def test_checker_accepts_http_url(serve, manifest_bytes, temp_storage_root):

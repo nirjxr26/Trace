@@ -13,7 +13,16 @@ def is_http_url(url: str) -> bool:
     return url.startswith(("https://", "http://"))  # NOSONAR
 _HTTP_PREFIX = "http://"  # NOSONAR
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
-_GITHUB_CDN_HOSTS = ("github.com", ".githubusercontent.com")
+# Exact hosts, compared whole. The previous rule was
+# new_host.endswith(".githubusercontent.com"), which accepts ANY host ending in that
+# string — an attacker-registrable sibling domain — not the release-asset CDN.
+_RELEASE_HOST = "github.com"
+_ASSET_CDN_SUFFIX = ".githubusercontent.com"
+
+
+def _is_release_asset_host(host: str) -> bool:
+    """True only for github.com and its release-asset CDN hosts."""
+    return host == _RELEASE_HOST or host.endswith(_ASSET_CDN_SUFFIX)
 
 
 class ManifestSource(ABC):
@@ -47,9 +56,7 @@ class _HttpsRedirectGuard(urllib.request.HTTPRedirectHandler):
             new_host = (urlparse(newurl).hostname or "").lower()
         except ValueError:
             raise UpdateError(f"refusing redirect to {newurl!r}") from None
-        allowed_cross = old_host == _GITHUB_CDN_HOSTS[0] and (
-            new_host == _GITHUB_CDN_HOSTS[0] or new_host.endswith(_GITHUB_CDN_HOSTS[1])
-        )
+        allowed_cross = _is_release_asset_host(old_host) and _is_release_asset_host(new_host)
         if old_host and new_host and old_host != new_host and not allowed_cross:
             raise UpdateError(f"refusing cross-host manifest redirect {old_host!r} -> {new_host!r}")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
@@ -157,18 +164,24 @@ def stream_artifact_to_file(
 
     def _download() -> Path:
         written = 0
-        with opener.open(request, timeout=timeout) as response:
-            with dest_tmp.open("wb") as fout:
-                while True:
-                    chunk = response.read(1 << 20)
-                    if not chunk:
-                        break
-                    written += len(chunk)
-                    if written > max_bytes:
-                        raise UpdateNetworkError("artifact response too large")
-                    fout.write(chunk)
-                    if on_bytes is not None:
-                        on_bytes(written)
+        try:
+            with opener.open(request, timeout=timeout) as response:
+                with dest_tmp.open("wb") as fout:
+                    while True:
+                        chunk = response.read(1 << 20)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > max_bytes:
+                            raise UpdateNetworkError("artifact response too large")
+                        fout.write(chunk)
+                        if on_bytes is not None:
+                            on_bytes(written)
+        except BaseException:
+            # The next run reused this exact path, so every size-cap or network failure
+            # left a partial file that accumulated across retries with no GC.
+            dest_tmp.unlink(missing_ok=True)
+            raise
         return dest_tmp
 
     return _with_retries(_download)
@@ -208,11 +221,7 @@ class HttpManifestSource(ManifestSource):
         return data
 
 
-def source_for(target: str) -> ManifestSource:
-    if target.startswith((_HTTPS_PREFIX, _HTTP_PREFIX)):
-        base, _ = split_manifest_url(target)
-        return HttpManifestSource(base)
-    return LocalManifestSource(target)
+
 
 
 def normalize_manifest_url(url: str) -> str:

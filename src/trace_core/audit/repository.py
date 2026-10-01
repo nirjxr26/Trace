@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
-from trace_core.audit.domain import GENESIS_CHAIN, AuditAction, AuditEvent, build_payload, chain_hash, payload_hash
+from trace_core.audit.domain import GENESIS_CHAIN, AuditAction, build_payload, chain_hash, payload_hash
 from trace_core.audit.dto import AuditEventDto, AuditFilterDto
 from trace_core.audit.models import AuditChainStateModel, AuditEventModel
 from trace_core.cases.domain import normalize_number
@@ -32,10 +32,6 @@ def _base_fields(m: AuditEventModel) -> dict[str, Any]:
         "key_id": m.key_id,
         "signature": m.signature,
     }
-
-
-def _model_to_domain(m: AuditEventModel) -> AuditEvent:
-    return AuditEvent(**_base_fields(m))  # type: ignore[arg-type]
 
 
 def _model_to_dto(m: AuditEventModel) -> AuditEventDto:

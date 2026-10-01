@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Column, Connection, Engine, Integer, MetaData, String, Table, inspect, select, text
@@ -56,14 +57,32 @@ def register_migration(
     """
 
     def decorator(fn: MigrationAction) -> MigrationAction:
+        # A duplicate version is silent and unrecoverable: apply_migrations sorts by
+        # version, so the later registration replaces the earlier one's verifier and
+        # only one ever runs, while schema_migrations records both as applied.
+        if any(existing == version or existing_name == name for existing, existing_name, _ in MIGRATIONS):
+            raise RuntimeError(f"duplicate migration {version}/{name}; version and name must both be unique")
         MIGRATIONS.append((version, name, fn))
         MIGRATIONS.sort(key=lambda m: m[0])
         MIGRATION_OPERATIONS[version] = operations
         if verify is not None:
             MIGRATION_VERIFIERS[version] = verify
+        _assert_registry_is_linear()
         return fn
 
     return decorator
+
+
+def _assert_registry_is_linear() -> None:
+    """Versions must be 1..N with no gaps. Deleting a migration forked history silently:
+    an already-migrated DB kept its row and never applied the missing one, while a fresh DB
+    skipped it entirely — two different schemas, no error on either. Registrations must also
+    be appended in order, so a migration is never inserted above ones already applied.
+    """
+    versions = [version for version, _, _ in MIGRATIONS]
+    expected = list(range(1, len(versions) + 1))
+    if versions != expected:
+        raise RuntimeError(f"migration versions must be contiguous 1..{len(versions)}; got {versions}")
 
 
 def _create_all(tables: tuple[str, ...]) -> str:
@@ -476,13 +495,14 @@ def _sqlite_lock_path(url: str) -> str | None:
     """Lockfile beside a file-backed SQLite database; None for :memory:."""
     import os
 
-    if ":memory:" in url:
+    from trace_core.core.database.session import sqlite_file_path
+
+    path = sqlite_file_path(url)
+    if path is None:
         return None
-    path = url.split("sqlite:///", 1)[1] if "sqlite:///" in url else url
-    path = path.split("?", 1)[0]
-    if not os.path.isabs(path):
-        path = os.path.abspath(path)
-    return path + ".migratelock"
+    if not path.is_absolute():
+        path = Path(os.path.abspath(path))
+    return str(path) + ".migratelock"
 
 
 @contextmanager

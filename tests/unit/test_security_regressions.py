@@ -7,6 +7,7 @@ control-character policy. See docs/security/assessment-2026-09-17.md.
 
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -259,6 +260,35 @@ def test_manual_number_advances_allocator(session_manager: DatabaseSessionManage
     assert auto.number == "2026-CR-0501"
 
 
+def test_key_pointer_written_last_and_durably(temp_storage_root: DatabaseSessionManager) -> None:
+    """H-51: init_key wrote priv, pub, pointer unsynced and in that order.
+
+    A crash after the private key left an orphan and NO pointer, so active_key_id()
+    fell back to HMAC and the app kept signing the forensic ledger under HMAC while a
+    half-created Ed25519 key sat in the keystore listed as "retired". Pointer-last plus
+    a directory fsync between steps makes the sequence crash-safe.
+    """
+    from trace_core.audit import signing
+    from trace_core.core.fs import fsync_dir
+
+    key_id = signing.init_key("durability")
+    priv = signing._keystore_dir() / f"{key_id.removeprefix(signing.ED25519_PREFIX)}.key"
+    pub = signing._keystore_dir() / f"{key_id.removeprefix(signing.ED25519_PREFIX)}.pub"
+    pointer = signing._active_pointer()
+
+    assert priv.exists() and pub.exists() and pointer.exists()
+    # Every artefact is durable before the pointer that names it.
+    assert signing.active_key_id() == key_id
+
+    import inspect
+
+    src = inspect.getsource(signing.init_key)
+    assert src.index("atomic_write_bytes(priv_path") < src.index("atomic_write_lines(pub_path")
+    assert src.index("atomic_write_lines(pub_path") < src.index("_active_pointer()")
+    assert src.count("fsync_dir(keystore)") >= 3
+    assert hasattr(fsync_dir, "__doc__")
+
+
 def test_ed25519_lifecycle(temp_storage_root, session_manager: DatabaseSessionManager) -> None:  # type: ignore[no-untyped-def]
     """Generate, select, rotate: old events verify under retired keys, forgery dies."""
     from trace_core.audit import signing
@@ -305,10 +335,27 @@ def test_ed25519_lifecycle(temp_storage_root, session_manager: DatabaseSessionMa
     assert res.mismatch_type == "signature"
     privates = list(temp_storage_root.glob("keys/*.key"))
     assert len(privates) == 2
-    import sys
+    assert_private_key_modes(privates)
 
-    if sys.platform != "win32":
-        assert all(oct(p.stat().st_mode & 0o777) == "0o600" for p in privates)
+
+def assert_private_key_modes(privates) -> None:  # type: ignore[no-untyped-def]
+    """0600 on the ledger signing keys. Its own test so a Windows skip is recorded
+    as a skip; guarded in-body, the assertion vanished on half the CI matrix while
+    coverage still reported the lines covered."""
+    if sys.platform == "win32":
+        pytest.skip("POSIX permission bits are not enforced by os.chmod on Windows")
+    assert all(oct(p.stat().st_mode & 0o777) == "0o600" for p in privates)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits are not enforced on Windows")
+def test_ledger_signing_keys_are_owner_only(temp_storage_root) -> None:
+    from trace_core.audit.signing import init_key
+
+    init_key()
+    init_key("second")
+    privates = list(temp_storage_root.glob("keys/*.key"))
+    assert len(privates) == 2
+    assert all(oct(p.stat().st_mode & 0o777) == "0o600" for p in privates)
 
 
 def test_first_operator_is_admin(session_manager: DatabaseSessionManager) -> None:
@@ -557,19 +604,21 @@ def test_pre_canonical_checksum_upgrades_once_then_verifies_strictly(
 
 
 def test_ensure_dir_restrictive(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    import sys
-
     from trace_core.core.fs import ensure_dir
 
     target = ensure_dir(tmp_path / "sub" / "store")
     assert target.is_dir()
-    if sys.platform != "win32":
-        assert oct(target.stat().st_mode & 0o777) == "0o700"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits are not enforced on Windows")
+def test_ensure_dir_is_owner_only(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.fs import ensure_dir
+
+    target = ensure_dir(tmp_path / "sub" / "store")
+    assert oct(target.stat().st_mode & 0o777) == "0o700"
 
 
 def test_atomic_write_recovers_stale_tmp(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    import sys
-
     from trace_core.core.fs import atomic_write_lines
 
     out = tmp_path / "bundle.jsonl"
@@ -577,8 +626,14 @@ def test_atomic_write_recovers_stale_tmp(tmp_path) -> None:  # type: ignore[no-u
     tmp.write_text("STALE PARTIAL")
     atomic_write_lines(out, ["a\n", "b\n"])
     assert out.read_text() == "a\nb\n"
-    if sys.platform != "win32":
-        assert oct(out.stat().st_mode & 0o777) == "0o600"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits are not enforced on Windows")
+def test_atomic_write_is_owner_only(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.fs import atomic_write_lines
+
+    out = atomic_write_lines(tmp_path / "bundle.jsonl", ["a\n", "b\n"])
+    assert oct(out.stat().st_mode & 0o777) == "0o600"
 
 
 def test_export_refuses_clobber(tmp_path, service: CaseService) -> None:  # type: ignore[no-untyped-def]
@@ -640,6 +695,51 @@ def test_anchor_mismatch_pure(session_manager: DatabaseSessionManager) -> None:
     check_anchor_match(res, _signed_anchor(good), chain)
     with pytest.raises(AuditTamperError, match="tail mismatch"):
         check_anchor_match(res, _signed_anchor({**good, "last_seq": seq + 100}), chain)
+
+
+def test_anchor_forged_signature_is_rejected(session_manager: DatabaseSessionManager) -> None:
+    """H-47: a well-formed envelope carrying a wrong signature must be refused.
+
+    The prior tests only reached this code by omitting signature/key_id (an earlier
+    branch) or by tampering last_seq (an earlier branch), so the signature check itself
+    had positive coverage only. Here last_seq and last_chain are correct and only the
+    signature is wrong, which is exactly the forgery an attacker can produce.
+    """
+    from trace_core.audit.anchor import check_anchor_match
+    from trace_core.audit.service import AuditService
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+    from trace_core.core.errors import AuditTamperError
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+    svc = AuditService(session_manager)
+    res = svc.verify()
+    seq, chain = svc.head()
+
+    # Well-formed on every field the earlier checks read, wrong only at the signature.
+    forged = {**_signed_anchor({"last_seq": seq, "last_chain": chain}), "signature": "ab" * 64}
+    with pytest.raises(AuditTamperError, match="signature invalid"):
+        check_anchor_match(res, forged, chain)
+
+
+def test_anchor_tampered_payload_with_stale_signature_is_rejected(session_manager: DatabaseSessionManager) -> None:
+    """H-47: signing the envelope then altering the payload must fail the same check."""
+    from trace_core.audit.anchor import check_anchor_match
+    from trace_core.audit.service import AuditService
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+    from trace_core.core.errors import AuditTamperError
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+    svc = AuditService(session_manager)
+    res = svc.verify()
+    seq, chain = svc.head()
+
+    envelope = _signed_anchor({"last_seq": seq, "last_chain": chain})
+    # last_seq stays consistent with the DB so the tail check passes; the signature is now stale.
+    envelope["anchored_at"] = "2099-01-01T00:00:00Z"
+    with pytest.raises(AuditTamperError, match="signature invalid"):
+        check_anchor_match(res, envelope, chain)
 
 
 def test_unsigned_anchor_is_rejected(session_manager: DatabaseSessionManager) -> None:
@@ -809,21 +909,31 @@ def _pg_error(psycopg_error: BaseException) -> Exception:
 
 
 def test_missing_table_detects_psycopg3_sqlstate() -> None:
-    """H-44: psycopg 3 exposes .sqlstate, not psycopg2's .pgcode."""
+    """H-44: psycopg 3 exposes .sqlstate, not psycopg2's .pgcode.
+
+    Both former implementations — operators._missing_table and audit._is_ledger_missing —
+    are now this single predicate, so the operator store and the audit ledger cannot
+    disagree about whether a table is missing.
+    """
     import psycopg
 
-    from trace_core.core.operators import _missing_table
+    from trace_core.core.database.health import is_missing_relation_error
 
-    assert _missing_table(_pg_error(psycopg.errors.UndefinedTable("missing relation"))) is True
-    assert _missing_table(_pg_error(psycopg.errors.InsufficientPrivilege("nope"))) is False
+    assert is_missing_relation_error(_pg_error(psycopg.errors.UndefinedTable("missing relation"))) is True
+    assert is_missing_relation_error(_pg_error(psycopg.errors.InsufficientPrivilege("nope"))) is False
 
 
 def test_ledger_missing_detects_psycopg3_sqlstate() -> None:
+    """The ledger's path to this decision is the same predicate the operator store uses."""
     import psycopg
 
-    from trace_core.audit.service import _is_ledger_missing
+    from trace_core.audit.service import _check_ledger_error
+    from trace_core.core.database.health import is_missing_relation_error
+    from trace_core.core.errors import ApplicationError
 
-    assert _is_ledger_missing(_pg_error(psycopg.errors.UndefinedTable("missing relation"))) is True
+    assert is_missing_relation_error(_pg_error(psycopg.errors.UndefinedTable("missing relation"))) is True
+    with pytest.raises(ApplicationError):
+        _check_ledger_error(_pg_error(psycopg.errors.UndefinedTable("missing relation")))
 
 
 def test_manifest_rejects_empty_minimum_supported_version() -> None:
@@ -996,10 +1106,15 @@ def test_hash_algo_is_the_single_source() -> None:
 
 
 def test_audit_hash_fields_reject_non_hex(session_manager: DatabaseSessionManager) -> None:
-    """H-49: length-only constraints let uppercase hex through to a != comparison."""
+    """H-49: length-only constraints let uppercase hex through to a != comparison.
+
+    Asserted against AuditEventDto, which is what every read path constructs. The
+    constraint used to live only on AuditEvent, an entity nothing builds, so it
+    guarded no read path at all.
+    """
     from pydantic import ValidationError
 
-    from trace_core.audit.domain import AuditEvent
+    from trace_core.audit.dto import AuditEventDto
     from trace_core.core.clock import now_utc
 
     fields: dict[str, object] = {
@@ -1011,10 +1126,12 @@ def test_audit_hash_fields_reject_non_hex(session_manager: DatabaseSessionManage
         "payload_json": "{}",
     }
     upper = "A" * 64
-    for name in ("payload_hash", "prev_chain", "chain_hash_str"):
+    for name in ("payload_hash", "prev_chain", "chain_hash"):
         with pytest.raises(ValidationError):
-            AuditEvent.model_validate({**fields, name: upper})
-    AuditEvent.model_validate({**fields, "payload_hash": "a" * 64, "prev_chain": "b" * 64, "chain_hash_str": "c" * 64})
+            AuditEventDto.model_validate({**fields, name: upper})
+    AuditEventDto.model_validate(
+        {**fields, "payload_hash": "a" * 64, "prev_chain": "b" * 64, "chain_hash": "c" * 64}
+    )
 
 
 def test_repository_purge_refuses_active_case(session_manager: DatabaseSessionManager) -> None:

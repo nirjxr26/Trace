@@ -141,22 +141,10 @@ class InteractiveShell:
 
         rule_str = rule_line(term_w, max_len=50)
 
-        try:
-            self._ensure_service()
-            db_label = Text.assemble(
-                ("Online ", THEME_TOKENS["success"]),
-                ("(Database)", THEME_TOKENS["muted"]),
-            )
-        except Exception:
-            db_label = Text("Offline / Standalone", style=THEME_TOKENS["danger"])
-
         active_label = _format_active_case(self.active_case, "None (use 'case select' or 'case create')")
 
         status_grid = create_key_value_grid(
-            [
-                ("Database", db_label),
-                ("Active Case", active_label),
-            ],
+            [("Active Case", active_label)],
             width=kv_width(bp, narrow=14, default=18),
             padding=table_padding(bp),
         )
@@ -183,6 +171,7 @@ class InteractiveShell:
                 style=THEME_TOKENS["muted"],
             )
             console.print(logo_text)
+            console.print("")
             console.print(sub_text)
 
         console.print(Text(rule_str, style=THEME_TOKENS["border"]))

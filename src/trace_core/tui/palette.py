@@ -12,7 +12,7 @@ from trace_core.core.cli.completion import filter_completions
 from trace_core.tui.forms import _BaseModal
 
 if TYPE_CHECKING:
-    from trace_core.tui.app import TraceApp
+    pass
 
 COMMANDS: list[tuple[str, str, str]] = [
     # (command id, label, hint)
@@ -42,10 +42,6 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
     #palette-box { width: 60; height: auto; max-height: 20; border: solid $panel; background: $surface; padding: 1 2; }
     #palette-list { height: auto; max-height: 14; }
     """
-
-    def __init__(self, app_ref: "TraceApp") -> None:  # noqa: F821
-        super().__init__()
-        self._app_ref = app_ref
 
     def compose(self) -> ComposeResult:
         with Vertical(id="palette-box"):

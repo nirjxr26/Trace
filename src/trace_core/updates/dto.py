@@ -37,13 +37,7 @@ class UpdateHistoryCreateDto(BaseDto):
             return None
         from trace_core.updates.domain import UpdateFailureStage, UpdateState
 
-        allowed = {
-            UpdateFailureStage.POLICY,
-            UpdateFailureStage.STAGING,
-            UpdateFailureStage.HEALTH,
-            UpdateFailureStage.RECOVERY,
-            UpdateFailureStage.MIGRATION,
-        }
+        allowed = set(UpdateFailureStage)
         states = {str(s).lower() for s in UpdateState}
         if value not in allowed and value.lower() not in states:
             raise ValueError(f"unknown failure_stage {value!r}")

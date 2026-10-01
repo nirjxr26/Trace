@@ -11,6 +11,10 @@ SCHEMA_REQUIRED_KEYS: dict[int, tuple[str, ...]] = {
     MARKER_SCHEMA: ("marker_schema", "transaction_id", "state"),
 }
 REQUIRED_KEYS = SCHEMA_REQUIRED_KEYS[MARKER_SCHEMA]
+# The writer stamps marker_schema itself, so only the caller's fields are checked.
+# Derived rather than re-spelled: the two copies had drifted, and the writer's copy
+# silently disagreed with the reader's contract.
+CALLER_REQUIRED_KEYS = tuple(k for k in REQUIRED_KEYS if k != "marker_schema")
 
 
 def storage_state_path(name: str) -> Path:
@@ -28,7 +32,7 @@ def write_marker(data: dict[str, Any], path: str | Path | None = None) -> Path:
 
     target = Path(path) if path else marker_path()
     check_contained(target, settings.storage_root)
-    missing = [k for k in ("transaction_id", "state") if k not in data]
+    missing = [k for k in CALLER_REQUIRED_KEYS if k not in data]
     if missing:
         raise UpdateError(f"marker missing fields: {missing}")
     record = {**data, "marker_schema": MARKER_SCHEMA}

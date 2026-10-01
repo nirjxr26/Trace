@@ -12,10 +12,18 @@ from trace_core.core.database.session import DatabaseSessionManager
 
 
 @pytest.fixture(scope="session", autouse=True)
-def setup_test_environment() -> None:
-    """Set standard environment variables for isolated testing."""
+def setup_test_environment(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Set standard environment variables for isolated testing.
+
+    H-78: the storage default was the relative './.test_storage'. install_root() and
+    trust_root() derive from storage_root, so every derived root landed in the checkout —
+    CI wrote anchors, signing keys, the update lock and the check cache into the repository
+    on each run. An absolute per-session tmp directory keeps all of that out of the tree.
+    """
     os.environ["TRACE_DATABASE_URL"] = "sqlite:///:memory:"
-    os.environ["TRACE_STORAGE_ROOT"] = "./.test_storage"
+    storage_root = tmp_path_factory.mktemp("trace-test-storage") / "storage"
+    storage_root.mkdir(parents=True, exist_ok=True)
+    os.environ["TRACE_STORAGE_ROOT"] = str(storage_root)
 
 
 @pytest.fixture
@@ -92,11 +100,21 @@ def make_case(service: CaseService, title: str = "Test Case", examiner: str = "E
 
 @pytest.fixture
 def temp_storage_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point the global settings storage root at tmp. Restores after (settings reads it live)."""
+    """Point the global settings storage root at an isolated tmp dir. Restores after.
+
+    H-78: this used to be `tmp_path` itself, so `install_root()` and `trust_root()` —
+    which derive from `storage_root.parent` — resolved to pytest's shared per-session
+    parent. Every test in the session wrote anchors, signing keys, the update lock and
+    the check cache to the same place, and under the relative `./.test_storage` default
+    that place was `./install` and `./trust/releases` *inside the checkout*. The nested
+    "storage" dir keeps every derived root under this test's own tmp_path.
+    """
     from trace_core.core.settings import settings
 
-    monkeypatch.setattr(settings, "storage_root", tmp_path)
-    return tmp_path
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "storage_root", storage_root)
+    return storage_root
 
 
 @pytest.fixture(params=["asyncio"])

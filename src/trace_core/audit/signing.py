@@ -116,18 +116,25 @@ def init_key(label: str = "default") -> str:
     key_id = f"{ED25519_PREFIX}{hashlib.sha256(raw_pub).hexdigest()[:16]}"
     priv_path = _keystore_dir() / f"{key_id[len(ED25519_PREFIX) :]}.key"
     pub_path = _keystore_dir() / f"{key_id[len(ED25519_PREFIX) :]}.pub"
-    priv_path.write_bytes(
-        private.private_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PrivateFormat.Raw,
-            encryption_algorithm=serialization.NoEncryption(),
-        )
-    )
-    pub_path.write_text(raw_pub.hex(), encoding="utf-8")
-    import os
+    # H-51: key files went out unsynced and in the wrong order, so a crash after the
+    # private key left an orphan and NO pointer: active_key_id() fell back to HMAC and the
+    # app kept signing the forensic ledger under HMAC while a half-created Ed25519 key sat
+    # in the keystore listed as "retired". Pointer-last plus a directory fsync between each
+    # step makes the sequence crash-safe — the pointer only ever names files that are durable.
+    from trace_core.core.fs import atomic_write_bytes, atomic_write_lines, fsync_dir
 
-    os.chmod(priv_path, 0o600)
-    _active_pointer().write_text(f"{key_id} # {clean}\n", encoding="utf-8")
+    keystore = _keystore_dir()
+    raw_priv = private.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    atomic_write_bytes(priv_path, raw_priv, mode=0o600)
+    fsync_dir(keystore)
+    atomic_write_lines(pub_path, [raw_pub.hex()])
+    fsync_dir(keystore)
+    atomic_write_lines(_active_pointer(), [f"{key_id} # {clean}\n"])
+    fsync_dir(keystore)
     return key_id
 
 
