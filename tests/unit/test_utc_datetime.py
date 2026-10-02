@@ -71,11 +71,28 @@ def test_sqlite_round_trip_is_aware_and_utc(sqlite_engine: sa.Engine):
     assert _zulu(stored) == ZULU
 
 
-def test_legacy_declaration_would_have_rendered_five_hours_wrong(sqlite_engine: sa.Engine):
-    """Pins the defect. Revert UTCDateTime to DateTime(timezone=True) and this is the value callers got."""
+def test_legacy_declaration_loses_the_offset_and_reads_back_local(sqlite_engine: sa.Engine):
+    """Pins the defect the `UTCDateTime` decorator exists to prevent.
+
+    The legacy declaration is a no-op on SQLite, so the offset is dropped at the boundary
+    and the stored wall-clock digits come back as a *naive* datetime. Rendering it with
+    `astimezone(UTC)` then reads it as local time rather than as the UTC it was written as.
+    On an IST host that is the 5h30m error the ZULU-labelled field printed; on a UTC host
+    the shift is zero, which is why the defect went unnoticed locally and only surfaced in
+    CI. So the assertion is the *relationship* between the read value and the host offset --
+    a hardcoded shift pins one developer's machine, not the defect.
+    """
     stored = _write_then_read(sqlite_engine, _Legacy)
-    assert stored.tzinfo is None
-    assert _zulu(stored) == "2026-09-27T04:30:00Z"
+
+    assert stored.tzinfo is None, "the offset is dropped at the boundary"
+    assert stored.replace(tzinfo=UTC) == STAMP, "SQLite keeps the wall-clock digits"
+
+    host_offset = datetime.now().astimezone().utcoffset()
+    assert host_offset is not None, "astimezone() without a target always yields an aware value"
+    rendered = stored.astimezone(UTC)
+    assert rendered - stored.replace(tzinfo=UTC) == -host_offset, (
+        "the naive value is shifted by exactly the host's offset, so it renders as local wall-clock wearing a UTC label"
+    )
 
 
 def test_naive_bind_is_stored_as_utc_rather_than_local_wall_clock(sqlite_engine: sa.Engine):
