@@ -5,7 +5,7 @@ import typer
 
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.output import SKIP_CONFIRM_HELP
-from trace_core.core.ui.renderers import console, get_success_icon, render_minimalist_table
+from trace_core.core.ui.renderers import console, get_success_icon, render_minimalist_table, render_output
 from trace_core.updates.dto import UpdateHistoryDto
 from trace_core.updates.manifest import ManifestArtifact, ReleaseManifest
 from trace_core.updates.service import UpdateService
@@ -25,7 +25,7 @@ HISTORY_COLUMNS: list[tuple[str, dict[str, object]]] = [
 def history_table_rows(rows: list[UpdateHistoryDto]) -> list[list[str]]:
     """Single source for history table rows. Shared by CLI and REPL shell."""
     yes = get_success_icon()
-    return [[r.from_version, r.to_version, r.channel, r.result, yes if r.rollback else "—"] for r in rows]
+    return [[r.from_version, r.to_version, r.channel, r.result, yes if r.rollback else "â€”"] for r in rows]
 
 
 def load_update(manifest: str | None, artifact: str | None) -> tuple[ReleaseManifest, str, str, ManifestArtifact]:
@@ -68,14 +68,21 @@ def update_check(
         from trace_core.updates.renderers import render_check_card
 
         channel = resolve_channel(None)
-        target = resolve_manifest_target(None, channel)
+        target = resolve_manifest_target(None)
         payload = cached_check(target, channel)
-        if output.lower() == "json":
-            from trace_core.core.ui.renderers import render_json
+        render_output(output, payload, lambda: render_check_card(payload, channel))
 
-            render_json(payload)
-            return
-        render_check_card(payload, channel)
+
+def _render_history_table(rows: list[UpdateHistoryDto]) -> None:
+    """Table view plus its follow-up hint. The hint is table furniture; it must
+    never reach `--output json`, which has to stay machine-parseable."""
+    render_minimalist_table(
+        "Update History",
+        HISTORY_COLUMNS,
+        history_table_rows(rows),
+        empty_message="No updates recorded.",
+    )
+    console.print("[dim]Run `trace update check` for the latest state.[/dim]")
 
 
 @update_app.command("history")
@@ -86,18 +93,11 @@ def update_history(
     with capture_cli_errors("Update History"):
         svc = UpdateService()
         rows = svc.list_history(limit=limit, offset=0)
-        if output.lower() == "json":
-            from trace_core.core.ui.renderers import render_json
-
-            render_json([r.model_dump(mode="json") for r in rows])
-            return
-        render_minimalist_table(
-            "Update History",
-            HISTORY_COLUMNS,
-            history_table_rows(rows),
-            empty_message="No updates recorded.",
+        render_output(
+            output,
+            [r.model_dump(mode="json") for r in rows],
+            lambda: _render_history_table(rows),
         )
-        console.print("[dim]Run `trace update check` for the latest state.[/dim]")
 
 
 @update_app.command("install")

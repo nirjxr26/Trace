@@ -617,29 +617,53 @@ else
 fi
 
 TRUST_DIR="${HOME}/.trace/trust/releases"
+# Bootstrap anchor, established independently of the release channel. The channel
+# only supplies key bytes; a bundle line is written solely when the id derived from
+# its own content is one embedded here. An attacker who controls the channel can
+# therefore withhold a key but can never introduce a new trust root. Adding one
+# means editing this installer, which is reviewed code.
+TRACE_BOOTSTRAP_KEY_IDS="53712e8bb8a774e6"
 if mkdir -p "$TRUST_DIR" 2>/dev/null; then
     BUNDLE_FILE="$(mktemp)"
     if trace_run_live 83 curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$BUNDLE_FILE" "https://github.com/nirjxr26/Trace/releases/latest/download/trusted-keys.bundle"; then
-        while IFS=' ' read -r _fp _hex _rest; do
-            case "$_fp" in
-                ????????????????) ;;
-                *) continue ;;
-            esac
-            case "$_fp" in
-                *[!0-9a-f]*|'') continue ;;
-                *) ;;
-            esac
-            case "$_hex" in
-                ????????????????????????????????????????????????????????????????) ;;
-                *) continue ;;
-            esac
-            case "$_hex" in
-                *[!0-9a-f]*|'') continue ;;
-                *) ;;
-            esac
-            printf '%s' "$_hex" > "$TRUST_DIR/${_fp}.pub"
-        done < "$BUNDLE_FILE"
-        trace_say "  [OK] Release trust keys provisioned."
+        if ! command -v sha256sum >/dev/null 2>&1; then
+            trace_say "  [!] sha256sum missing: cannot derive trust key ids, so no key was provisioned. Verification stays fail-closed."
+        else
+            _provisioned=0
+            while IFS=' ' read -r _fp _hex _rest; do
+                case "$_fp" in
+                    ????????????????) ;;
+                    *) continue ;;
+                esac
+                case "$_fp" in
+                    *[!0-9a-f]*|'') continue ;;
+                    *) ;;
+                esac
+                case "$_hex" in
+                    ????????????????????????????????????????????????????????????????) ;;
+                    *) continue ;;
+                esac
+                case "$_hex" in
+                    *[!0-9a-f]*|'') continue ;;
+                    *) ;;
+                esac
+                # The bundle's own filename is attacker-controlled; the id is derived
+                # from the key bytes and must agree with it.
+                _derived="$(printf '%s' "$_hex" | sha256sum | cut -c1-16)"
+                [ "$_derived" = "$_fp" ] || continue
+                case " $TRACE_BOOTSTRAP_KEY_IDS " in
+                    *" $_derived "*) ;;
+                    *) trace_say "  [!] Skipped release key ${_derived}: not a bootstrap anchor."; continue ;;
+                esac
+                printf '%s' "$_hex" > "$TRUST_DIR/${_derived}.pub"
+                _provisioned=$((_provisioned + 1))
+            done < "$BUNDLE_FILE"
+            if [ "$_provisioned" -gt 0 ]; then
+                trace_say "  [OK] Release trust keys provisioned (${_provisioned} bootstrap anchor(s))."
+            else
+                trace_say "  [!] Release bundle carried no known bootstrap anchor. Verification stays fail-closed."
+            fi
+        fi
     else
         trace_say "  [!] Could not fetch release trust keys (offline or no release yet). Verification stays fail-closed until provisioned."
     fi

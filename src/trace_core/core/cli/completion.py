@@ -53,8 +53,9 @@ def cached_complete(
 def _fetch_cases(case_service: Any, include_deleted: bool = False) -> list[Any]:
     """Single source for completion case reads. Raises on DB failure (callers coerce to [])."""
     from trace_core.cases.dto import CaseFilterDto
+    from trace_core.core.dto import DEFAULT_PAGE_SIZE
 
-    return case_service.list_cases(CaseFilterDto(include_deleted=include_deleted, limit=50))
+    return case_service.list_cases(CaseFilterDto(include_deleted=include_deleted, limit=DEFAULT_PAGE_SIZE))
 
 
 def _distinct_terms(values: Iterable[Any], label: str, limit: int) -> list[tuple[str, str]]:
@@ -105,9 +106,11 @@ def rank_cases(cases: list[Any], active_number: str | None = None) -> list[Any]:
 
     def _key(c: Any) -> tuple[int, float, int, int]:
         is_active = 0 if active_number and c.number == active_number else 1
+        # updated_at is always a real datetime on domain entities and DTOs; the
+        # ValueError guard is the only escape a malformed row can trigger.
         try:
-            ts = c.updated_at.timestamp() if hasattr(c.updated_at, "timestamp") else 0
-        except Exception:
+            ts = c.updated_at.timestamp()
+        except (AttributeError, ValueError):
             ts = 0
         raw_status = getattr(c, "status", "")
         is_open = 0 if getattr(raw_status, "value", raw_status) == "OPEN" else 1
@@ -149,17 +152,15 @@ def complete_from_audit(audit_service: Any, limit: int = 8) -> list[tuple[str, s
 
 def number_group(number: str) -> str:
     """Middle-code group (CR/NR/CLI/…) for case numbers. Single source."""
-    try:
-        return number.split("-")[1] if "-" in number else "OTHER"
-    except Exception:
-        return "OTHER"
+    return number.split("-")[1] if "-" in number else "OTHER"
 
 
-def _group_ranked(ranked: list[Any]) -> tuple[dict[str, list[Any]], list[str]]:
-    """Group ranked cases by prefix like CR/NR/CLI, keeping rank order inside groups."""
+def group_by_prefix(cases: list[Any]) -> tuple[dict[str, list[Any]], list[str]]:
+    """Group cases by middle code (CR/NR/CLI), keeping first-seen group order. Single source
+    shared by the case table and REPL case completion."""
     grouped: dict[str, list[Any]] = {}
     order: list[str] = []
-    for c in ranked:
+    for c in cases:
         prefix = number_group(c.number)
         if prefix not in grouped:
             grouped[prefix] = []
@@ -191,7 +192,7 @@ def complete_from_cases(case_service: Any, active_number: str | None = None, lim
 
     def _load() -> list[tuple[str, str]]:
         ranked = rank_cases(_fetch_cases(case_service, include_deleted=True), active_number)
-        return _grouped_rows(*_group_ranked(ranked), limit)
+        return _grouped_rows(*group_by_prefix(ranked), limit)
 
     return cached_complete("cases", case_service, _load, None, extra=active_number or "")
 

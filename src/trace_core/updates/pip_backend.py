@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 from trace_core.updates.errors import UpdateError
+from trace_core.updates.manifest import ReleaseManifest
 
 _PIP_TIMEOUT_SECONDS = 300
 _PROOF_TIMEOUT_SECONDS = 120
@@ -103,7 +104,7 @@ def pip_installed_version(python: Path | None = None) -> str | None:
     return None
 
 
-def pip_health(manifest, staged: Path | None) -> bool:  # type: ignore[no-untyped-def]
+def pip_health(manifest: ReleaseManifest, staged: Path | None) -> bool:
     """True when no pip proof is required or the venv imports the target.
 
     A flipped pointer over stale code is a lying update, so a version mismatch

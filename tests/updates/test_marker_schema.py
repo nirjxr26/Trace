@@ -1,5 +1,6 @@
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -9,52 +10,52 @@ from trace_core.updates.marker import MARKER_SCHEMA, read_marker, write_marker
 pytestmark = pytest.mark.unit
 
 
-def test_write_requires_identity(temp_storage_root, tmp_path):
+def test_write_requires_identity(temp_storage_root: Path):
     from trace_core.updates.errors import UpdateError
 
-    path = tmp_path / "m.json"
+    path = temp_storage_root / "m.json"
     with pytest.raises(UpdateError):
         write_marker({"state": "IDLE"}, path)
 
 
-def test_unknown_schema_fails_closed(temp_storage_root, tmp_path):
-    path = tmp_path / "m.json"
+def test_unknown_schema_fails_closed(temp_storage_root: Path):
+    path = temp_storage_root / "m.json"
     path.write_text(json.dumps({"marker_schema": 999, "transaction_id": "t", "state": "IDLE"}), encoding="utf-8")
     with pytest.raises(RecoveryError):
         read_marker(path)
 
 
-def test_missing_fields_fail_closed(temp_storage_root, tmp_path):
-    path = tmp_path / "m.json"
+def test_missing_fields_fail_closed(temp_storage_root: Path):
+    path = temp_storage_root / "m.json"
     path.write_text(json.dumps({"marker_schema": MARKER_SCHEMA, "transaction_id": "t"}), encoding="utf-8")
     with pytest.raises(RecoveryError):
         read_marker(path)
 
 
-def test_roundtrip(temp_storage_root, tmp_path):
-    path = tmp_path / "m.json"
+def test_roundtrip(temp_storage_root: Path):
+    path = temp_storage_root / "m.json"
     write_marker({"transaction_id": "t1", "state": "STAGED", "release_id": "r"}, path)
     data = read_marker(path)
     assert data["marker_schema"] == MARKER_SCHEMA
     assert data["state"] == "STAGED"
 
 
-def test_caller_cannot_override_schema(temp_storage_root, tmp_path):
+def test_caller_cannot_override_schema(temp_storage_root: Path):
     """A caller-supplied marker_schema must not displace the enforced version."""
-    path = tmp_path / "m.json"
+    path = temp_storage_root / "m.json"
     write_marker({"transaction_id": "t1", "state": "IDLE", "marker_schema": 999}, path)
     assert json.loads(path.read_text(encoding="utf-8"))["marker_schema"] == MARKER_SCHEMA
     assert read_marker(path)["marker_schema"] == MARKER_SCHEMA
 
 
-def test_partial_binding_mismatch_discards(temp_storage_root, tmp_path):
+def test_partial_binding_mismatch_discards(temp_storage_root: Path):
     import json as _json
 
     from trace_updater import updater as updater_mod
 
-    staging = tmp_path / "staging"
+    staging = temp_storage_root / "staging"
     staging.mkdir()
-    src = tmp_path / "a.bin"
+    src = temp_storage_root / "a.bin"
     src.write_bytes(b"0123456789")
     digest = hashlib.sha256(b"0123456789").hexdigest()
     (staging / "a.bin.partial").write_bytes(b"XXXXX")
@@ -71,14 +72,14 @@ def test_partial_binding_mismatch_discards(temp_storage_root, tmp_path):
     assert second.read_bytes() == b"0123456789"
 
 
-def test_partial_matching_binding_resumes(temp_storage_root, tmp_path):
+def test_partial_matching_binding_resumes(temp_storage_root: Path):
     import json as _json
 
     from trace_updater import updater as updater_mod
 
-    staging = tmp_path / "staging"
+    staging = temp_storage_root / "staging"
     staging.mkdir()
-    src = tmp_path / "a.bin"
+    src = temp_storage_root / "a.bin"
     src.write_bytes(b"0123456789")
     digest = hashlib.sha256(b"0123456789").hexdigest()
     binding = {"transaction_id": "tx-1", "release_id": "r1", "version": "1.0.0"}

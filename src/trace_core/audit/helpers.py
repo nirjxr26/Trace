@@ -6,7 +6,7 @@ from rich.markup import escape
 
 from trace_core.audit.dto import AuditFilterDto
 from trace_core.audit.service import AuditService
-from trace_core.core.errors import ValidationError
+from trace_core.core.errors import ApplicationError, ValidationError
 
 _EMPTY_TIMELINE_HINT = "Try --action CASE_CREATED."
 
@@ -48,7 +48,7 @@ def do_export_encrypted(svc: AuditService, out: str, passphrase: str) -> Path:  
 
     tmp = Path(out).with_suffix(Path(out).suffix + ".plain-tmp")
     try:
-        do_export(svc, str(tmp))
+        svc.export(str(tmp))
         sealed = encrypt_bytes(tmp.read_bytes(), passphrase)
         return atomic_write_lines(out, [sealed.decode("ascii")])
     finally:
@@ -88,11 +88,6 @@ def do_verify(svc: AuditService, output: str, anchor: str | None):  # type: igno
     return res
 
 
-def do_export(svc: AuditService, out: str):  # type: ignore[no-untyped-def]
-    """Export core shared by Typer and shell. Returns path; callers own messaging."""
-    return svc.export(out)
-
-
 def fetch_case_with_history(case_svc, identifier: str, limit: int = 6):  # type: ignore[no-untyped-def]
     """Case + recent audit events shared by Typer show and shell show. Events None on ledger miss."""
     from trace_core.core.ui.renderers import console
@@ -102,10 +97,10 @@ def fetch_case_with_history(case_svc, identifier: str, limit: int = 6):  # type:
         events = AuditService(case_svc.session_manager).list_events(
             AuditFilterDto(case_number=case.number, limit=limit)
         )
-    except Exception:
-        # A ledger failure must not look like "no history": say so once, here,
-        # where the fetch (not the renderer) owns the error.
-        console.print("[dim]Audit history unavailable — ledger error; showing case without history.[/dim]\n")
+    except ApplicationError as e:
+        # Ledger down (e.g. "run trace db migrate") must not look like "no history";
+        # the fetch owns the message. Domain bugs (TypeError etc.) still raise.
+        console.print(f"[dim]Audit history unavailable — {e}[/dim]\n")
         events = None
     return case, events
 

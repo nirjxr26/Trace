@@ -57,6 +57,7 @@ class StateTransitionError(ApplicationError):
         super().__init__(msg)
         self.current_state = current_state
         self.target_state = target_state
+        self.reason = reason
 
 
 class ValidationError(ApplicationError):
@@ -66,8 +67,7 @@ class ValidationError(ApplicationError):
 class AuditTamperError(ApplicationError):
     """Raised when audit chain verification detects tampering."""
 
-    def __init__(self, message: str):
-        super().__init__(message)
+    pass
 
 
 class AuthorizationError(ApplicationError):

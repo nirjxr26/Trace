@@ -9,6 +9,8 @@ _local = threading.local()
 
 
 def lock_path() -> Path:
+    """Update lock lives beside the state markers, not inside state/ (a held lock must be
+    discoverable without entering the state dir it protects)."""
     return Path(settings.storage_root) / "update.lock"
 
 

@@ -5,7 +5,9 @@ from collections.abc import Sequence
 from rich.text import Text
 from textual.theme import Theme
 
+from trace_core.core.ui.renderers import get_status_style_and_label
 from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
+from trace_core.updates.stages import StageStatus
 
 TRACE_THEME = Theme(
     name="trace",
@@ -28,38 +30,24 @@ TRACE_THEME = Theme(
     },
 )
 
-STATUS_COLORS = {
-    "OPEN": THEME_TOKENS["status_open"],
-    "UNDER_REVIEW": THEME_TOKENS["status_review"],
-    "CLOSED": THEME_TOKENS["status_closed"],
-    "ARCHIVED": THEME_TOKENS["status_archived"],
-}
-STATUS_FALLBACK = THEME_HEX["value"]
-
 
 def status_label(status, is_deleted: bool = False) -> str:  # type: ignore[no-untyped-def]
     """Single source for the status label, including the review abbreviation."""
-    label = "ARCHIVED" if is_deleted else str(getattr(status, "value", status))
-    return "REVIEW" if label == "UNDER_REVIEW" else label
+    return get_status_style_and_label(status, is_deleted)[0]
 
 
 def status_style(status, is_deleted: bool = False) -> str:  # type: ignore[no-untyped-def]
     """Single source for the status colour."""
-    key = "ARCHIVED" if is_deleted else str(getattr(status, "value", status))
-    return STATUS_COLORS.get(key, STATUS_FALLBACK)
+    return get_status_style_and_label(status, is_deleted)[1]
 
 
 def status_text(status, is_deleted: bool = False):  # type: ignore[no-untyped-def]
-    """Single source for TUI status labels. Byte-identical to CasesView._status_text."""
-    return Text(status_label(status, is_deleted), style=status_style(status, is_deleted))
+    """Single source for TUI status rendering. Delegates to the terminal's resolver."""
+    label, style, _border = get_status_style_and_label(status, is_deleted)
+    return Text(label, style=style)
 
 
-def health_dot(ok: bool):  # type: ignore[no-untyped-def]
-    """Single source for health pills (db online, verify verdict dots)."""
-    return Text("● ", style="#5FD18A" if ok else "#D06A73")
-
-
-SELECT_PREFIX = "› "
+SELECT_PREFIX = "â€º "
 
 DOT_OK = THEME_HEX["green"]
 DOT_BAD = THEME_HEX["red"]
@@ -67,8 +55,8 @@ DOT_INFO = THEME_HEX["blue"]
 
 
 def dot_line(ok: bool, label: str):  # type: ignore[no-untyped-def]
-    """Single source for ●/× status lines. Never color-only: glyph differs too."""
-    glyph = "● " if ok else "× "
+    """Single source for â—/Ã— status lines. Never color-only: glyph differs too."""
+    glyph = "â— " if ok else "Ã— "
     body = Text()
     body.append(glyph, style=DOT_OK if ok else DOT_BAD)
     body.append(label)
@@ -79,7 +67,7 @@ def update_status_text(kind: str):  # type: ignore[no-untyped-def]
     """Single source for Updates Previous/Current/Status states. No raw unknown."""
     if kind == "available":
         body = Text()
-        body.append("↑ ", style=DOT_INFO)
+        body.append("â†‘ ", style=DOT_INFO)
         body.append("Update available")
         return body
     if kind == "failed":
@@ -87,13 +75,14 @@ def update_status_text(kind: str):  # type: ignore[no-untyped-def]
     return dot_line(True, "Up to date")
 
 
-def stage_line(status: str, label: str):
-    if status == "done":
+def stage_line(status: StageStatus, label: str):
+    """Single source for install-stage â—/Ã—/â—Œ lines. Typed on StageStatus."""
+    if status == StageStatus.DONE:
         return dot_line(True, label)
-    if status == "failed":
+    if status == StageStatus.FAILED:
         return dot_line(False, label)
     body = Text()
-    body.append("◌ ", style=DOT_INFO)
+    body.append("â—Œ ", style=DOT_INFO)
     body.append(label)
     return body
 
@@ -109,6 +98,11 @@ def append_kv(body: Text, label: str, value: str) -> None:
     body.append(f"{value}\n")
 
 
+def detail_placeholder(has_rows: bool, empty_message: str) -> Text:
+    """Detail-pane placeholder shared by Cases/Audit: empty-list message vs select hint."""
+    return Text(empty_message if not has_rows else "Select an entryâ€¦", style="dim")
+
+
 def table_head_text(columns: list[tuple[str, int]]) -> str:
     """Manual header row aligned to fixed DataTable widths. Single source.
 
@@ -121,6 +115,6 @@ def table_head_text(columns: list[tuple[str, int]]) -> str:
 
 
 def header_with_count(columns: Sequence[tuple[str, int]], count: int) -> str:
-    """Header row plus the `· N` count suffix. Single source for the two views
+    """Header row plus the `Â· N` count suffix. Single source for the two views
     that each assembled this separately in on_mount and again on refresh."""
-    return f"{table_head_text(list(columns))}  · {count}"
+    return f"{table_head_text(list(columns))}  Â· {count}"

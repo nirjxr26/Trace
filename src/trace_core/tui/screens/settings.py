@@ -17,6 +17,9 @@ from trace_core.updates.stages import STAGE_ORDER, Stage, StageStatus
 TABLE_ID = "settings-sections"
 DETAIL_ID = "settings-detail"
 
+# Display cap for raw exception text in section bodies and notifications.
+MAX_ERROR_DETAIL = 500
+
 SECTIONS = (
     "Database",
     "Updates",
@@ -165,6 +168,7 @@ class SettingsView(Vertical):
     def _database_body(self, body: Text, width: int) -> None:
         from trace_core.core.database.health import fetch_db_snapshot, migration_entries
         from trace_core.core.ui.renderers import fit_text, sanitize_terminal
+        from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
 
         mgr = self._manager
         try:
@@ -172,19 +176,21 @@ class SettingsView(Vertical):
         except Exception as exc:
             self.app.notify(str(exc), severity="error")
             return
+        from trace_core.tui.theme import DOT_BAD, DOT_OK
+
         if not snap.healthy:
-            body.append("× ", style="#D06A73")
+            body.append("× ", style=DOT_BAD)
             body.append("Offline\n", style="bold")
             body.append("Unable to connect to database\n", style="dim")
             return
-        body.append("● ", style="#5FD18A")
+        body.append("● ", style=DOT_OK)
         body.append("Online\n", style="bold")
         body.append(f"{sanitize_terminal(fit_text(snap.masked_url, max(20, width - 4)))}\n", style="dim")
-        body.append("\nMigrations\n", style="#72B7D3")
+        body.append("\nMigrations\n", style=THEME_HEX["blue"])
         name_budget = max(16, min(42, width - 16))
         for version, name, state, _ in migration_entries(snap.applied, snap.pending):
             mark = "●" if state == "Applied" else "○"
-            color = "#5FD18A" if state == "Applied" else "#D8B56A"
+            color = DOT_OK if state == "Applied" else THEME_TOKENS["warning"]
             body.append(f"{mark} ", style=color)
             body.append(f"{version:<4} {sanitize_terminal(fit_text(name, name_budget))}\n")
 
@@ -204,7 +210,7 @@ class SettingsView(Vertical):
             try:
                 prev, current, kind, extra = self._check_text()
             except Exception as exc:
-                prev, current, kind, extra = "", "—", "failed", str(exc)[:300]
+                prev, current, kind, extra = "", "—", "failed", str(exc)[:MAX_ERROR_DETAIL]
             self._prev, self._current, self._kind, self._extra = prev, current, kind, extra
         current = sanitize_terminal(self._current or "—")
         body.append("Current version\n", style="dim")
@@ -245,7 +251,7 @@ class SettingsView(Vertical):
 
     def _install_lines(self, body: Text) -> None:
         from trace_core.tui.theme import stage_line
-        from trace_core.updates.stages import STAGE_ACTIVE_LABEL, STAGE_DONE_LABEL, StageStatus
+        from trace_core.updates.stages import STAGE_ACTIVE_LABEL, STAGE_DONE_LABEL, STAGE_FAILED_LABEL, StageStatus
 
         prev = self._prev or "?"
         current = self._current or "?"
@@ -258,17 +264,17 @@ class SettingsView(Vertical):
             if status == StageStatus.DONE:
                 label = STAGE_DONE_LABEL[stage]
             elif status == StageStatus.FAILED:
-                label = STAGE_DONE_LABEL[stage]
+                label = STAGE_FAILED_LABEL[stage]
             else:
                 label = STAGE_ACTIVE_LABEL[stage]
-            body.append_text(stage_line(status.value, label))
+            body.append_text(stage_line(status, label))
             body.append("\n")
 
-    def _integrity_body(self, body: Text, width: int) -> None:
+    def _integrity_body(self, body: Text, _width: int) -> None:
+        """Uniform section signature (body, width); this section ignores width."""
         from trace_core.audit.service import AuditService
         from trace_core.tui.theme import DOT_BAD, DOT_OK
 
-        _ = width
         svc = AuditService(self._manager)
         try:
             res = svc.verify()
@@ -326,12 +332,12 @@ class SettingsView(Vertical):
             append_kv(body, label, sanitize_terminal(fit_text(value, max(20, width - 14))))
         body.append("\nRead-only paths.\n", style="dim")
 
-    def _operator_body(self, body: Text, width: int) -> None:
+    def _operator_body(self, body: Text, _width: int) -> None:
+        # Uniform section signature (body, width); this section ignores width.
         from trace_core.core.operators import current_identity
         from trace_core.core.settings import settings
         from trace_core.core.ui.renderers import sanitize_terminal
 
-        _ = width
         user, host = current_identity()
         role = "—"
         try:
@@ -354,11 +360,11 @@ class SettingsView(Vertical):
         ):
             append_kv(body, label, sanitize_terminal(str(value)))
 
-    def _diagnostics_body(self, body: Text, width: int) -> None:
+    def _diagnostics_body(self, body: Text, _width: int) -> None:
+        """Uniform section signature (body, width); this section ignores width."""
         from trace_core.core.cli.doctor import _python_check, _storage_check
         from trace_core.core.database.health import fetch_db_snapshot
 
-        _ = width
         checks: list[tuple[str, bool, str]] = []
         name, detail, passed = _python_check()
         checks.append((name, passed, detail))
@@ -376,8 +382,10 @@ class SettingsView(Vertical):
                     checks.append(("Migrations", True, f"{len(snap.applied)} applied"))
         name, detail, passed = _storage_check(probe=False)
         checks.append((name, passed, detail))
+        from trace_core.tui.theme import DOT_BAD, DOT_OK
+
         for label, ok, detail in checks:
-            body.append("● " if ok else "× ", style="#5FD18A" if ok else "#D06A73")
+            body.append("● " if ok else "× ", style=DOT_OK if ok else DOT_BAD)
             body.append(f"{label:<12} ", style="bold")
             body.append(f"{'PASS' if ok else 'FAIL'}  {detail}\n", style="dim")
 
@@ -406,7 +414,7 @@ class SettingsView(Vertical):
 
         channel = resolve_channel(None)
         try:
-            target = resolve_manifest_target(None, channel)
+            target = resolve_manifest_target(None)
         except Exception:
             return get_installed_version(), "—", "failed", "No update manifest configured (TRACE_UPDATE_MANIFEST)."
         payload = cached_check(target, channel)
@@ -434,7 +442,7 @@ class SettingsView(Vertical):
 
         try:
             channel = resolve_channel(None)
-            target = resolve_manifest_target(None, channel)
+            target = resolve_manifest_target(None)
         except Exception:
             return
         try:
@@ -463,8 +471,8 @@ class SettingsView(Vertical):
                 prev = get_installed_version()
             except Exception:
                 prev = ""
-            self._prev, self._current, self._kind, self._extra = prev, "—", "failed", str(exc)[:500]
-            self.app.notify(str(exc)[:500], severity="error")
+            self._prev, self._current, self._kind, self._extra = prev, "—", "failed", str(exc)[:MAX_ERROR_DETAIL]
+            self.app.notify(str(exc)[:MAX_ERROR_DETAIL], severity="error")
         else:
             self._prev, self._current, self._kind, self._extra = prev, current, kind, extra
         finally:
@@ -509,7 +517,7 @@ class SettingsView(Vertical):
             dto = await asyncio.to_thread(sync_install)
         except Exception as exc:
             self._installing = False
-            self.app.notify(str(exc)[:300], severity="error")
+            self.app.notify(str(exc)[:MAX_ERROR_DETAIL], severity="error")
             self.action_check()
             return
         self._installing = False

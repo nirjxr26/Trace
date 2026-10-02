@@ -149,7 +149,7 @@ class TraceApp(App[None]):
     def action_palette(self) -> None:
         from trace_core.tui.palette import PaletteModal
 
-        self.push_screen(PaletteModal(self), self._palette_done)
+        self.push_screen(PaletteModal(), self._palette_done)
 
     def _palette_done(self, command: str | None) -> None:
         if not command:

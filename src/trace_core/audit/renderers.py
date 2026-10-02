@@ -1,6 +1,6 @@
 """Audit renderers."""
 
-from typing import Any
+from typing import Any, Final
 
 from rich.text import Text
 
@@ -9,6 +9,8 @@ from trace_core.core.ui.renderers import (
     COLUMN_CASE_NUMBER,
     format_india_datetime,
     get_status_style_and_label,
+    get_success_icon,
+    plural,
     render_key_value_grid,
     render_minimalist_table,
     render_output,
@@ -99,25 +101,105 @@ def render_verify(res: VerifyResultDto, output: str = "table", anchor: str | Non
 
 
 def render_case_audit_header(case_number: str, title: str, status: str, events: list[AuditEventDto]) -> None:
-    if not events:
-        return
-    from trace_core.core.ui.renderers import breakpoint_width, console, fit_text, format_ledger_time, rule_line
+    """CASE HISTORY block: identity, then the created/updated pair as its own labelled rows.
+
+    This replaced a single dense `Status: … Events: … Created: … Last: …` line. That line
+    made the reader parse four unrelated facts out of one run of text, and the examiner's
+    first question about a case is always "who touched this and when" — so state, count and
+    the two lifecycle timestamps are now four separate lines, each labelled by what it is.
+    """
+    from trace_core.core.ui.renderers import (
+        breakpoint_width,
+        console,
+        fit_text,
+        format_history_clock,
+        format_history_date,
+        get_status_style_and_label,
+        rule_line,
+    )
     from trace_core.core.ui.theme import THEME_TOKENS as TOK
 
     _, term_w = breakpoint_width()
-    rule = rule_line(term_w).strip()
     console.print("")
-    console.print(Text(f"  CASE {sanitize_terminal(case_number)}", style=TOK["title"]))
+    console.print(Text("  CASE HISTORY", style=TOK["title"]))
+    heading = f"  {sanitize_terminal(case_number)}"
     if title:
-        console.print(Text(f"  {fit_text(sanitize_terminal(title), max(20, term_w - 10))}", style=TOK["value"]))
-    created = format_ledger_time(events[-1].ts)
-    last = format_ledger_time(events[0].ts)
-    console.print(
-        Text(f"  Status: {status} · Events: {len(events)} · Created: {created} · Last: {last}", style=TOK["muted"])
-    )
-    console.print(Text("  Chain integrity: run `trace audit verify`", style=TOK["muted"]))
-    console.print(Text(f"  {rule}", style=TOK["border"]))
+        heading += f" · {fit_text(sanitize_terminal(title), max(20, term_w - len(case_number) - 6))}"
+    console.print(Text(heading, style=TOK["accent"]))
+
+    label, style, _ = get_status_style_and_label(status, False)
+    if not events:
+        console.print(Text(f"  {label} · no recorded actions", style=style))
+        console.print(Text(f"  {rule_line(term_w).strip()}", style=TOK["border"]))
+        console.print("")
+        return
+
+    count = plural(len(events), "recorded action")
+    console.print(Text.assemble((f"  {label} · ", style), (count, TOK["muted"])))
+    # Oldest first: the ledger arrives newest-first, so the last element is the creation.
+    created, updated = events[-1], events[0]
+    for name, event in (("Created", created), ("Updated", updated)):
+        stamp = f"{format_history_date(event.ts)} · {format_history_clock(event.ts)}"
+        console.print(Text(f"  {name:<9}{stamp}", style=TOK["muted"]))
+    console.print(Text(f"  {rule_line(term_w).strip()}", style=TOK["border"]))
     console.print("")
+
+
+# Past-tense phrases for the CASE ACTIVITY line. Kept beside the renderer rather than in
+# `audit/domain.py` because `ACTION_TITLES` there feeds the per-event detail header, which
+# reads as a noun phrase ("Case details updated"); this one is the opening of a sentence.
+_ACTIVITY_PHRASES: Final[dict[str, str]] = {
+    "CASE_CREATED": "Created case",
+    "CASE_UPDATED": "Updated case",
+    "CASE_CLOSED": "Closed case",
+    "CASE_ARCHIVED": "Archived case",
+    "CASE_RESTORED": "Restored case",
+    "CASE_PURGED": "Purged case",
+}
+
+
+def _activity_phrase(action: Any) -> str:
+    """Past-tense phrase for the CASE ACTIVITY line: `Updated case`, not `Updated`.
+
+    `short_action_label` strips the `CASE_` prefix and titles the remainder, which gives a
+    bare adjective (`Updated`). Read as the first words of a sentence it does not parse, so
+    the subject word is restored. Unknown actions fall back to the bare label rather than
+    inventing a phrase for an action this build has never seen.
+    """
+    value = getattr(action, "value", action)
+    return _ACTIVITY_PHRASES.get(str(value), short_action_label(action))
+
+
+def _activity_summary(e: AuditEventDto, details: dict, term_w: int) -> str:
+    """The third line of an activity entry: what actually changed, labelled by field name.
+
+    Field names are title-cased because they are read as prose here (`Changed: Title, Lead
+    Examiner`), and a bare `title, lead_examiner` in the middle of a sentence looks like a
+    bug rather than a list. The single-field case keeps before → after, now named, so a lone
+    entry is still attributable.
+    """
+    from trace_core.core.ui.renderers import fit_text, format_field_name
+
+    action = e.action.value
+    if action == "CASE_CREATED":
+        title = details.get("title", "")
+        return f"Title: {sanitize_terminal(title)}" if title else ""
+    if action == "CASE_UPDATED":
+        changed = details.get("changed", [])
+        before = details.get("before", {})
+        after = details.get("after", {})
+        if not changed:
+            return ""
+        names = [format_field_name(f) for f in changed]
+        if len(changed) == 1 and changed[0] in before:
+            old = sanitize_terminal(format_change_value(before[changed[0]]))
+            new = sanitize_terminal(format_change_value(after[changed[0]]))
+            return fit_text(f'{names[0]}: "{old}" → "{new}"', max(20, term_w - 16))
+        return fit_text(f"Changed: {', '.join(names)}", max(20, term_w - 16))
+    if action == "CASE_CLOSED":
+        reason = details.get("reason", "")
+        return f"Reason: {sanitize_terminal(reason)}" if reason else "└─ OPEN → CLOSED"
+    return _timeline_summary(e, details)
 
 
 def _timeline_summary(e: AuditEventDto, details: dict) -> str:
@@ -146,28 +228,52 @@ def _timeline_summary(e: AuditEventDto, details: dict) -> str:
 
 
 def render_audit_timeline(events: list[AuditEventDto]) -> None:
+    """CASE ACTIVITY block: one entry per recorded action, newest first.
+
+    Reached only through `render_case_timeline_view`, which requires a `--case` filter and
+    a resolvable case — so `subject_case_number` is by construction the case already named
+    in the header above this block. Repeating it on every row was pure noise and is gone;
+    the actor and the sequence number took its place, since those differ per row.
+    """
     from trace_core.audit.events import parse_details
-    from trace_core.core.ui.renderers import breakpoint_width, console, fit_text, format_ledger_time, rule_line
+    from trace_core.core.ui.renderers import (
+        breakpoint_width,
+        console,
+        format_history_clock,
+        render_section_title,
+        rule_line,
+    )
     from trace_core.core.ui.theme import THEME_TOKENS as TOK
 
     if not events:
         return
     _, term_w = breakpoint_width()
-    rule = rule_line(term_w).strip()
-    console.print(Text(f"  {rule}", style=TOK["border"]))
+    render_section_title("CASE ACTIVITY")
+    console.print("")
+
+    # `format_history_clock` is always `hh:mm AM/PM` (9 chars), so the activity column is a
+    # fixed width and the continuation lines can be aligned under the label by arithmetic
+    # rather than by eyeballing the indent.
+    body_indent = " " * (2 + 9 + 3)
+
     for e in events:
         details = parse_details(e.payload_json)
-        time_str = format_ledger_time(e.ts)
-        label = short_action_label(e.action)
-        raw_summary = _timeline_summary(e, details)
-        summary = fit_text(sanitize_terminal(raw_summary), max(20, term_w - 14)) if raw_summary else ""
-        console.print(f"  {time_str}  {label}")
-        console.print(Text(f"           {sanitize_terminal(e.subject_case_number)} · {sanitize_terminal(e.actor)}"))
+        clock = format_history_clock(e.ts)
+        phrase = _activity_phrase(e.action)
+        first = Text.assemble(
+            (f"  {clock}   ", TOK["accent"]),
+            (phrase, TOK["value"]),
+            (f"  ·  #{e.seq}", TOK["muted"]),
+        )
+        console.print(first)
+        console.print(Text(f"{body_indent}By {sanitize_terminal(e.actor)}", style=TOK["muted"]))
+        summary = _activity_summary(e, details, term_w)
         if summary:
-            console.print(Text(f"           {summary}"))
+            console.print(Text(f"{body_indent}{summary}"))
         console.print("")
-    console.print(Text(f"  {rule}", style=TOK["border"]))
-    console.print(f"[dim] {len(events)} shown · newest first[/dim]\n")
+
+    console.print(Text(f"  {rule_line(term_w).strip()}", style=TOK["border"]))
+    console.print(f"[dim] {plural(len(events), 'action')} shown · newest first[/dim]\n")
 
 
 def action_title(action: str) -> str:
@@ -263,7 +369,7 @@ def render_audit_detail(e: AuditEventDto) -> None:
                     Text(new, style=TOK["success"]),
                 ]
             )
-        count = f"{len(changed)} record" + ("s" if len(changed) != 1 else "")
+        count = plural(len(changed), "record")
         render_minimalist_table(
             f"CHANGES · {count}",
             [
@@ -347,7 +453,7 @@ def _render_valid(res: VerifyResultDto, anchor: str | None = None) -> None:
                 Text("No anchor checked — tail truncation is undetectable without one.", style=THEME_TOKENS["warning"]),
             )
         )
-    rows.append(("Result", Text("✓ No tampering. Ledger intact.", style=THEME_TOKENS["success"])))
+    rows.append(("Result", Text(f"{get_success_icon()} No tampering. Ledger intact.", style=THEME_TOKENS["success"])))
     render_key_value_grid("Audit Verify — ✓ VALID", rows)
     console.print("[dim]Tip: export with `audit export --out bundle.jsonl` to preserve chain.[/dim]")
     if res.events_verified > 0 and not res.sequence_gaps:

@@ -4,6 +4,7 @@ import pytest
 from typer.testing import CliRunner
 
 from trace_core.cli.main import app
+from trace_core.core.cli.exit_codes import EXIT_ERROR
 from trace_core.core.database.session import DatabaseSessionManager
 
 pytestmark = pytest.mark.unit
@@ -31,7 +32,7 @@ def test_doctor_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bad_mgr, "ensure_ready", _boom)
     monkeypatch.setattr("trace_core.core.cli.doctor.db_manager", bad_mgr)
     res = CliRunner().invoke(app, ["doctor"])
-    assert res.exit_code == 1
+    assert res.exit_code == EXIT_ERROR
     assert "FAIL" in res.output
     assert "trace doctor" in res.output
 

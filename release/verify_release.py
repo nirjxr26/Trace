@@ -5,15 +5,12 @@ from pathlib import Path
 sys.path.insert(0, "src")
 
 from trace_core.updates.manifest import load_manifest_dict
+from trace_core.updates.trust import KEY_PREFIX
+from trace_core.updates.verifier import safe_filename_or_exit
 
 
 def _safe_filename(name: str) -> str:
-    from trace_core.updates.verifier import assert_safe_filename
-
-    try:
-        return assert_safe_filename(name)
-    except Exception as e:
-        raise SystemExit(f"refusing unsafe artifact filename: {name!r} ({e})") from None
+    return safe_filename_or_exit(name)
 
 
 def _verify_artifact_integrity(manifest: object, cwd: Path) -> None:
@@ -57,7 +54,7 @@ def _sync_trusted_keys() -> None:
     for stem, hexpub in sources:
         raw = bytes.fromhex(hexpub)
         derived = key_id_for_pubkey(raw)
-        if derived.removeprefix("ed25519:") != stem:
+        if derived.removeprefix(KEY_PREFIX) != stem:
             raise SystemExit(f"trust anchor {stem!r} does not match its own key content: key derives {derived!r}")
         # revoked/ is runtime-only; source-of-truth keys that were revoked must not be re-trusted.
         if not (trust_root() / "revoked" / stem).exists():
@@ -89,7 +86,7 @@ def _verify_trust_bundle(manifest: object, cwd: Path) -> None:
             raise SystemExit(f"malformed trusted-keys.bundle line: {line!r}")
         entries[parts[0]] = parts[1]
     signing_key_id = getattr(manifest, "signing_key_id", "")
-    stem = signing_key_id.removeprefix("ed25519:")
+    stem = signing_key_id.removeprefix(KEY_PREFIX)
     if stem not in entries:
         raise SystemExit(f"bundle does not carry the manifest signing key {signing_key_id!r}")
     raw = bytes.fromhex(entries[stem])
@@ -99,7 +96,6 @@ def _verify_trust_bundle(manifest: object, cwd: Path) -> None:
 
 def main() -> None:
     from trace_core.core.fs import check_contained
-    from trace_core.updates.verifier import verify_manifest
 
     if len(sys.argv) != 3:
         raise SystemExit("usage: verify_release.py <manifest> <tag>")
@@ -117,12 +113,14 @@ def main() -> None:
     _verify_artifact_integrity(manifest, Path.cwd())
     _verify_trust_bundle(manifest, Path.cwd())
     _sync_trusted_keys()
-    for key in manifest.artifacts:
-        verify_manifest(
-            manifest,
-            check_contained(Path("dist") / _safe_filename(manifest.artifacts[key].filename), Path.cwd()),
-            platform_key=key,
-        )
+    from trace_core.updates.verifier import verify_artifact as verify_one_artifact
+    from trace_core.updates.verifier import verify_manifest_signature
+
+    verify_manifest_signature(manifest)
+    # Selects each artifact by its own manifest key rather than asking the client-side
+    # resolver for it, so the update API is not widened for a build-time tool.
+    for key, entry in manifest.artifacts.items():
+        verify_one_artifact(check_contained(Path("dist") / _safe_filename(entry.filename), Path.cwd()), entry)
     print(f"release self-verify passed: {manifest.version} ({len(manifest.artifacts)} artifacts, signatures ok)")
 
 

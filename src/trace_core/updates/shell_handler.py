@@ -20,7 +20,7 @@ class UpdateShellCommandHandler(BaseShellHandler):
             for usage, _, desc in self.get_help_entries():
                 from trace_core.core.ui.renderers import console
 
-                console.print(f"[dim]{usage}[/dim] — {desc}")
+                console.print(f"[dim]{usage}[/dim] â€” {desc}")
             return True
         if act == "check":
             return self._shell_check(args)
@@ -44,7 +44,7 @@ class UpdateShellCommandHandler(BaseShellHandler):
         _ = args
         with capture_cli_errors("Update Check", exit_on_error=False):
             channel = resolve_channel(None)
-            target = resolve_manifest_target(None, channel)
+            target = resolve_manifest_target(None)
             render_check_card(cached_check(target, channel), channel)
         return True
 

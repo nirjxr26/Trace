@@ -19,9 +19,7 @@ class UpdateHistoryCreateDto(BaseDto):
     def _channel_known(cls, value: str) -> str:
         from trace_core.updates.domain import UpdateChannel
 
-        if not UpdateChannel.contains(value):
-            raise ValueError(f"unknown channel {value!r}")
-        return value
+        return UpdateChannel.validate(value)
 
     @field_validator("result")
     @classmethod
@@ -39,13 +37,7 @@ class UpdateHistoryCreateDto(BaseDto):
             return None
         from trace_core.updates.domain import UpdateFailureStage, UpdateState
 
-        allowed = {
-            UpdateFailureStage.POLICY,
-            UpdateFailureStage.STAGING,
-            UpdateFailureStage.HEALTH,
-            UpdateFailureStage.RECOVERY,
-            UpdateFailureStage.MIGRATION,
-        }
+        allowed = set(UpdateFailureStage)
         states = {str(s).lower() for s in UpdateState}
         if value not in allowed and value.lower() not in states:
             raise ValueError(f"unknown failure_stage {value!r}")

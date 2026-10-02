@@ -56,7 +56,7 @@ def test_action_titles_and_row_self_check(session_manager: DatabaseSessionManage
     assert verify_event(e.payload_json, e.payload_hash, e.prev_chain, "0" * 64, e.seq) is False
 
 
-def test_audit_show_seq_detail(session_manager: DatabaseSessionManager) -> None:
+def test_audit_show_seq_detail(monkeypatch: pytest.MonkeyPatch, session_manager: DatabaseSessionManager) -> None:
     from typer.testing import CliRunner
 
     from trace_core.cases.dto import CaseCreateDto
@@ -64,26 +64,14 @@ def test_audit_show_seq_detail(session_manager: DatabaseSessionManager) -> None:
     from trace_core.cli.main import app
 
     runner = CliRunner()
-    # isolate db
 
     svc = CaseService(session_manager)
     svc.create_case(CaseCreateDto(title="SeqTest", lead_examiner="Bob"))
 
-    # monkeypatch db_manager for CLI
-    import trace_core.audit.commands as ac
-    import trace_core.cases.commands as cc
-
-    orig_ac = ac.db_manager
-    orig_cc = cc.db_manager
-    ac.db_manager = session_manager  # type: ignore[assignment]
-    cc.db_manager = session_manager  # type: ignore[assignment]
-    try:
-        res = runner.invoke(app, ["audit", "show", "--seq", "1"])
-        assert res.exit_code == 0
-        assert "AUDIT #1" in res.stdout
-        assert "Actor" in res.stdout
-        res2 = runner.invoke(app, ["audit", "show", "--seq", "999"])
-        assert res2.exit_code != 0
-    finally:
-        ac.db_manager = orig_ac
-        cc.db_manager = orig_cc
+    monkeypatch.setattr("trace_core.core.service.db_manager", session_manager)
+    res = runner.invoke(app, ["audit", "show", "--seq", "1"])
+    assert res.exit_code == 0
+    assert "AUDIT #1" in res.stdout
+    assert "Actor" in res.stdout
+    res2 = runner.invoke(app, ["audit", "show", "--seq", "999"])
+    assert res2.exit_code != 0

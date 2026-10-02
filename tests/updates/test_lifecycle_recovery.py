@@ -1,5 +1,6 @@
 import pytest
 
+from trace_core.core.cli.exit_codes import EXIT_RECOVERY_FAILED
 from trace_core.updates.domain import UpdateResult
 from trace_core.updates.errors import UpdateError, UpdatePolicyBlockedError
 from trace_core.updates.gate import GateDecision
@@ -116,8 +117,12 @@ def test_rollback_failure_enters_recovery(
     dto = UpdateLifecycle("tx-life-5", svc).run(manifest, art_path)
     assert dto.result == UpdateResult.FAILED
     assert dto.failure_stage == "health"
-    recovered = UpdateLifecycle.load("tx-life-5", svc)
-    assert recovered.state.value == "RECOVERY_REQUIRED"
+    # The durable marker is the recovery surface; UpdateLifecycle.load() was deleted
+    # rather than repaired, because _run_locked's mandatory CHECKING transition made it
+    # raise for every non-idle state.
+    from trace_core.updates.marker import read_marker
+
+    assert read_marker()["state"] == "RECOVERY_REQUIRED"
 
 
 def test_corrupt_marker_recovery(temp_storage_root, session_manager):
@@ -128,5 +133,5 @@ def test_corrupt_marker_recovery(temp_storage_root, session_manager):
     marker = temp_storage_root / "update-result.json"
     marker.write_text("{not-json", encoding="utf-8")
     res = CliRunner().invoke(app, ["recovery"])
-    assert res.exit_code == 15
+    assert res.exit_code == EXIT_RECOVERY_FAILED
     assert "corrupt" in res.output.lower() or "Recovery Failed" in res.output

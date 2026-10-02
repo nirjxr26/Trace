@@ -3,9 +3,9 @@
 import json
 import os
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 
 def ensure_dir(path: str | Path, mode: int = 0o700) -> Path:
@@ -17,13 +17,24 @@ def ensure_dir(path: str | Path, mode: int = 0o700) -> Path:
 
 
 def check_contained(path: str | Path, root: str | Path, *, what: str = "path") -> Path:
-    """Resolve and refuse paths escaping root. Backstop behind input validation."""
+    """Refuse paths escaping root. Backstop behind input validation.
+
+    The root is NOT resolved before comparison. Resolving both sides made a symlinked
+    root vacuously safe — base became the link target, so every candidate beneath it
+    compared as contained and the check could never fire. The root is the trust boundary,
+    so it is used literally and only the candidate is resolved; a candidate that is itself
+    a symlink is resolved to its target and must still land inside the boundary.
+    """
+    base = Path(root)
     try:
-        base = Path(root).resolve()
         resolved = Path(path).resolve()
     except OSError:
         raise ValueError(f"Refusing {what} escaping storage root")
-    if not resolved.is_relative_to(base):
+    try:
+        base_abs = base.absolute()
+    except OSError:
+        raise ValueError(f"Refusing {what} escaping storage root")
+    if not resolved.is_relative_to(base_abs):
         raise ValueError(f"Refusing {what} escaping storage root")
     return resolved
 
@@ -48,14 +59,49 @@ def atomic_write_lines(
     mode: int = 0o600,
 ) -> Path:
     """Exclusive-create temp + fsync + atomic rename. Never follows symlinks, never partial."""
+
+    def _write(handle: IO[Any]) -> None:
+        for line in lines:
+            handle.write(line)
+
+    return _atomic_write(path, mode, _write, encoding, newline)
+
+
+def atomic_write_bytes(path: str | Path, data: bytes, *, mode: int = 0o600) -> Path:
+    """Binary sibling of atomic_write_lines — the same write discipline, one implementation."""
+
+    def _write(handle: IO[Any]) -> None:
+        handle.write(data)
+
+    return _atomic_write(path, mode, _write, "utf-8", None, binary=True)
+
+
+def _atomic_write(
+    path: str | Path,
+    mode: int,
+    write: Callable[[IO[Any]], None],
+    encoding: str,
+    newline: str | None,
+    *,
+    binary: bool = False,
+) -> Path:
+    """The single write discipline: temp in the same dir, fsync, chmod, atomic rename.
+
+    Both public writers funnel through here, so the durability and no-follow-symlink
+    guarantees cannot drift apart between the text and binary paths.
+    """
     target = Path(path)
     ensure_dir(target.parent)
     fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f"{target.name}.", suffix=".tmp")
     tmp = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding=encoding, newline=newline) as handle:
-            for line in lines:
-                handle.write(line)
+        handle: IO[Any]
+        if binary:
+            handle = os.fdopen(fd, "wb")
+        else:
+            handle = os.fdopen(fd, "w", encoding=encoding, newline=newline)
+        with handle:
+            write(handle)
             handle.flush()
             try:
                 os.fsync(handle.fileno())
@@ -67,6 +113,26 @@ def atomic_write_lines(
         tmp.unlink(missing_ok=True)
         raise
     return target
+
+
+def fsync_dir(path: str | Path) -> None:
+    """Flush a directory entry so a rename/create survives a crash.
+
+    fsyncing the file is not enough: the directory entry that names it may still be
+    unflushed. Callers that write several files and then a pointer need this between
+    steps, or the pointer can land while the files it points at do not.
+    """
+    try:
+        fd = os.open(Path(path), os.O_RDONLY)
+    except OSError:
+        # Windows cannot open a directory handle at all; POSIX can and must.
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def read_json_record(path: str | Path) -> dict[str, Any] | None:
@@ -118,6 +184,29 @@ def _release(handle: int) -> None:
         pass
 
 
+def _open_lock_file(path: Path):
+    """Open a lock file without ever following a symlink.
+
+    `open(path, "a+b")` follows symlinks, so a planted link at a lock path created the
+    lock outside the intended directory — the opposite of atomic_write_lines' documented
+    "never follows symlinks" contract, in the same module. O_NOFOLLOW makes an existing
+    symlink a hard error; the read-only probe tells us whether we are creating or opening.
+    """
+    flags = os.O_RDWR | os.O_CREAT
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        try:
+            return os.fdopen(os.open(path, flags | nofollow, 0o600), "r+b", closefd=True), True
+        except OSError:
+            # On platforms without O_NOFOLLOW (notably Windows) fall through to a
+            # read-only probe so an existing file is opened without a create race.
+            pass
+    try:
+        return os.fdopen(os.open(path, os.O_RDONLY | nofollow), "r+b", closefd=True), False
+    except FileNotFoundError:
+        return os.fdopen(os.open(path, flags | nofollow, 0o600), "r+b", closefd=True), True
+
+
 def file_lock(path: str | Path, *, blocking: bool = True, raise_on_fail: bool = True):  # type: ignore[no-untyped-def]
     """Exclusive lock on `path`. Yields whether the lock was acquired.
 
@@ -129,13 +218,15 @@ def file_lock(path: str | Path, *, blocking: bool = True, raise_on_fail: bool = 
 
     @contextmanager
     def _lock():  # type: ignore[no-untyped-def]
-        ensure_dir(Path(path).parent)
-        handle = open(path, "a+b")  # noqa: PTH123
+        target = Path(path)
+        ensure_dir(target.parent)
+        handle, created = _open_lock_file(target)
         try:
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
+            if created:
+                try:
+                    os.chmod(target, 0o600)
+                except OSError:
+                    pass
             acquired = _acquire(handle.fileno(), blocking)
             if not acquired and raise_on_fail:
                 raise OSError(f"cannot acquire lock {path}")

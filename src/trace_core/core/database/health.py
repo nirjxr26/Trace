@@ -2,6 +2,29 @@
 
 from dataclasses import dataclass, field
 
+# PostgreSQL undefined_table / undefined_column; SQLite's own spelling.
+_UNDEFINED_RELATION_SQLSTATE = {"42P01", "42703"}
+# PostgreSQL says "does not exist"; SQLite says "no such table"/"no such column".
+_MISSING_RELATION_MESSAGES = ("no such table", "no such column", "does not exist", "doesn't exist")
+
+
+def is_missing_relation_error(exc: BaseException) -> bool:
+    """True when a DBAPI error means the table or column does not exist.
+
+    Single source for this decision. Two implementations existed — a thorough one in
+    `audit/service.py` and a two-line subset in `core/operators.py` — and the subset is
+    where the audit's `.pgcode` defect hid, so a missing operator store reported a raw
+    ProgrammingError instead of the friendly message.
+    """
+    orig = getattr(exc, "orig", None)
+    if getattr(orig, "sqlstate", None) in _UNDEFINED_RELATION_SQLSTATE:
+        return True
+    candidates = [str(exc).lower()]
+    if orig is not None:
+        args = getattr(orig, "args", ())
+        candidates.extend(str(a).lower() for a in args if isinstance(a, str))
+    return any(marker in text for text in candidates for marker in _MISSING_RELATION_MESSAGES)
+
 
 @dataclass
 class DbSnapshot:

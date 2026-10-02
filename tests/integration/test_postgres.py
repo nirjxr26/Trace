@@ -18,8 +18,14 @@ pytestmark = pytest.mark.integration
 
 
 def get_postgres_url() -> str | None:
-    """Retrieve PostgreSQL test connection URL from environment if configured."""
-    url = os.environ.get("TRACE_TEST_POSTGRES_URL") or os.environ.get("TRACE_DATABASE_URL")
+    """PostgreSQL test URL, from the dedicated opt-in variable only.
+
+    H-76: this fell back to TRACE_DATABASE_URL, so a developer with a production URL in
+    their shell ran this suite against production — and these tests create, close, archive
+    and permanently purge cases. There is no fallback; the suite refuses to start unless
+    TRACE_TEST_POSTGRES_URL is set explicitly.
+    """
+    url = os.environ.get("TRACE_TEST_POSTGRES_URL")
     if url and "postgres" in url.lower():
         return url
     return None

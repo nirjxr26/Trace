@@ -17,9 +17,13 @@ class AuditEventDto(BaseDto):
     subject_case_number: str
     subject_case_id: UUID | None = None
     payload_json: str
-    payload_hash: str
-    prev_chain: str
-    chain_hash: str
+    # Lowercase-hex charset, not length alone: the verifier compares these with
+    # case-sensitive hmac.compare_digest, so an uppercase value would fail as
+    # "tampering" rather than as malformed input. This constraint used to live only
+    # on AuditEvent, which nothing constructs, so it guarded no read path at all.
+    payload_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    prev_chain: str = Field(pattern=r"^[0-9a-f]{64}$")
+    chain_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     key_id: str | None = None
     signature: str | None = None
 

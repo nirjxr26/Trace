@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trace"
-version = "0.2.7"
+version = "0.2.8"
 description = "Forensic Data Imaging & Retrieval Tool"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -60,6 +60,7 @@ markers = [
     "unit: Isolated unit tests using in-memory database and mocks",
     "integration: Integration tests requiring external services or databases",
     "slow: Tests with extensive computational or I/O workloads",
+    "anyio: Async tests (registered for --strict-markers; plugin supplies the marker)",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",

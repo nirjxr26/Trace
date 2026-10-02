@@ -11,12 +11,6 @@ from trace_core.tui.app import TraceApp
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
 
 
-@pytest.fixture(params=["asyncio"])
-def anyio_backend(request: pytest.FixtureRequest) -> str:
-    """AnyIO backend for Textual pilot tests."""
-    return request.param
-
-
 @pytest.fixture
 def seeded_manager(session_manager: DatabaseSessionManager) -> DatabaseSessionManager:
     """Two cases (one edited) in the shared in-memory database."""
@@ -115,7 +109,10 @@ async def test_modals_back_out_on_escape(seeded_manager: DatabaseSessionManager)
             TypedConfirmModal("Seal?", "2026-CR-0001"),
             YesNoModal("Archive?"),
             KeysModal(),
-            PaletteModal(app),
+            # No constructor argument: the modal reaches the app through `self.app`, and
+            # passing one bound it to the Screen's `name` parameter instead. Production opens
+            # it the same way, at `app.py:152`.
+            PaletteModal(),
         ):
             app.push_screen(modal)
             await pilot.pause()

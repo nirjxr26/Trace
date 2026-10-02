@@ -17,6 +17,14 @@ def assert_safe_filename(name: str) -> str:
     return name
 
 
+def safe_filename_or_exit(name: str) -> str:
+    """Release-script variant: a refused filename becomes a clean SystemExit, not a traceback."""
+    try:
+        return assert_safe_filename(name)
+    except Exception as e:
+        raise SystemExit(f"refusing unsafe artifact filename: {name!r} ({e})") from None
+
+
 def verify_artifact_content(path: Path, artifact: ManifestArtifact) -> None:
     assert_safe_filename(artifact.filename)
     size = path.stat().st_size
@@ -35,16 +43,9 @@ def verify_artifact(path: Path, artifact: ManifestArtifact) -> None:
     verify_artifact_content(path, artifact)
 
 
-def resolve_artifact(
-    manifest: ReleaseManifest, artifact_path: Path, platform_key: str | None = None
-) -> ManifestArtifact:
+def resolve_artifact(manifest: ReleaseManifest, artifact_path: Path) -> ManifestArtifact:
     from trace_core.updates.policy import select_artifact
 
-    if platform_key is not None:
-        artifact = manifest.artifacts.get(platform_key)
-        if artifact is None:
-            raise UpdateVerificationError(f"manifest has no artifact {platform_key!r}")
-        return artifact
     # Explicit file wins over auto-select: a multi-artifact manifest (e.g. wheel
     # + sdist, both untagged) is ambiguous for select_artifact by design, but the
     # operator already named the file. Wrong file still fails filename/size/hash.
@@ -56,6 +57,6 @@ def resolve_artifact(
     return select_artifact(manifest)
 
 
-def verify_manifest(manifest: ReleaseManifest, artifact_path: Path, platform_key: str | None = None) -> None:
+def verify_manifest(manifest: ReleaseManifest, artifact_path: Path) -> None:
     verify_manifest_signature(manifest)
-    verify_artifact(artifact_path, resolve_artifact(manifest, artifact_path, platform_key))
+    verify_artifact(artifact_path, resolve_artifact(manifest, artifact_path))

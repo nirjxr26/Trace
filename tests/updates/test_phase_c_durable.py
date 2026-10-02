@@ -2,6 +2,7 @@ import hashlib
 
 import pytest
 
+from trace_core.core.cli.exit_codes import EXIT_RECOVERY_RETRY
 from trace_core.updates.errors import RecoveryError
 
 pytestmark = pytest.mark.unit
@@ -34,9 +35,10 @@ def test_transition_failure_keeps_state(session_manager, temp_storage_root, monk
 
 
 def test_schema_keys_versioned():
-    from trace_core.updates.marker import MARKER_SCHEMA, REQUIRED_KEYS, SCHEMA_REQUIRED_KEYS
+    from trace_core.updates.marker import REQUIRED_KEYS
 
-    assert SCHEMA_REQUIRED_KEYS[MARKER_SCHEMA] == REQUIRED_KEYS
+    # The left side is production-defined, so asserting equality is x == x; the
+    # falsifiable property is the key set the current schema requires.
     assert set(REQUIRED_KEYS) == {"marker_schema", "transaction_id", "state"}
 
 
@@ -114,7 +116,7 @@ def test_recovery_blocked_exit_16(temp_storage_root):
             res = CliRunner().invoke(app, ["recovery"])
         finally:
             finish_update_migration("tx-blocked-1")
-        assert res.exit_code == 16
+        assert res.exit_code == EXIT_RECOVERY_RETRY
     finally:
         done.set()
         thread.join(timeout=10)

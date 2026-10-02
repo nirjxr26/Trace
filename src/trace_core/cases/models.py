@@ -3,11 +3,11 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, String, Text
+from sqlalchemy import JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from trace_core.core.clock import now_utc
-from trace_core.core.database.base import Base, SoftDeleteMixin, TimestampMixin
+from trace_core.core.database.base import Base, SoftDeleteMixin, TimestampMixin, UTCDateTime
 
 
 class CaseModel(Base, TimestampMixin, SoftDeleteMixin):
@@ -20,7 +20,7 @@ class CaseModel(Base, TimestampMixin, SoftDeleteMixin):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     lead_examiner: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     status: Mapped[str] = mapped_column(String(50), index=True, default="OPEN", nullable=False)
-    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     closed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     closure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     archived_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -45,4 +45,4 @@ class PurgedNumberModel(Base):
     __tablename__ = "purged_numbers"
 
     number: Mapped[str] = mapped_column(String(100), primary_key=True)
-    purged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    purged_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now_utc, nullable=False)

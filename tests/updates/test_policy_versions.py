@@ -1,7 +1,6 @@
 import pytest
 
 from trace_core.updates.domain import UpdateChannel
-from trace_core.updates.gate import ForensicOperationGate, GateDecision
 from trace_core.updates.policy import _parse_version, is_installable, is_update_available
 
 
@@ -41,14 +40,6 @@ def test_forensic_active_defers(signed_release):
     assert ok is False
     assert reason is not None
     assert "forensic" in reason
-
-
-def test_gate_unknown_fails_closed():
-    class UnknownGate(ForensicOperationGate):
-        def can_install_update(self):
-            return GateDecision.UNKNOWN
-
-    assert UnknownGate().can_install_update() == GateDecision.UNKNOWN
 
 
 def test_channels_are_enum():

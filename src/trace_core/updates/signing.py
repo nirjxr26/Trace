@@ -1,9 +1,9 @@
+from pathlib import Path
+
 from trace_core.core.canonical import canonical_json
 from trace_core.updates.errors import UpdateVerificationError
 from trace_core.updates.manifest import ReleaseManifest
-from trace_core.updates.trust import revoked_path, trust_key_path
-
-KEY_PREFIX = "ed25519:"
+from trace_core.updates.trust import KEY_PREFIX, revoked_path, trust_key_path
 
 
 def key_id_for_pubkey(raw_pub: bytes) -> str:
@@ -73,21 +73,20 @@ def verify_artifact_signature(data: bytes, signature: str | None, key_id: str | 
         raise UpdateVerificationError("invalid artifact signature") from e
 
 
-def verify_artifact_signature_file(path: object, signature: str | None, key_id: str | None) -> None:
-    """Single source for file-backed artifact verification. Ed25519 needs full bytes; size pre-capped."""
-    from pathlib import Path as _Path
+def verify_artifact_signature_file(path: Path, signature: str | None, key_id: str | None) -> None:
+    """Single source for file-backed artifact verification.
 
+    Ed25519 signs whole messages, so the message must be in memory: the size cap IS the
+    memory bound, not a streaming window. The previous cap of 10 GiB meant the happy path
+    could be OOM-killed, while a docstring two files over claimed it "never holds full
+    bytes in RAM". A release artifact is a wheel plus an sdist, so the cap is set to a
+    size no legitimate release approaches.
+    """
     from trace_core.updates.manifest import MAX_ARTIFACT_BYTES
 
-    target = _Path(str(path))
-    if target.stat().st_size > MAX_ARTIFACT_BYTES:
+    if path.stat().st_size > MAX_ARTIFACT_BYTES:
         raise UpdateVerificationError("artifact too large to verify")
-    verify_artifact_signature(target.read_bytes(), signature, key_id)
-
-
-def verify_artifact_signature_streaming(path: object, signature: str | None, key_id: str | None) -> None:
-    """Deprecated alias. Use verify_artifact_signature_file."""
-    verify_artifact_signature_file(path, signature, key_id)
+    verify_artifact_signature(path.read_bytes(), signature, key_id)
 
 
 def import_release_pubkey(raw_pub_hex: str) -> str:
@@ -110,6 +109,7 @@ def import_release_pubkey(raw_pub_hex: str) -> str:
 
 def revoke_release_key(key_id: str) -> None:
     """Revoke takes precedence over the .pub file; both may exist, revoked wins on load."""
+    from trace_core.core.fs import atomic_write_lines
+
     path = revoked_path(key_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("revoked", encoding="utf-8")
+    atomic_write_lines(path, ["revoked"], mode=0o600)

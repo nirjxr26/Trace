@@ -606,19 +606,42 @@ if (-not (Test-Path $EnvFile)) {
     Write-Trace "  [OK] Existing .env file preserved."
 }
 
+# Bootstrap anchor, established independently of the release channel. The channel
+# only supplies key bytes; a bundle line is written solely when the id derived from
+# its own content is one embedded here. An attacker who controls the channel can
+# therefore withhold a key but can never introduce a new trust root. Adding one
+# means editing this installer, which is reviewed code.
+$BootstrapKeyIds = @("53712e8bb8a774e6")
 $TrustDir = Join-Path $Home ".trace\trust\releases"
 try {
     New-Item -ItemType Directory -Force -Path $TrustDir | Out-Null
     $Bundle = Join-Path ([IO.Path]::GetTempPath()) "trace-trusted-keys.bundle"
     Invoke-LiveCommand -Target 83 -Action { param($url, $out) Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing } -ActionArgs @("https://github.com/nirjxr26/Trace/releases/latest/download/trusted-keys.bundle", $Bundle)
+    $Provisioned = 0
     foreach ($line in (Get-Content -Path $Bundle)) {
         $parts = $line.Trim() -split "\s+", 2
-        if ($parts.Count -eq 2 -and $parts[0] -match "^[0-9a-f]{16}$" -and $parts[1] -match "^[0-9a-f]{64}$") {
-            Set-Content -Path (Join-Path $TrustDir ($parts[0] + ".pub")) -Value $parts[1] -NoNewline
+        if ($parts.Count -ne 2 -or $parts[0] -notmatch "^[0-9a-f]{16}$" -or $parts[1] -notmatch "^[0-9a-f]{64}$") { continue }
+        # Hex -> bytes without [Convert]::FromHexString, which Windows PowerShell 5.1 lacks.
+        $raw = New-Object byte[] 32
+        for ($i = 0; $i -lt 32; $i++) { $raw[$i] = [Convert]::ToByte($parts[1].Substring($i * 2, 2), 16) }
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $derived = -join (($sha.ComputeHash($raw))[0..7] | ForEach-Object { $_.ToString("x2") })
+        # The bundle's own filename is attacker-controlled; the id is derived from the
+        # key bytes and must agree with it.
+        if ($derived -ne $parts[0]) { continue }
+        if ($BootstrapKeyIds -notcontains $derived) {
+            Write-Trace ("  [!] Skipped release key {0}: not a bootstrap anchor." -f $derived)
+            continue
         }
+        Set-Content -Path (Join-Path $TrustDir ($derived + ".pub")) -Value $parts[1] -NoNewline
+        $Provisioned++
     }
     Remove-Item -Force $Bundle -ErrorAction SilentlyContinue
-    Write-Trace "  [OK] Release trust keys provisioned."
+    if ($Provisioned -gt 0) {
+        Write-Trace ("  [OK] Release trust keys provisioned ({0} bootstrap anchor(s))." -f $Provisioned)
+    } else {
+        Write-Trace "  [!] Release bundle carried no known bootstrap anchor. Verification stays fail-closed."
+    }
 } catch {
     Write-Trace "  [!] Could not fetch release trust keys (offline or no release yet). Verification stays fail-closed until provisioned."
 }

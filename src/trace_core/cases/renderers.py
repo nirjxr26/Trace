@@ -4,14 +4,15 @@ from typing import Any
 
 from rich.text import Text
 
+from trace_core.cases.domain import CaseStatus
 from trace_core.cases.dto import CaseResponseDto
 from trace_core.core.ui.renderers import (
     COLUMN_CASE_NUMBER,
     breakpoint_width,
     format_india_datetime,
     format_india_table_time,
-    format_utc_zulu,
     get_status_style_and_label,
+    plural,
     render_minimalist_table,
     render_output,
     rule_line,
@@ -67,16 +68,9 @@ def _case_table_columns(bp: str, term_w: int) -> list[tuple[str, dict[str, Any]]
 
 def _group_cases(cases: list[CaseResponseDto]) -> tuple[dict[str, list[CaseResponseDto]], list[str]]:
     """Group by middle code CR/NR/CLI, original order inside group, CR first then alphabetical."""
-    from trace_core.core.cli.completion import number_group
+    from trace_core.core.cli.completion import group_by_prefix
 
-    grouped: dict[str, list[CaseResponseDto]] = {}
-    order: list[str] = []
-    for c in cases:
-        pref = number_group(c.number)
-        if pref not in grouped:
-            grouped[pref] = []
-            order.append(pref)
-        grouped[pref].append(c)
+    grouped, order = group_by_prefix(cases)
     order.sort(key=lambda p: (0 if p == "CR" else 1, p))
     return grouped, order
 
@@ -133,17 +127,33 @@ def render_case_table(cases: list[CaseResponseDto], active_number: str | None = 
     )
 
 
-def _case_dossier_fields(case: CaseResponseDto, opened: str) -> list[tuple[str, Any]]:
+def _local_only(dt: Any) -> str:
+    """Dossier timestamp: local time only, date and time separated by a middle dot.
+
+    RULE 05 — the UTC duplicate told the examiner nothing they could act on, and every
+    forensic timestamp arrived doubled. UTC is still the stored value (§14.4) and is still
+    in `--output json`, which is where an examiner verifies a record rather than reads one.
+
+    The separator is added here rather than in `format_india_datetime` because that
+    formatter is shared with the audit dossier and both TUI screens; the owner asked for
+    this in the case dossier only, so the shared formatter is left alone.
+    """
+    formatted = format_india_datetime(dt)
+    if formatted == "-":
+        return formatted
+    date_part, _, time_part = formatted.partition(" ")
+    return f"{date_part} · {time_part}"
+
+
+def _case_dossier_fields(case: CaseResponseDto) -> list[tuple[str, Any]]:
     """Metadata rows for the dossier grid. Optional closure/archive rows appended when present."""
     from trace_core.core.ui.theme import THEME_TOKENS as TOK
 
     tags = "  ".join(f"#{t}" for t in case.tags) if case.tags else "—"
     fields: list[tuple[str, Any]] = [
         ("Lead Examiner", sanitize_terminal(case.lead_examiner or "None")),
-        ("Tags", Text(sanitize_terminal(tags), style=TOK["tag"] if case.tags else TOK["muted"])),
-        ("", ""),
-        ("Opened", opened),
-        ("Updated", f"{format_india_datetime(case.updated_at)} ({format_utc_zulu(case.updated_at)})"),
+        ("Opened", _local_only(case.opened_at)),
+        ("Updated", _local_only(case.updated_at)),
         ("Closed", _closed_value(case)),
     ]
     if case.closed_by:
@@ -154,10 +164,13 @@ def _case_dossier_fields(case: CaseResponseDto, opened: str) -> list[tuple[str, 
         fields.append(("Archived At", format_india_datetime(case.archived_at)))
     if case.archived_by:
         fields.append(("Archived By", sanitize_terminal(case.archived_by)))
+    # RULE 04 — tags close the block; the blank separator before them was a group break
+    # where there was only one group left.
+    fields.append(("Tags", Text(sanitize_terminal(tags), style=TOK["tag"] if case.tags else TOK["muted"])))
     return fields
 
 
-def _render_case_history(case: CaseResponseDto, events: list[Any] | None) -> None:
+def _render_case_history(case: CaseResponseDto, events: list[Any] | None, divider: Text) -> None:
     """HISTORY proof block: newest 5 ledger events with a pointer to the full timeline."""
     if not events:
         return
@@ -165,18 +178,18 @@ def _render_case_history(case: CaseResponseDto, events: list[Any] | None) -> Non
     from trace_core.core.ui.renderers import console, format_ledger_time, render_section_title
     from trace_core.core.ui.theme import THEME_TOKENS as TOK
 
-    count = f"{len(events)} event" + ("s" if len(events) != 1 else "")
+    count = plural(len(events), "event")
     render_section_title(f"HISTORY · {count}")
     console.print("")
     for e in events[:5]:
         console.print(
-            Text(f"  {format_ledger_time(e.ts)}  {short_action_label(e.action)} · {sanitize_terminal(e.actor)}")
+            Text(f"    {format_ledger_time(e.ts)}  {short_action_label(e.action)} · {sanitize_terminal(e.actor)}")
         )
     if len(events) > 5:
         console.print(
-            Text(f"  … and older in `audit show --case {sanitize_terminal(case.number)}`", style=TOK["muted"])
+            Text(f"    … and older in `audit show --case {sanitize_terminal(case.number)}`", style=TOK["muted"])
         )
-    console.print("")
+    console.print(divider)
 
 
 def render_case_detail(case: CaseResponseDto, events: list[Any] | None = None) -> None:
@@ -187,53 +200,79 @@ def render_case_detail(case: CaseResponseDto, events: list[Any] | None = None) -
         create_key_value_grid,
         kv_width,
         render_detail_header,
-        render_raw_tip,
         render_section_title,
         table_padding,
     )
     from trace_core.core.ui.theme import THEME_TOKENS as TOK
 
     label, style, _ = get_status_style_and_label(case.status, case.is_deleted)
-    opened = f"{format_india_datetime(case.opened_at)} ({format_utc_zulu(case.opened_at)})"
 
     render_detail_header(
         "CASE",
         sanitize_terminal(case.number),
         sanitize_terminal(case.title or "Untitled Case"),
-        Text.assemble((f"  {label} · ", style), (f"Opened {format_india_datetime(case.opened_at)}", TOK["muted"])),
+        Text.assemble((f"  {label} · ", style), (f"Opened {_local_only(case.opened_at)}", TOK["muted"])),
     )
 
-    fields = _case_dossier_fields(case, opened)
+    fields = _case_dossier_fields(case)
     bp, term_w = breakpoint_width()
-    # Tight rhythm: dividers hug the content above; exactly one blank line below
-    # every divider and every title, so sections stay easy to notice.
+    # One rhythm for the whole dossier: divider, section title, its rows, divider. The
+    # blank line that used to sit between a divider and the title below it meant every
+    # section started a row late, so the stack read as loose rather than grouped; the
+    # divider alone already separates the sections, so the gap is redundant padding.
     divider = Text(rule_line(term_w), style=TOK["border"])
     console.print(divider)
-    console.print("")
 
     console.print(create_key_value_grid(fields, width=kv_width(bp, min_width=16), padding=table_padding(bp)))
     console.print(divider)
-    console.print("")
 
     for section_title, section_body in (("DESCRIPTION", case.description), ("NOTES", case.notes)):
         if not (section_body and section_body.strip()):
             continue
         render_section_title(section_title)
         console.print("")
-        console.print(Text(f"  {sanitize_terminal(section_body.strip())}", style=TOK["value"]))
+        console.print(Text(f"    {sanitize_terminal(section_body.strip())}", style=TOK["value"]))
         console.print(divider)
-        console.print("")
 
-    _render_case_history(case, events)
+    _render_case_history(case, events, divider)
+    _render_case_next(case)
 
-    render_raw_tip(f"case show {sanitize_terminal(case.number)} --output json")
+
+def _render_case_next(case: CaseResponseDto) -> None:
+    """NEXT ACTIONS block: one copy-pasteable command per line, each legal for this case.
+
+    RULE 10 — a dossier that ends in silence leaves the user guessing. But a next-step
+    line is worse than silence if it advertises a command that raises: `update_case`
+    rejects a CLOSED case outright and `_VALID_TRANSITIONS[CLOSED]` is empty (§14.3), so a
+    sealed case gets the read-only evidence path only, never the mutation paths.
+
+    Vertical rather than `a → b → c` on one line: the arrow chain ran past the right edge
+    on a narrow pane and truncated mid-command, and stacking keeps each command intact and
+    individually selectable. The `--output json` step moved here from the old `Tip:` line —
+    it is the same class of command as the others, and splitting raw access into a separate
+    dim sentence was what made the ending feel arbitrary.
+    """
+    from trace_core.core.ui.renderers import console, render_section_title
+    from trace_core.core.ui.theme import THEME_TOKENS as TOK
+
+    number = sanitize_terminal(case.number)
+    read_steps = [f"audit show --case {number}", f"case show {number} --output json"]
+    steps = (
+        read_steps if case.status == CaseStatus.CLOSED else [f"case edit {number}", f"case close {number}", *read_steps]
+    )
+
+    render_section_title("NEXT ACTIONS")
+    console.print("")
+    for step in steps:
+        console.print(Text(f"    → {step}", style=TOK["muted"]))
+    console.print("")
 
 
 def _closed_value(case: CaseResponseDto) -> Any:
-    """Closed timestamp with UTC, or an active marker. Single source for the dossier."""
+    """Closed timestamp, or an active marker. Single source for the dossier."""
     if not case.closed_at:
         return Text("—  (case is active)", style=THEME_TOKENS["muted"])
-    return f"{format_india_datetime(case.closed_at)} ({format_utc_zulu(case.closed_at)})"
+    return _local_only(case.closed_at)
 
 
 def render_case(case: CaseResponseDto, output: str = "table", events: list[Any] | None = None) -> None:

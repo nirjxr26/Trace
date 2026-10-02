@@ -1,8 +1,8 @@
 import json
-import time
 from pathlib import Path
 from typing import Any
 
+from trace_core.core.clock import now_utc
 from trace_core.core.fs import atomic_write_lines
 from trace_core.core.settings import settings
 
@@ -11,6 +11,15 @@ TTL_SECONDS = 3600
 
 def cache_path() -> Path:
     return Path(settings.storage_root) / "state" / "update-check.json"
+
+
+def _now() -> float:
+    """Cache age in seconds, read through the shared clock.
+
+    This used time.time() directly, so core.clock.set_clock could not age the cache
+    and the TTL was untestable in-process.
+    """
+    return now_utc().timestamp()
 
 
 def read_check_cache(max_age: int = TTL_SECONDS) -> dict[str, Any] | None:
@@ -27,7 +36,10 @@ def read_check_cache(max_age: int = TTL_SECONDS) -> dict[str, Any] | None:
         checked_at = float(data.get("checked_at", 0))
     except (TypeError, ValueError):
         return None
-    if time.time() - checked_at > max_age:
+    age = _now() - checked_at
+    # A negative age means the stamp is ahead of us, so the entry stays fresh for as
+    # long as the clock is behind. Treat clock skew as expired rather than trusted.
+    if age < 0 or age > max_age:
         return None
     return data
 
@@ -37,7 +49,7 @@ def write_check_cache(data: dict[str, Any]) -> Path:
 
     target = cache_path()
     try:
-        payload = json.dumps({**data, "checked_at": time.time()}, indent=2)
+        payload = json.dumps({**data, "checked_at": _now()}, indent=2)
     except (TypeError, ValueError) as e:
         raise UpdateError(f"unserializable check cache: {e}") from e
     return atomic_write_lines(target, [payload])
@@ -48,10 +60,12 @@ def manifest_identity(target: str) -> dict[str, Any] | None:
 
     A (mtime, size) fast-path was removed: on coarse filesystems an equal-size
     rewrite inside one mtime tick reused the old sha and served a stale
-    manifest for the full TTL — hiding even security releases. Manifests are
+    manifest for the full TTL â€” hiding even security releases. Manifests are
     capped at 1 MiB, so hashing costs milliseconds. Correctness over micro-perf.
     """
-    if target.startswith(("https://", "http://")):
+    from trace_core.updates.sources import is_http_url
+
+    if is_http_url(target):
         return None
     from pathlib import Path as _Path
 

@@ -3,7 +3,7 @@ import re
 import sys
 import textwrap
 from datetime import UTC, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Final
 
 from rich import box
 from rich.console import Console, Group
@@ -13,7 +13,7 @@ from rich.table import Table
 from rich.text import Text
 
 from trace_core.core.canonical import is_naive
-from trace_core.core.ui.theme import THEME_TOKENS
+from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
 
 
 def configure_utf8_streams() -> None:
@@ -306,18 +306,70 @@ def format_ledger_time(ts: Any) -> str:
         return format_india_datetime(ts)  # type: ignore[arg-type]
 
 
+# Explicit tuple, not %b: a forensic header must read the same on every machine, and
+# strftime's abbreviated month follows the process locale.
+_MONTH_ABBR: Final[tuple[str, ...]] = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+
+
+def format_field_name(field: Any) -> str:
+    """`lead_examiner` → `Lead Examiner`.
+
+    Field names reach the reader as prose in the audit timeline (`Changed: Title, Lead
+    Examiner`) and in the edit review gate, where a bare `lead_examiner` reads as a bug
+    rather than a list. One source so the two views cannot disagree on what a field is
+    called.
+    """
+    return sanitize_terminal(str(getattr(field, "value", field)).replace("_", " ").title())
+
+
+def format_history_date(dt: datetime | None) -> str:
+    """Day plus abbreviated month for a history header: `01 Oct`. Year is dropped on
+    purpose — a header listing every event does not repeat it on each row, and the full
+    date stays in `--output json` and in the per-event view."""
+    if dt is None:
+        return "-"
+    ist_dt = _to_ist(dt)
+    return f"{ist_dt.day:02d} {_MONTH_ABBR[ist_dt.month - 1]}"
+
+
+def format_history_clock(dt: datetime | None) -> str:
+    """Wall-clock time only, no seconds and no zone: `03:49 PM`. Seconds are noise at
+    history-row granularity; the exact instant stays in `--output json`."""
+    if dt is None:
+        return "-"
+    return _to_ist(dt).strftime("%I:%M %p")
+
+
 def format_utc_zulu(ts: Any) -> str:
     """UTC Zulu string for court-facing timestamps."""
     try:
         return _assume_utc(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
-    except Exception:
+    except (AttributeError, TypeError, OSError) as e:
+        # Only format failures land here; structlog-logged so a silently wrong
+        # court-facing timestamp is at least findable after the fact.
+        import structlog
+
+        structlog.get_logger().warning("non-datetime passed to format_utc_zulu", value=repr(ts), error=str(e))
         return str(ts)
 
 
 def get_status_style_and_label(status: Any, is_deleted: bool = False) -> tuple[str, str, str]:
     """Return (label, text_style, border_color) for any status representation."""
     if is_deleted:
-        return "ARCHIVED", THEME_TOKENS["status_archived"], "#D06A73"
+        return "ARCHIVED", THEME_TOKENS["status_archived"], THEME_HEX["red"]
 
     status_str = status.value if hasattr(status, "value") else str(status)
     status_upper = status_str.upper()
@@ -607,6 +659,26 @@ def prompt_confirm(message: str, is_danger: bool = False, default: bool = False)
 
     color = THEME_TOKENS["danger"] if is_danger else THEME_TOKENS["warning"]
     return Confirm.ask(f"  [{color}]{message}[/{color}]", default=default)
+
+
+def confirm_typed_number(identifier: str, action: str) -> bool:
+    """Destructive-action guard: the operator types the identifier back.
+
+    Single source for the CLI close/purge confirmations and the shell's variant,
+    which each carried their own prompt wording and cancel message.
+    """
+    from rich.prompt import Prompt
+
+    typed = Prompt.ask(f"  Type '{identifier}' to confirm {action}")
+    if typed.strip() != identifier.strip():
+        console.print(f"[dim]{action.capitalize()} cancelled (mismatch).[/dim]")
+        return False
+    return True
+
+
+def plural(count: int, word: str) -> str:
+    """`3 events` / `1 event`. Single source for the count labels in three renderers."""
+    return f"{count} {word}" + ("s" if count != 1 else "")
 
 
 def render_wizard_header(title: str, note: str = "fields marked * are required") -> None:

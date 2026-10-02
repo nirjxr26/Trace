@@ -29,11 +29,14 @@ class BaseResponseDto(BaseDto):
     is_deleted: bool = False
 
 
+DEFAULT_PAGE_SIZE: int = 50
+
+
 class BaseFilterDto(BaseDto):
     """Standardized pagination, search, and archival filters."""
 
     search: str | None = Field(default=None, max_length=200)
     include_deleted: bool = False
     deleted_only: bool = False
-    limit: int = Field(default=50, ge=1, le=500)
+    limit: int = Field(default=DEFAULT_PAGE_SIZE, ge=1, le=500)
     offset: int = Field(default=0, ge=0)

@@ -2,6 +2,7 @@ import pytest
 from typer.testing import CliRunner
 
 from trace_core.cli.main import app
+from trace_core.core.cli.exit_codes import EXIT_UPDATE_BLOCKED
 
 pytestmark = pytest.mark.unit
 
@@ -45,7 +46,7 @@ def test_install_bypass_minimum_records_override(
         app,
         ["update", "install", "--manifest", str(manifest_path), "--artifact", str(art_path), "--yes"],
     )
-    assert blocked.exit_code == 14
+    assert blocked.exit_code == EXIT_UPDATE_BLOCKED
     allowed = CliRunner().invoke(
         app,
         [

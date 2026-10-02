@@ -1,6 +1,12 @@
 """Reusable argument and flag parsing utilities for interactive shell feature handlers."""
 
 
+def _matches(arg: str, flag: str) -> bool:
+    """Match `--flag` or `--flag=value`. The `=` anchor keeps prefix collisions
+    (e.g. `--out` vs `--output`) impossible. Single source for the token test."""
+    return arg == flag or arg.startswith(flag + "=")
+
+
 def extract_flag_value(args: list[str], *flags: str) -> str | None:
     """Extract the value following any of the specified flags.
 
@@ -36,11 +42,7 @@ def extract_positional(args: list[str], *value_flags: str) -> list[str]:
 
 def has_flag(args: list[str], *flags: str) -> bool:
     """Check if any of the specified flags are present, including `--flag=value` form."""
-    for arg in args:
-        for flag in flags:
-            if arg == flag or arg.startswith(flag + "="):
-                return True
-    return False
+    return any(_matches(arg, flag) for arg in args for flag in flags)
 
 
 def extract_int_flag(args: list[str], default: int, *flags: str) -> int:

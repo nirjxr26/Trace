@@ -3,12 +3,13 @@ import time
 from rich.live import Live
 from rich.text import Text
 
-from trace_core.core.ui.renderers import console, get_success_icon
+from trace_core.core.ui.renderers import console, get_success_icon, safe_text
 from trace_core.updates.dto import UpdateHistoryCreateDto
 from trace_core.updates.manifest import ReleaseManifest
 from trace_core.updates.stages import (
     STAGE_ACTIVE_LABEL,
     STAGE_DONE_LABEL,
+    STAGE_FAILED_LABEL,
     STAGE_ORDER,
     ProgressCallback,
     Stage,
@@ -42,39 +43,45 @@ _FAILED_STAGE = {
 
 
 def render_check_blocked(payload: dict) -> None:
-    console.print(f"[yellow]Update {payload['target']} available but deferred: {payload['block_reason']}[/yellow]")
+    # Manifest fields are untrusted until verified: safe_text sanitizes AND escapes
+    # before Rich interprets the f-string (sanitize_terminal alone leaves [markup] live).
+    console.print(
+        f"[yellow]Update {safe_text(payload['target'])} available but deferred: {safe_text(payload['block_reason'])}[/yellow]"
+    )
     if payload.get("notes"):
-        console.print(payload["notes"])
+        console.print(safe_text(payload["notes"]))
     console.print("[dim]See `trace update history` for past attempts.[/dim]")
 
 
 def render_check_card(payload: dict, channel: str) -> None:
     if not payload["available"]:
-        console.print(f"[dim]Up to date ({payload['current']}, {channel}).[/dim]")
+        console.print(f"[dim]Up to date ({safe_text(payload['current'])}, {channel}).[/dim]")
         return
     if payload["security_update"]:
         console.print("[bold]Security update[/bold]")
     if payload["minimum_supported_version"]:
-        console.print(f"Minimum supported version: {payload['minimum_supported_version']}")
+        console.print(f"Minimum supported version: {safe_text(payload['minimum_supported_version'])}")
     if payload["restart_required"]:
         console.print(RESTART_REQUIRED_MESSAGE)
     if not payload["installable"]:
         render_check_blocked(payload)
         return
-    console.print(f"[green]Update {payload['target']} available[/green] — current {payload['current']} ({channel})")
+    console.print(
+        f"[green]Update {safe_text(payload['target'])} available[/green] — current {safe_text(payload['current'])} ({channel})"
+    )
     console.print("[dim]Run `trace update install` to update.[/dim]")
 
 
 def render_install_summary(manifest: ReleaseManifest, current: str, bypass_note: str) -> None:
     console.print("")
     console.print("Update available")
-    console.print(f"Product: {manifest.product}")
-    console.print(f"Current: v{current}")
-    console.print(f"Target:  v{manifest.version}")
+    console.print(f"Product: {safe_text(manifest.product)}")
+    console.print(f"Current: v{safe_text(current)}")
+    console.print(f"Target:  v{safe_text(manifest.version)}")
     if manifest.restart_required:
         console.print("Restart: Required")
     if bypass_note:
-        console.print(f"[yellow]Override: {bypass_note}[/yellow]")
+        console.print(f"[yellow]Override: {safe_text(bypass_note)}[/yellow]")
 
 
 class UpdateProgressDisplay(ProgressCallback):
@@ -92,7 +99,9 @@ class UpdateProgressDisplay(ProgressCallback):
 
     def begin_update(self) -> None:
         console.print("")
-        console.print(f"Updating {self.product} v{self.current} → v{self.target}")
+        # product/target/current come from the (signature-verified) manifest, but a
+        # verified manifest still controls these strings — escape before markup.
+        console.print(f"Updating {safe_text(self.product)} v{safe_text(self.current)} → v{safe_text(self.target)}")
         console.print("")
         if self.tty:
             self._live = Live(self._frame(), console=console, transient=False, refresh_per_second=4)
@@ -154,7 +163,9 @@ class UpdateProgressDisplay(ProgressCallback):
             console.print("")
         console.print("[red]✕ Update failed[/red]")
         console.print("")
-        console.print(dto.failure_reason or "Update did not complete.")
+        # Plain string arg, not an f-string: Rich only interprets markup in the
+        # format string, but escape anyway so a crafted reason can never render as markup.
+        console.print(safe_text(dto.failure_reason or "") or "Update did not complete.")
         console.print("")
         console.print(f"Current version: v{current}")
         console.print("")
@@ -165,7 +176,7 @@ class UpdateProgressDisplay(ProgressCallback):
             return f"{_STAGE_GLYPH[status]} {STAGE_DONE_LABEL[stage]}"
         if status == StageStatus.ACTIVE:
             return f"{_STAGE_GLYPH[status]} {STAGE_ACTIVE_LABEL[stage]}"
-        return f"{_STAGE_GLYPH[status]} {STAGE_DONE_LABEL[stage]}"
+        return f"{_STAGE_GLYPH[status]} {STAGE_FAILED_LABEL[stage]}"
 
     def _frame(self) -> Text:
         body = Text()

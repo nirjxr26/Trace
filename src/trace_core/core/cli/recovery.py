@@ -8,6 +8,34 @@ def run_recovery() -> None:
         _recover()
 
 
+def _recovery_states() -> tuple[frozenset[str], frozenset[str]]:
+    """(rollback-worthy, already-resolved) durable marker states. Single source for both lists."""
+    from trace_core.updates.domain import UpdateState
+
+    # Every durable state an update can be in when it dies mid-transaction. A crash in any
+    # of these leaves work half-applied, so all of them are actionable. H-16 named
+    # HEALTH_CHECK; the install/migration states had the same "reports up to date" defect.
+    rollback_worthy = frozenset(
+        str(state)
+        for state in (
+            UpdateState.DOWNLOADING,
+            UpdateState.STAGED,
+            UpdateState.INSTALLING,
+            UpdateState.MIGRATING,
+            UpdateState.HEALTH_CHECK,
+            UpdateState.FAILED,
+            UpdateState.ROLLING_BACK,
+            UpdateState.RECOVERY_REQUIRED,
+        )
+    )
+    # Terminal: the rollback already ran, so re-running would repeat it to the same version.
+    terminal = frozenset({str(UpdateState.COMPLETED), str(UpdateState.ROLLED_BACK)})
+    return rollback_worthy, terminal
+
+
+_ROLLBACK_WORTHY_STATES, _TERMINAL_STATES = _recovery_states()
+
+
 def _triage_update_marker(svc) -> None:  # type: ignore[no-untyped-def]
     from trace_core.updates.lock import try_update_lock
     from trace_core.updates.migration import finish_update_migration, marker_state
@@ -24,7 +52,7 @@ def _triage_update_marker(svc) -> None:  # type: ignore[no-untyped-def]
     else:
         tx = _corrupt_marker_id()
         _clear_corrupt_marker()
-    from trace_core.core.domain import now_utc
+    from trace_core.core.clock import now_utc
     from trace_core.updates.domain import UpdateFailureStage
     from trace_core.updates.dto import UpdateHistoryCreateDto
 
@@ -89,11 +117,20 @@ def _recover() -> None:
         marker = read_marker()
         state = marker["state"]
         console.print(f"[dim]Marker state: {state}[/dim]")
-        if state in ("FAILED", "ROLLING_BACK", "RECOVERY_REQUIRED"):
+        if state in _ROLLBACK_WORTHY_STATES:
             from trace_core.updates.migration import rollback_release
 
             restored = rollback_release(base, mgr, marker.get("backup_path"))
             console.print(f"[green]Restored previous release {restored}.[/green]")
+            return
+        if state in _TERMINAL_STATES:
+            # H-13/H-16: HEALTH_CHECK and ROLLED_BACK are both durable states that this
+            # list did not name, so `trace recovery` printed "No recovery needed — up to
+            # date" over a genuinely half-applied update. HEALTH_CHECK is included
+            # because the pointer is already flipped and the DB already migrated there.
+            # ROLLED_BACK is terminal: the rollback already ran, so re-running would roll
+            # back a second time to the same version.
+            console.print(f"[dim]Update already resolved as {state}; nothing to recover.[/dim]")
             return
     if snap.pending:
         console.print(f"[yellow]{len(snap.pending)} pending migration(s).[/yellow]")

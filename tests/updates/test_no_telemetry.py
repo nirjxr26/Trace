@@ -5,7 +5,9 @@ NETWORK_ALLOWED_ONLY_IN = {"sources.py"}
 
 
 def test_no_network_or_telemetry_imports():
-    roots = [Path("src/trace_core/updates"), Path("src/trace_updater")]
+    # Anchored to the repo root so the guard cannot pass vacuously from another CWD.
+    repo_root = Path(__file__).resolve().parents[2]
+    roots = [repo_root / "src" / "trace_core" / "updates", repo_root / "src" / "trace_updater"]
     offenders = []
     network_outside = []
     for root in roots:

@@ -7,8 +7,19 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from trace_core.core.canonical import coerce_utc, is_naive
+from trace_core.core.canonical import is_naive
 from trace_core.core.clock import now_utc
+
+__all__ = [
+    "BaseEntity",
+    "DomainError",
+    "InvariantViolationError",
+    "is_naive",
+    "now_utc",
+    "parse_enum_value",
+    "require_utc",
+    "strip_controls",
+]
 
 _CONTROLS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
@@ -17,11 +28,6 @@ def strip_controls(value: str, multiline: bool = False) -> str:
     """Remove terminal control characters. Newlines survive only when multiline."""
     text = _CONTROLS_RE.sub("", value).replace("\r", "")
     return text if multiline else text.replace("\n", "")
-
-
-def ensure_utc(dt: datetime | None) -> datetime | None:
-    """Ensure a datetime object is timezone-aware UTC."""
-    return coerce_utc(dt)
 
 
 def require_utc(dt: datetime | None) -> datetime | None:
@@ -47,15 +53,6 @@ class DomainError(ValueError):
     """Base exception for all domain-level rule violations."""
 
     pass
-
-
-class EntityNotFoundError(DomainError):
-    """Raised when an entity cannot be found by its identifier."""
-
-    def __init__(self, entity_name: str, identifier: Any):
-        super().__init__(f"{entity_name} with identifier '{identifier}' was not found.")
-        self.entity_name = entity_name
-        self.identifier = identifier
 
 
 class InvariantViolationError(DomainError):

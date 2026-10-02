@@ -11,9 +11,14 @@ from trace_core.core.fs import atomic_write_lines, check_contained
 from trace_core.core.settings import settings
 
 
+def _anchors_dir() -> Path:
+    """Anchor storage root. Single source (was built ad hoc at two call sites)."""
+    return Path(settings.storage_root) / "anchors"
+
+
 def anchor_path(case_number: str, seq: int) -> Path:
     """Filesystem location for a close-anchor. Single naming source."""
-    base = Path(settings.storage_root) / "anchors"
+    base = _anchors_dir()
     # Backstop even for validated numbers: never write outside storage.
     return check_contained(base / f"anchor-{case_number}-{seq}.json", base, what="anchor path")
 
@@ -27,7 +32,7 @@ def latest_anchor_for(case_number: str) -> Path | None:
     """Newest anchor file for a case, if any. Single source for close output."""
     from trace_core.cases.domain import normalize_number
 
-    base = Path(settings.storage_root) / "anchors"
+    base = _anchors_dir()
     name = normalize_number(case_number)
 
     def _seq_of(path: Path) -> int:

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import Field, field_validator
+from pydantic import Field
 
 from trace_core.cases.domain import Case, CaseStatus
 from trace_core.core.dto import BaseCreateDto, BaseFilterDto, BaseResponseDto, BaseUpdateDto
@@ -17,16 +17,8 @@ class CaseCreateDto(BaseCreateDto):
     description: str | None = Field(default=None, max_length=10000)
     notes: str | None = Field(default=None, max_length=50000)
     tags: list[str] = Field(default_factory=list, max_length=50)
-
-    @field_validator("tags")
-    @classmethod
-    def validate_tags_cap(cls, v: list[str]) -> list[str]:
-        for t in v:
-            if len(t) > 50:
-                raise ValueError("tag exceeds maximum length of 50 characters.")
-        if len(v) > 50:
-            raise ValueError("too many tags (max 50).")
-        return v
+    # Per-tag length is enforced by Case.validate_tags, the single source for the rule
+    # (dto.py carried a second copy whose error strings had drifted from the domain's).
 
 
 class CaseUpdateDto(BaseUpdateDto):
@@ -36,7 +28,7 @@ class CaseUpdateDto(BaseUpdateDto):
     lead_examiner: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=10000)
     notes: str | None = Field(default=None, max_length=50000)
-    tags: list[str] | None = None
+    tags: list[str] | None = Field(default=None, max_length=50)
 
 
 class CaseResponseDto(BaseResponseDto):

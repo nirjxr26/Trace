@@ -5,8 +5,7 @@ from typing import Any
 from trace_core.core.settings import settings
 from trace_core.updates.manifest import ReleaseManifest
 from trace_core.updates.policy import is_installable, is_update_available
-
-_URL_PREFIXES = ("https://", "http://")  # NOSONAR
+from trace_core.updates.sources import is_http_url
 
 
 def default_manifest_target() -> str | None:
@@ -19,8 +18,13 @@ def default_manifest_target() -> str | None:
     return str(target)
 
 
-def resolve_manifest_target(explicit: str | Path | None, channel: str = "stable") -> str:
-    """Single source for manifest resolution. Explicit wins, else configured default, else fail closed."""
+def resolve_manifest_target(explicit: str | Path | None) -> str:
+    """Single source for manifest resolution. Explicit wins, else configured default, else fail closed.
+
+    Takes no channel: it never read one, yet five call sites passed it believing
+    resolution was channel-aware. Channel comes from the URL itself, via
+    `split_manifest_url`, which is the single source for that split.
+    """
     from trace_core.updates.errors import UpdateError
 
     if explicit:
@@ -41,11 +45,15 @@ def resolve_channel(explicit: str | None) -> str:
 def load_manifest_auto(explicit: str | Path | None, channel: str = "stable") -> tuple[ReleaseManifest, str]:
     """Single source for manifest loading. Handles local path and http(s) via existing sources."""
     from trace_core.updates.manifest import load_manifest, load_manifest_bytes
-    from trace_core.updates.sources import source_for
+    from trace_core.updates.sources import HttpManifestSource, split_manifest_url
 
-    target = resolve_manifest_target(explicit, channel)
-    if target.startswith(_URL_PREFIXES):
-        return load_manifest_bytes(source_for(target).fetch(channel)), target
+    target = resolve_manifest_target(explicit)
+    if is_http_url(target):
+        # H-05: the channel encoded in the URL is authoritative. It used to be discarded
+        # and rebuilt from the caller's channel, so `--manifest .../beta.json` on a stable
+        # install silently fetched stable.json.
+        base, url_channel = split_manifest_url(target)
+        return load_manifest_bytes(HttpManifestSource(base).fetch(url_channel)), target
     return load_manifest(target), target
 
 
@@ -56,9 +64,8 @@ def ensure_artifact_path(
     on_bytes: Callable[[int], None] | None = None,
 ) -> Path:
     """Single source for artifact resolution. Explicit path wins, else auto-select + auto-download."""
-    from trace_core.core.fs import check_contained, ensure_dir, sha256_file
-    from trace_core.core.settings import settings
-    from trace_core.updates.errors import UpdateError
+    from trace_core.core.fs import check_contained, ensure_dir
+    from trace_core.updates.errors import UpdateError, UpdateVerificationError
     from trace_core.updates.policy import select_artifact
     from trace_core.updates.sources import split_manifest_url, stream_artifact_to_file
     from trace_core.updates.verifier import verify_artifact, verify_artifact_content
@@ -67,19 +74,23 @@ def ensure_artifact_path(
         return Path(explicit)
     artifact = select_artifact(manifest)
     target = str(manifest_target or resolve_manifest_target(None))
-    if not target.startswith(_URL_PREFIXES):
+    if not is_http_url(target):
         sibling = Path(target).parent / artifact.filename
         if sibling.exists():
             return sibling
         raise UpdateError(f"artifact {artifact.filename} not found beside manifest; pass --artifact") from None
-    cache_dir = ensure_dir(Path(settings.storage_root) / "state" / "artifacts")
+    from trace_core.updates.marker import storage_state_path
+
+    cache_dir = ensure_dir(storage_state_path("artifacts"))
     dest = check_contained(cache_dir / artifact.filename, cache_dir)
     if dest.exists():
         try:
-            if dest.stat().st_size == artifact.size and sha256_file(dest) == artifact.sha256:
-                verify_artifact(dest, artifact)
-                return dest
-        except OSError:
+            # Single verification path. This used to pre-check size and hash and then
+            # call verify_artifact, which re-stats the size and re-hashes — two full
+            # reads of an artifact that can be gigabytes, checking the same bytes twice.
+            verify_artifact(dest, artifact)
+            return dest
+        except (OSError, UpdateVerificationError):
             pass
     base, _ = split_manifest_url(target)
     tmp = check_contained(cache_dir / f"{artifact.filename}.tmp", cache_dir)
@@ -197,7 +208,7 @@ def cached_check(target: str | Path, channel: str = "stable") -> dict[str, Any]:
         payload = cached.get("payload") or {}
         if payload.get("current") != get_installed_version():
             cached = None  # installed version changed since check; stale result
-    if key.startswith(_URL_PREFIXES):
+    if is_http_url(key):
         return _cached_check_http(key, channel, cached)
     identity = check_cache.manifest_identity(key)
     if cached and identity is not None and check_cache.cache_valid_for(cached, key, channel, identity):
