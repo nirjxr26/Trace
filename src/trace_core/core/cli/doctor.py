@@ -114,4 +114,3 @@ def run_doctor() -> None:
                 "Fix the rows above, then re-run `trace doctor`.",
             )
             raise typer.Exit(code=EXIT_ERROR)
-        return

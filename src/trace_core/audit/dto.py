@@ -8,6 +8,8 @@ from pydantic import Field
 from trace_core.audit.domain import ACTION_TITLES, AuditAction
 from trace_core.core.dto import BaseDto, BaseFilterDto
 
+_SHA256_HEX_RE = r"^[0-9a-f]{64}$"
+
 
 class AuditEventDto(BaseDto):
     seq: int
@@ -21,9 +23,9 @@ class AuditEventDto(BaseDto):
     # case-sensitive hmac.compare_digest, so an uppercase value would fail as
     # "tampering" rather than as malformed input. This constraint used to live only
     # on AuditEvent, which nothing constructs, so it guarded no read path at all.
-    payload_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    prev_chain: str = Field(pattern=r"^[0-9a-f]{64}$")
-    chain_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    payload_hash: str = Field(pattern=_SHA256_HEX_RE)
+    prev_chain: str = Field(pattern=_SHA256_HEX_RE)
+    chain_hash: str = Field(pattern=_SHA256_HEX_RE)
     key_id: str | None = None
     signature: str | None = None
 

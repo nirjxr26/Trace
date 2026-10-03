@@ -21,6 +21,7 @@ from trace_core.tui.widgets import DossierScroll
 
 TABLE_ID = "audit-table"
 AUDIT_HEADER_ID = "audit-header"
+AUDIT_DETAIL_ID = "audit-detail"
 TABLE_COLUMNS = (("Seq", 7), ("Event", 12))
 
 
@@ -128,7 +129,7 @@ class AuditView(Vertical):
         if e is None:
             from trace_core.tui.theme import detail_placeholder
 
-            self.query_one("#audit-detail", Static).update(
+            self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(
                 detail_placeholder(bool(self._events), "No audit events found — create or close a case.")
             )
             return
@@ -176,7 +177,7 @@ class AuditView(Vertical):
         body.append("\nINTEGRITY\n", style=THEME_TOKENS["accent"])
         body.append_text(integrity_line(intact))
         body.append("\n")
-        self.query_one("#audit-detail", Static).update(body)
+        self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(body)
 
     def run_command(self, command: str) -> None:
         """Entry for the palette."""
@@ -222,7 +223,7 @@ class AuditView(Vertical):
         if e is None:
             from trace_core.tui.theme import detail_placeholder
 
-            self.query_one("#audit-detail", Static).update(
+            self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(
                 detail_placeholder(bool(self._events), "No audit events found — create or close a case.")
             )
             return

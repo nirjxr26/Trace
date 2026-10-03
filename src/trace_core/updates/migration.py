@@ -16,6 +16,7 @@ from trace_core.updates.errors import (
 
 _PG_RESTORE_TIMEOUT_SECONDS = 600
 _PG_BACKUP_TIMEOUT_SECONDS = 300
+_BACKUP_FAILED = "database backup failed"
 
 
 def migration_marker_path() -> Path:
@@ -255,7 +256,7 @@ def backup_database(manager: DatabaseSessionManager, dest_dir: str | Path) -> Pa
         with manager.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.execute(text(f"VACUUM INTO '{literal}'"))
         if not out.is_file() or out.stat().st_size == 0:
-            raise UpdateError("database backup failed: empty backup")
+            raise UpdateError(f"{_BACKUP_FAILED}: empty backup")
         return out
     if url.startswith("postgresql"):
         out = dest / "trace-backup.sql"
@@ -273,9 +274,9 @@ def backup_database(manager: DatabaseSessionManager, dest_dir: str | Path) -> Pa
                     env=env,
                 )
         except (OSError, subprocess.SubprocessError) as e:
-            raise UpdateError("database backup failed") from e
+            raise UpdateError(_BACKUP_FAILED) from e
         if out.stat().st_size == 0:
-            raise UpdateError("database backup failed: empty dump")
+            raise UpdateError(f"{_BACKUP_FAILED}: empty dump")
         return out
     raise UpdateError(f"backup unsupported for {url.split(':', 1)[0]}")
 

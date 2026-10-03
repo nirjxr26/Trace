@@ -2935,3 +2935,19 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Files: `src/trace_core/core/errors.py`, `src/trace_core/core/domain.py`, `src/trace_core/core/database/session.py`, `src/trace_core/audit/anchor.py`, `src/trace_core/audit/domain.py`, `src/trace_core/cases/service.py`, `src/trace_core/cases/domain.py`, `src/trace_core/updates/service.py`, `src/trace_core/updates/policy.py`, `tests/unit/test_audit_ledger.py`, `tests/unit/test_security_regressions.py`, `CODE-AUDIT.md`, `changelog/nirjar/changelog.md`.
 
 - Verification: `ruff check src tests release` all checks passed; `mypy src` no issues in 100 source files; `pytest -q` 497 passed, 15 skipped (four new: chain-hash length refusal, oversized anchor refusal, query-string credential masking, UNKNOWN-free lifecycle message). No existing test modified or deleted; the duplicate-number path is still exercised by the existing create-path tests.
+
+## 2026-10-03 (SonarCloud batch 1 on `release/v0.2.9`)
+
+- Summary: First batch of the 52-finding SonarCloud cleanup. Eight files, all behaviour-preserving. Five repeated-literal findings became constants, one redundant `return` was deleted, one nested `with` was flattened, and one credential-masking regex was made linear.
+
+  **Reused rather than re-created.** `audit/commands.py` now imports `OUTPUT_HELP` from `core/cli/output.py`, which already existed and was already the single source for that help string. A new constant would have been a second source and would have drifted.
+
+  **The regex change is a semantics-preserving super-linear fix, not a rewrite.** `_CREDENTIAL_URL_RE` was `(?<=://)[^/\s@]+@`; the character class already excludes `@`, so the greedy run has exactly one possible end position and backtracking can never find a different match. Making the quantifier possessive (`++`, Python 3.11+) removes the backtracking without altering what matches. Verified directly against four inputs including the empty-password edge case `https://h:@host/x`; `tests/updates/test_pip_backend.py::test_redact_strips_inline_url_credentials` continues to cover it.
+
+  **Two findings in the export are false and were not actioned.** The "unused parameter" findings for `updates/lifecycle.py` (`channel`, `current`, `started_at`) are wrong: all three are parameters of `_run_locked` and are used in its body. `updates/migration.py`'s `transaction_id` is likewise used at five sites. Two more ("use set comprehension" in `cases/service.py`, "use list.extend()" in `core/ui/renderers.py`) could not be reproduced in the current source at all — no `set()`/`add()` loop and no for-append loop exist in those files.
+
+- Files: `src/trace_core/audit/commands.py`, `src/trace_core/audit/dto.py`, `src/trace_core/core/cli/doctor.py`, `src/trace_core/tui/palette.py`, `src/trace_core/tui/screens/audit.py`, `src/trace_core/updates/migration.py`, `src/trace_core/updates/pip_backend.py`, `src/trace_core/updates/sources.py`, `changelog/nirjar/changelog.md`.
+
+- Verification: `./check-pr.ps1` PASSED all six stages — ruff format and lint clean, `mypy` strict with 0 errors, 493 passed / 15 skipped at 76.82% coverage against the 70% gate. The suite count is identical to the pre-change baseline, confirming no test was weakened.
+
+  **An intermediate failure is recorded rather than hidden.** The first attempt at the `screens/audit.py` constant used `query_one(AUDIT_DETAIL_ID, ...)` without the `#` CSS prefix and broke 9 TUI tests. The file's existing convention is bare constants for the `id=` kwarg and `f"#{CONST}"` for queries; corrected to `f"#{AUDIT_DETAIL_ID}"` and the suite returned to green.

@@ -6,6 +6,7 @@ from trace_core.audit.dto import AuditFilterDto
 from trace_core.audit.service import AuditService
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.exit_codes import EXIT_ERROR
+from trace_core.core.cli.output import OUTPUT_HELP
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.errors import AuditTamperError
 from trace_core.core.ui.renderers import console, render_error_card, render_output, render_success
@@ -61,7 +62,7 @@ def audit_show(
     action: str = typer.Option(None, "--action", help="Filter by action"),
     actor: str = typer.Option(None, "--actor", help="Filter by actor (substring)"),
     search: str = typer.Option(None, "--search", "-q", help="Search actor/action/case"),
-    output: str = typer.Option("table", "--output", "-o", help="table|json"),
+    output: str = typer.Option("table", "--output", "-o", help=OUTPUT_HELP),
     limit: int = typer.Option(50, "--limit", help="Max rows (1..500)"),
     offset: int = typer.Option(0, "--offset", help="Offset"),
     seq: int = typer.Option(None, "--seq", help="Show single event by seq (detailed 5W1H)"),
@@ -79,7 +80,7 @@ def audit_show(
 
 @audit_app.command("verify")
 def audit_verify(
-    output: str = typer.Option("table", "--output", "-o", help="table|json"),
+    output: str = typer.Option("table", "--output", "-o", help=OUTPUT_HELP),
     anchor: str = typer.Option(None, "--anchor", help="Anchor JSON file to verify tail against"),
 ) -> None:
     with capture_cli_errors("Audit Verify"):
@@ -160,7 +161,7 @@ def audit_keys_rotate(
 
 
 @audit_app.command("keys-list")
-def audit_keys_list(output: str = typer.Option("table", "--output", "-o", help="table|json")) -> None:
+def audit_keys_list(output: str = typer.Option("table", "--output", "-o", help=OUTPUT_HELP)) -> None:
     """List keystore public keys. No private material is ever displayed."""
     with capture_cli_errors("Key Listing Failed"):
         from trace_core.audit.signing import list_keys

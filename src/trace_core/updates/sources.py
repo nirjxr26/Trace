@@ -167,18 +167,17 @@ def stream_artifact_to_file(
     def _download() -> Path:
         written = 0
         try:
-            with opener.open(request, timeout=timeout) as response:
-                with dest_tmp.open("wb") as fout:
-                    while True:
-                        chunk = response.read(1 << 20)
-                        if not chunk:
-                            break
-                        written += len(chunk)
-                        if written > max_bytes:
-                            raise UpdateNetworkError("artifact response too large")
-                        fout.write(chunk)
-                        if on_bytes is not None:
-                            on_bytes(written)
+            with opener.open(request, timeout=timeout) as response, dest_tmp.open("wb") as fout:
+                while True:
+                    chunk = response.read(1 << 20)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > max_bytes:
+                        raise UpdateNetworkError("artifact response too large")
+                    fout.write(chunk)
+                    if on_bytes is not None:
+                        on_bytes(written)
         except BaseException:
             # The next run reused this exact path, so every size-cap or network failure
             # left a partial file that accumulated across retries with no GC.

@@ -14,6 +14,8 @@ from trace_core.tui.forms import _BaseModal
 if TYPE_CHECKING:
     pass
 
+_CONFIRM_HINT = "y/N confirm"
+
 COMMANDS: list[tuple[str, str, str]] = [
     # (command id, label, hint)
     ("tab-cases", "Go: Cases", "case table + dossier"),
@@ -22,15 +24,15 @@ COMMANDS: list[tuple[str, str, str]] = [
     ("case-create", "Case: create", "guided form"),
     ("case-edit", "Case: edit selected", "diff preview + reason"),
     ("case-close", "Case: seal selected", "type number to confirm"),
-    ("case-archive", "Case: archive selected", "y/N confirm"),
+    ("case-archive", "Case: archive selected", _CONFIRM_HINT),
     ("case-purge", "Case: purge selected", "type number, irreversible"),
-    ("case-restore", "Case: restore selected", "y/N confirm"),
+    ("case-restore", "Case: restore selected", _CONFIRM_HINT),
     ("case-recent", "Case: recent first", "5 most recently updated"),
     ("audit-export", "Audit: export bundle", "header + JSONL"),
     ("audit-anchor", "Audit: verify with anchor", "tail check"),
     ("database-migrate", "Database: apply migrations", "pending only"),
     ("updates-check", "Updates: check", "available version"),
-    ("updates-install", "Updates: install", "y/N confirm"),
+    ("updates-install", "Updates: install", _CONFIRM_HINT),
 ]
 
 
