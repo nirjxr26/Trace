@@ -21,7 +21,7 @@ from trace_core.cases.dto import (
 )
 from trace_core.cases.repository import SqlAlchemyCaseRepository
 from trace_core.core.database.session import DatabaseSessionManager
-from trace_core.core.domain import strip_controls
+from trace_core.core.domain import InvariantViolationError, strip_controls
 from trace_core.core.errors import (
     ApplicationError,
     ConflictError,
@@ -62,11 +62,14 @@ class CaseSequenceContentionError(ConflictError, CaseError):
         self.message = message
 
 
+_NUMBER_UNIQUE_MARKERS = ("uq_cases_number", "unique constraint failed: cases.number")
+
+
 class InvalidCaseStateError(StateTransitionError, CaseError):
     """Raised when an operation violates case lifecycle state constraints."""
 
     def __init__(self, message: str):
-        super().__init__(current_state="UNKNOWN", target_state="UNKNOWN", reason=message)
+        super().__init__(current_state="", target_state="", reason=message)
 
 
 def _resolve_actor(actor: str | None, fallback: str = "system") -> str:
@@ -157,7 +160,7 @@ class CaseService(BaseService):
                 return CaseResponseDto.from_domain(created)
             except IntegrityError as e:
                 err_msg = str(e).lower()
-                if "number" in err_msg or "uq_cases_number" in err_msg:
+                if any(marker in err_msg for marker in _NUMBER_UNIQUE_MARKERS):
                     raise DuplicateCaseNumberError(case_number) from e
                 raise ApplicationError(f"Database constraint violation: {e}") from e
             except OperationalError as e:
@@ -290,14 +293,17 @@ class CaseService(BaseService):
                     examiner,
                     claimed=closed_by or actor,
                 )
+                if dto is None or dto.seq is None:
+                    raise InvariantViolationError("close audit hook produced no ledger position; refusing to seal")
                 pinned["seq"], pinned["chain"] = dto.seq, dto.chain_hash
 
             def _intent(s: Any) -> None:
                 # Exact seq/chain of THIS close, captured in-transaction. Never re-read head.
                 from trace_core.audit.anchor import record_anchor_intent
 
-                if pinned:
-                    record_anchor_intent(s, updated.number, updated.id, pinned["seq"], pinned["chain"])
+                if not pinned:
+                    raise InvariantViolationError("close anchor hook has no ledger position; refusing to seal")
+                record_anchor_intent(s, updated.number, updated.id, pinned["seq"], pinned["chain"])
 
             def _publish() -> None:
                 try:
@@ -368,7 +374,7 @@ class CaseService(BaseService):
                 raise InvalidCaseStateError(f"Case '{identifier}' is not archived.")
 
             repo.restore(case.id, expected_version=case.version)
-            restored = repo.resolve(identifier)
+            restored = repo.get_by_id(case.id)
             if not restored:
                 raise CaseNotFoundError(identifier)
 

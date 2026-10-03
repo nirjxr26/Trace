@@ -51,17 +51,18 @@ def fetch_db_snapshot(mgr=None):  # type: ignore[no-untyped-def]
     manager = mgr or db_manager
     try:
         healthy, message = manager.check_connection()
+        tables = get_table_names(manager.engine) if healthy else []
+        applied = get_applied_migrations(manager.engine) if healthy else []
+        pending = get_pending_migrations(manager.engine) if healthy else []
     except Exception as exc:
         healthy, message = False, str(exc)
+        tables, applied, pending = [], [], []
     # Display the database actually checked: injected managers (TUI, tests)
     # point elsewhere, and the global URL would mislead.
     url = getattr(manager, "_url", None) or settings.database_url
     masked = sanitized_db_url(url)
     if not healthy:
         return DbSnapshot(healthy=False, message=message, masked_url=masked)
-    tables = get_table_names(manager.engine)
-    applied = get_applied_migrations(manager.engine)
-    pending = get_pending_migrations(manager.engine)
     return DbSnapshot(
         healthy=True,
         message=message,

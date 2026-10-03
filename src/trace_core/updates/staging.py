@@ -15,6 +15,7 @@ REQUIRED_KEYS = (
 )
 
 STAGED_RECORD_FILENAME = "staged.json"
+STAGED_SCHEMA = 1
 
 
 def staged_record_path(staging_dir: str | Path) -> Path:
@@ -28,13 +29,15 @@ def write_staged_record(staging_dir: str | Path, record: dict[str, Any]) -> Path
     if missing:
         raise UpdateError(f"incomplete staged record: {missing}")
     target = staged_record_path(staging_dir)
-    record = {**record, "staged_schema": 1}
+    record = {**record, "staged_schema": STAGED_SCHEMA}
     return atomic_write_lines(target, [json.dumps(record, indent=2)])
 
 
 def read_staged_record(staging_dir: str | Path) -> dict[str, Any] | None:
     data = read_json_record(staged_record_path(staging_dir))
     if data is None or any(k not in data for k in REQUIRED_KEYS):
+        return None
+    if data.get("staged_schema") != STAGED_SCHEMA:
         return None
     return data
 

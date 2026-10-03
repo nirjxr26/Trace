@@ -284,6 +284,17 @@ def test_version_single_sourced() -> None:
     assert settings.version == pyproject["project"]["version"]
 
 
+def test_update_channel_literal_matches_update_channel_enum() -> None:
+    """Verify the settings channel Literal and the UpdateChannel enum agree."""
+    from typing import get_args
+
+    from trace_core.core.settings import Settings
+    from trace_core.updates.domain import UpdateChannel
+
+    literal_values = set(get_args(Settings.model_fields["update_channel"].annotation))
+    assert literal_values == {channel.value for channel in UpdateChannel}
+
+
 def test_cli_db_commands(monkeypatch: pytest.MonkeyPatch, session_manager: DatabaseSessionManager) -> None:
     """Verify trace db status, init, and migrate CLI commands."""
     monkeypatch.setattr("trace_core.core.cli.db_commands.db_manager", session_manager)

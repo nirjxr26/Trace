@@ -15,7 +15,7 @@ from trace_core.cases.service import CaseService
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.errors import ApplicationError
 from trace_core.core.ui.renderers import format_india_datetime, sanitize_terminal
-from trace_core.core.ui.theme import THEME_TOKENS
+from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
 from trace_core.tui.actions import run_guarded
 from trace_core.tui.forms import CaseForm, RawModal, TextInputModal, TypedConfirmModal, YesNoModal
 from trace_core.tui.theme import header_with_count, status_text
@@ -26,7 +26,7 @@ CASE_HEADER_ID = "case-header"
 TABLE_COLUMNS = (("Case #", 16), ("Status", 10))
 _CASE_COMMAND_ALIASES = {"close": "seal"}
 _NO_SELECTION = "Select a case first."
-_TITLE_STYLE = "bold #E5EAF0"
+_TITLE_STYLE = f"bold {THEME_HEX['title']}"
 
 
 class CasesView(Vertical):
@@ -182,17 +182,17 @@ class CasesView(Vertical):
 
     def _append_head(self, body, case, rule, status_label, status_color) -> None:  # type: ignore[no-untyped-def]
         # Identity + status + examiner. Panel padding is 1; one blank line per section.
-        body.append(f"{sanitize_terminal(case.number)}\n", style="#72B7D3")
+        body.append(f"{sanitize_terminal(case.number)}\n", style=THEME_HEX["blue"])
         body.append(f"{sanitize_terminal(case.title or 'Untitled')}\n", style=_TITLE_STYLE)
         body.append("\u25cf ", style=status_color)
         body.append(f"{status_label}\n", style=f"bold {status_color}")
         body.append(rule)
         body.append("\n")
         body.append(f"{'Lead Examiner':<15} ", style="dim")
-        body.append(f"{sanitize_terminal(case.lead_examiner or '\u2014')}\n", style="#E5EAF0")
+        body.append(f"{sanitize_terminal(case.lead_examiner or '\u2014')}\n", style=THEME_HEX["value"])
         body.append(f"{'Tags':<15} ", style="dim")
         if case.tags:
-            body.append(sanitize_terminal(" ".join(f"#{t}" for t in case.tags)) + "\n", style="#6FA8B8")
+            body.append(sanitize_terminal(" ".join(f"#{t}" for t in case.tags)) + "\n", style=THEME_HEX["tag"])
         else:
             body.append("\u2014\n", style="dim")
 

@@ -10,6 +10,8 @@ from trace_core.core.clock import now_utc
 from trace_core.core.fs import atomic_write_lines, check_contained
 from trace_core.core.settings import settings
 
+MAX_ANCHOR_BYTES = 64 * 1024
+
 
 def _anchors_dir() -> Path:
     """Anchor storage root. Single source (was built ad hoc at two call sites)."""
@@ -25,7 +27,10 @@ def anchor_path(case_number: str, seq: int) -> Path:
 
 def read_anchor(anchor: str | Path) -> dict[str, Any]:
     """Load and parse an anchor file. Raises on unreadable content."""
-    return json.loads(Path(anchor).read_text(encoding="utf-8"))
+    path = Path(anchor)
+    if path.stat().st_size > MAX_ANCHOR_BYTES:
+        raise ValueError(f"anchor file exceeds {MAX_ANCHOR_BYTES} bytes: {anchor}")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def latest_anchor_for(case_number: str) -> Path | None:

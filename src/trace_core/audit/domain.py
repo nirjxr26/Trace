@@ -5,11 +5,12 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Final
 
-from trace_core.core.canonical import canonical_json, canonical_ts
+from trace_core.core.canonical import canonical_json, canonical_ts, is_naive
 from trace_core.core.clock import now_utc
 from trace_core.core.domain import InvariantViolationError
 
 GENESIS_CHAIN: str = "0" * 64
+_HASH_HEX_LENGTH: int = 64
 SPEC_VERSION = "trace-audit-v1"
 CANONICAL_VERSION = "trace-canonical-json-v1"
 HASH_ALGO = "SHA-256"
@@ -53,6 +54,8 @@ def chain_hash(prev_chain: str, p_hash: str, seq: int) -> str:
     Binding the previous head AND the sequence number means an attacker cannot
     reorder events or splice two valid chains together without breaking the link.
     """
+    if len(prev_chain) != _HASH_HEX_LENGTH or len(p_hash) != _HASH_HEX_LENGTH:
+        raise InvariantViolationError("chain hash inputs must both be 64-character SHA-256 hex digests")
     return _hasher()(f"{prev_chain}{p_hash}{seq}".encode()).hexdigest()
 
 
@@ -65,7 +68,7 @@ def build_payload(
 ) -> dict[str, Any]:
     """Build canonical payload dict for hashing."""
     ts_val = ts if ts is not None else now_utc()
-    if ts_val.tzinfo is None or ts_val.tzinfo.utcoffset(ts_val) is None:
+    if is_naive(ts_val):
         raise InvariantViolationError("Audit ts must be timezone-aware UTC.")
     ts_utc = canonical_ts(ts_val)
     return {

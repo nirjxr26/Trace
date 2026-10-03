@@ -19,6 +19,18 @@ from trace_core.core.database.session import DatabaseSessionManager
 pytestmark = pytest.mark.unit
 
 
+def test_chain_hash_refuses_inputs_that_are_not_sha256_hex() -> None:
+    """The concatenation is only unambiguous when both hashes are exactly 64 chars."""
+    from trace_core.core.domain import InvariantViolationError
+
+    digest = "a" * 64
+    with pytest.raises(InvariantViolationError):
+        chain_hash("a" * 63, digest, 1)
+    with pytest.raises(InvariantViolationError):
+        chain_hash(digest, "b" * 65, 1)
+    assert chain_hash(digest, digest, 1)
+
+
 def test_clean_chain_verify(session_manager: DatabaseSessionManager) -> None:
     svc = CaseService(session_manager)
     svc.create_case(CaseCreateDto(title="A", lead_examiner="Ex A"))

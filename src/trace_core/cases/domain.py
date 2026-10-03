@@ -4,7 +4,7 @@ import re
 import unicodedata
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -104,9 +104,6 @@ def transition_case(
     Mutates case status and timestamps, returns the mutated case.
     Raises TransitionError if transition is disallowed.
     """
-    if case.status == target:
-        return case
-
     if not can_transition(case.status, target):
         raise TransitionError(case.status, target, reason)
 
@@ -238,13 +235,25 @@ class Case(BaseEntity):
 CASE_TRACKED_FIELDS = ("title", "lead_examiner", "description", "notes", "tags")
 
 
-def tracked_snapshot(case: Any) -> dict[str, Any]:
+class _TrackedCase(Protocol):
+    title: str
+    lead_examiner: str
+    description: str | None
+    notes: str | None
+    tags: list[str]
+
+
+def tracked_snapshot(case: _TrackedCase) -> dict[str, Any]:
     """5W1H field snapshot shared by service diffs and shell previews. Single source.
 
     Accepts the domain entity or its response DTO (same field names, duck-typed) so the
     domain layer never imports DTOs.
     """
-    return {k: (list(getattr(case, k)) if k == "tags" else getattr(case, k)) for k in CASE_TRACKED_FIELDS}
+    snapshot: dict[str, Any] = {}
+    for field_name in CASE_TRACKED_FIELDS:
+        value = getattr(case, field_name)
+        snapshot[field_name] = list(value) if isinstance(value, list) else value
+    return snapshot
 
 
 def normalise_optional(value: str | None) -> str | None:

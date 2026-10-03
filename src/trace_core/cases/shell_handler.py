@@ -127,8 +127,9 @@ def _parse_list_options(sub_args: list[str]) -> tuple[CaseFilterDto, str]:
 
 
 class CaseShellCommandHandler(BaseShellHandler):
-    resource = "Case"
     """Case feature handler for the interactive shell REPL."""
+
+    resource = "Case"
 
     @property
     def command_name(self) -> str:

@@ -79,9 +79,10 @@ def _case_table_row(c: CaseResponseDto, bp: str, term_w: int, active_number: str
     """One table row for a case. Breakpoint branches mirror _case_table_columns."""
     # Plain-string cells parse Rich markup: sanitize + escape. Text() cells: sanitize.
     label, style, _ = get_status_style_and_label(c.status, c.is_deleted)
-    prefix = "● " if active_number and c.number == active_number else "  "
+    is_active = bool(active_number) and c.number == active_number
+    prefix = "● " if is_active else "  "
     case_cell = Text(f"{prefix}{sanitize_terminal(c.number)}", style=THEME_TOKENS["accent"])
-    if prefix == "● ":
+    if is_active:
         case_cell.stylize("bold")
     title = safe_text(c.title or "Untitled")
     examiner = safe_text(c.lead_examiner or "-")

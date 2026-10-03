@@ -1,5 +1,6 @@
 """Audit event builder: turns domain mutations into ledger payloads. No hashing here."""
 
+import sys
 from typing import Any
 from uuid import UUID
 
@@ -13,8 +14,6 @@ _AUDIT_PREFIX = "audit "
 
 
 def _get_argv() -> str:
-    import sys
-
     return " ".join(sys.argv[1:]).strip()
 
 

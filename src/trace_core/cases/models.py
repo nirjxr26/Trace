@@ -6,6 +6,7 @@ from datetime import datetime
 from sqlalchemy import JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from trace_core.cases.domain import CaseStatus
 from trace_core.core.clock import now_utc
 from trace_core.core.database.base import Base, SoftDeleteMixin, TimestampMixin, UTCDateTime
 
@@ -19,7 +20,7 @@ class CaseModel(Base, TimestampMixin, SoftDeleteMixin):
     number: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     lead_examiner: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
-    status: Mapped[str] = mapped_column(String(50), index=True, default="OPEN", nullable=False)
+    status: Mapped[str] = mapped_column(String(50), index=True, default=CaseStatus.OPEN.value, nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     closed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     closure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

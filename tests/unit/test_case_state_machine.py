@@ -53,3 +53,10 @@ def test_invalid_transitions() -> None:
     # Cannot instantiate CLOSED case without closed_at
     with pytest.raises(ValueError, match="A CLOSED case must have a closed_at timestamp"):
         Case(number="2026-CR-0012", title="Test", lead_examiner="Inv", status=CaseStatus.CLOSED, closed_at=None)
+
+
+def test_same_state_transition_raises() -> None:
+    """A same-state call is a disallowed transition, not a silent no-op."""
+    case = Case(number="2026-CR-0013", title="Test", lead_examiner="Inv")
+    with pytest.raises(TransitionError):
+        transition_case(case, CaseStatus.OPEN)

@@ -51,9 +51,12 @@ class StateTransitionError(ApplicationError):
     """Raised when an invalid state machine transition is attempted."""
 
     def __init__(self, current_state: str, target_state: str, reason: str = "") -> None:
-        msg = f"Cannot transition from {current_state} to {target_state}."
-        if reason:
-            msg = f"{msg} Reason: {reason}"
+        if current_state and target_state:
+            msg = f"Cannot transition from {current_state} to {target_state}."
+            if reason:
+                msg = f"{msg} Reason: {reason}"
+        else:
+            msg = reason
         super().__init__(msg)
         self.current_state = current_state
         self.target_state = target_state

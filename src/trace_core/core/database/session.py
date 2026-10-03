@@ -156,6 +156,20 @@ def sanitized_db_identity(url: str) -> str:
         return "unknown"
 
 
+_CREDENTIAL_QUERY_KEYS = frozenset({"password", "passwd", "pwd", "authtoken", "auth_token", "token", "secret"})
+
+
+def _masked_query(query: str) -> str:
+    from urllib.parse import parse_qsl, urlencode
+
+    if not query:
+        return query
+    return urlencode(
+        [(key, "*****" if key.lower() in _CREDENTIAL_QUERY_KEYS else value) for key, value in parse_qsl(query)],
+        safe="*",
+    )
+
+
 def sanitized_db_url(url: str) -> str:
     """Full database URL with the password masked. Single source for display."""
     from urllib.parse import urlunsplit
@@ -170,7 +184,7 @@ def sanitized_db_url(url: str) -> str:
             netloc = f"*****@{hostport}"
         else:
             return url
-        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+        return urlunsplit((parts.scheme, netloc, parts.path, _masked_query(parts.query), parts.fragment))
     except Exception:
         return url
 

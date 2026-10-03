@@ -65,9 +65,13 @@ class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):
         model = self._fetch(entity_id)
         return self._to_domain(model) if model else None
 
+    def _pk(self):  # type: ignore[no-untyped-def]
+        """The model's primary-key attribute."""
+        return getattr(self.model_cls, "id")
+
     def _fetch(self, entity_id: IdT):  # type: ignore[no-untyped-def]
         """Single source for PK fetch. Shared by get/update/soft-delete flows."""
-        stmt = select(self.model_cls).where(getattr(self.model_cls, "id") == entity_id)
+        stmt = select(self.model_cls).where(self._pk() == entity_id)
         return self.session.scalar(stmt)
 
     def _guard_version(self, model, expected_version: int, resource_type: str, identifier: str) -> None:  # type: ignore[no-untyped-def]
@@ -88,10 +92,11 @@ class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):
         if entity_id is None:
             raise ValueError("Cannot update entity without an ID.")
 
-        stmt = select(self.model_cls).where(getattr(self.model_cls, "id") == entity_id)
-        model = self.session.scalar(stmt)
+        model = self._fetch(entity_id)
         if not model:
-            raise ValueError(f"{self.model_cls.__name__} with id {entity_id} does not exist.")
+            from trace_core.core.errors import NotFoundError
+
+            raise NotFoundError(self.model_cls.__name__, str(entity_id))
 
         self._update_model(model, entity)
         if hasattr(model, "updated_at"):
@@ -107,8 +112,7 @@ class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):
         Do not add soft-delete magic here; callers must implement retention explicitly.
         """
         _ = purge
-        stmt = select(self.model_cls).where(getattr(self.model_cls, "id") == entity_id)
-        model = self.session.scalar(stmt)
+        model = self._fetch(entity_id)
         if not model:
             return False
 
@@ -118,7 +122,7 @@ class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):
 
     def exists(self, entity_id: IdT) -> bool:
         """Check if an entity exists by primary key without hydrating full entity."""
-        stmt = select(getattr(self.model_cls, "id")).where(getattr(self.model_cls, "id") == entity_id)
+        stmt = select(self._pk()).where(self._pk() == entity_id)
         return self.session.scalar(stmt) is not None
 
     def count(self, include_deleted: bool = False) -> int:

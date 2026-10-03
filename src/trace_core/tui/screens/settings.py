@@ -133,12 +133,12 @@ class SettingsView(Vertical):
             pane_width = self.query_one("#settings-right", Vertical).size.width
         except Exception:
             pane_width = 60
-        from trace_core.core.ui.theme import THEME_TOKENS
+        from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
 
         body = Text()
         from trace_core.core.ui.renderers import rule_width as rule_span
 
-        body.append(f"{section}\n", style="#72B7D3")
+        body.append(f"{section}\n", style=THEME_HEX["blue"])
         body.append_text(Text("─" * rule_span(int(pane_width or 60), 60), style=THEME_TOKENS["border"]))
         body.append("\n")
         renderer = {
@@ -196,7 +196,7 @@ class SettingsView(Vertical):
 
     def _updates_body(self, body: Text, width: int) -> None:
         from trace_core.core.ui.renderers import sanitize_terminal
-        from trace_core.core.ui.theme import THEME_TOKENS
+        from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
         from trace_core.tui.theme import update_status_text
 
         if self._checking:
@@ -233,7 +233,7 @@ class SettingsView(Vertical):
             body.append(f"{sanitize_terminal(self._extra)}\n", style="dim")
         body.append("\nPress u or pick Update below to install.\n")
         body.append(Text(rule + "\n", style=THEME_TOKENS["border"]))
-        body.append("\nRecent activity\n", style="#72B7D3")
+        body.append("\nRecent activity\n", style=THEME_HEX["blue"])
         self._recent_lines(body)
 
     def _recent_lines(self, body: Text) -> None:
@@ -273,6 +273,7 @@ class SettingsView(Vertical):
     def _integrity_body(self, body: Text, _width: int) -> None:
         """Uniform section signature (body, width); this section ignores width."""
         from trace_core.audit.service import AuditService
+        from trace_core.core.ui.theme import THEME_HEX
         from trace_core.tui.theme import DOT_BAD, DOT_OK
 
         svc = AuditService(self._manager)
@@ -303,7 +304,7 @@ class SettingsView(Vertical):
             event = None
         if event is None:
             return
-        body.append("\nSelected Event\n", style="#72B7D3")
+        body.append("\nSelected Event\n", style=THEME_HEX["blue"])
         body.append(f"Seq {event.seq}  {event.subject_case_number}\n", style="dim")
         body.append(f"Payload Hash   {event.payload_hash}\n", style="dim")
         body.append(f"Previous Hash  {event.prev_chain}\n", style="dim")

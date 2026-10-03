@@ -28,6 +28,7 @@ def marker_path() -> Path:
 
 
 def write_marker(data: dict[str, Any], path: str | Path | None = None) -> Path:
+    from trace_core.updates.domain import UpdateState
     from trace_core.updates.errors import UpdateError
 
     target = Path(path) if path else marker_path()
@@ -35,6 +36,11 @@ def write_marker(data: dict[str, Any], path: str | Path | None = None) -> Path:
     missing = [k for k in CALLER_REQUIRED_KEYS if k not in data]
     if missing:
         raise UpdateError(f"marker missing fields: {missing}")
+    state = data.get("state")
+    if not isinstance(state, str) or state not in {member.value for member in UpdateState}:
+        raise UpdateError(f"marker state {state!r} is not an UpdateState")
+    if not str(data.get("transaction_id") or "").strip():
+        raise UpdateError("marker transaction_id must be non-empty")
     record = {**data, "marker_schema": MARKER_SCHEMA}
     return atomic_write_lines(target, [json.dumps(record, indent=2)])
 

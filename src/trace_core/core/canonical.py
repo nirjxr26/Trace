@@ -3,12 +3,20 @@
 import json
 import math
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, overload
 
 
 def is_naive(dt: datetime) -> bool:
     """True when a datetime carries no usable UTC offset. Single source for the naive check."""
     return dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None
+
+
+@overload
+def coerce_utc(dt: datetime) -> datetime: ...
+
+
+@overload
+def coerce_utc(dt: None) -> None: ...
 
 
 def coerce_utc(dt: datetime | None) -> datetime | None:
@@ -22,9 +30,7 @@ def coerce_utc(dt: datetime | None) -> datetime | None:
 
 def _coerce_utc_required(dt: datetime) -> datetime:
     """coerce_utc narrowed to a non-None argument, for type-checked non-optional callers."""
-    coerced = coerce_utc(dt)
-    assert coerced is not None  # coerce_utc returns None only for a None input
-    return coerced
+    return coerce_utc(dt)
 
 
 def canonical_ts(dt: datetime) -> str:

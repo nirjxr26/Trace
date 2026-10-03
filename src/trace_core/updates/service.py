@@ -8,6 +8,8 @@ from trace_core.core.service import BaseService
 from trace_core.updates.dto import UpdateHistoryCreateDto, UpdateHistoryDto
 from trace_core.updates.models import UpdateHistoryModel
 
+MAX_HISTORY_LIMIT = 500
+
 
 class UpdateService(BaseService):
     def record_history(self, dto: UpdateHistoryCreateDto | dict) -> UpdateHistoryDto:
@@ -46,6 +48,8 @@ class UpdateService(BaseService):
 
         if limit < 0 or offset < 0:
             raise ValidationError("limit and offset must be >= 0")
+        if limit > MAX_HISTORY_LIMIT:
+            raise ValidationError(f"limit must be <= {MAX_HISTORY_LIMIT}")
         with self.session_manager.session() as session:
             q = paginate(
                 select(UpdateHistoryModel).order_by(UpdateHistoryModel.started_at.desc(), UpdateHistoryModel.id.desc()),

@@ -1,5 +1,8 @@
 from datetime import datetime
 from pathlib import Path
+from typing import Final
+
+import structlog
 
 from trace_core.updates.domain import UpdateFailureStage, UpdateResult, UpdateState, assert_transition
 from trace_core.updates.dto import UpdateHistoryCreateDto
@@ -9,6 +12,9 @@ from trace_core.updates.lock import update_lock
 from trace_core.updates.manifest import ReleaseManifest
 from trace_core.updates.service import UpdateService
 from trace_core.updates.stages import SILENT, ProgressCallback, Stage, StageStatus
+
+HEALTH_PASSED: Final[str] = "passed"
+HEALTH_FAILED: Final[str] = "failed"
 
 
 class UpdateLifecycle:
@@ -35,8 +41,6 @@ class UpdateLifecycle:
         self.state = to
 
     def _override_note(self, current: str, manifest: ReleaseManifest, allow_minimum_bypass: bool) -> str | None:
-        import structlog
-
         from trace_core.updates.migration import current_schema_version
         from trace_core.updates.policy import minimum_bypass_note
 
@@ -70,21 +74,21 @@ class UpdateLifecycle:
         healthy = bool(getattr(snap, "healthy", False))
         pending = getattr(snap, "pending", [])
         if not healthy or pending:
-            return "failed"
+            return HEALTH_FAILED
         target = updater_mod.releases_root(base) / manifest.version
         if not target.is_dir() or not any(target.iterdir()):
-            return "failed"
+            return HEALTH_FAILED
         if manifest.schema_target is not None:
             after = schema_after
             if after is None:
                 after = current_schema_version(self.service.session_manager)
             if after != manifest.schema_target:
-                return "failed"
+                return HEALTH_FAILED
         # Pip layouts must prove the venv actually imports the target version;
         # a flipped pointer over stale code is a lying update.
         if not pip_backend.pip_health(manifest, staged):
-            return "failed"
-        return "passed"
+            return HEALTH_FAILED
+        return HEALTH_PASSED
 
     def _verify_activation(self, base: Path, manifest: ReleaseManifest) -> None:
         from trace_core.updates.errors import UpdateError
@@ -138,8 +142,6 @@ class UpdateLifecycle:
             except UpdatePolicyBlockedError:
                 raise
             except Exception as e:
-                import structlog as _structlog
-
                 from trace_core.updates.domain import UpdateFailureStage, can_transition
 
                 failure_stage = UpdateFailureStage.from_state(self.state)
@@ -161,11 +163,9 @@ class UpdateLifecycle:
                         )
                     )
                 except Exception as record_exc:
-                    _structlog.get_logger().warning("failure history recording failed", error=str(record_exc))
+                    structlog.get_logger().warning("failure history recording failed", error=str(record_exc))
                 raise
             except BaseException as e:
-                import structlog as _structlog
-
                 from trace_core.updates.domain import UpdateFailureStage, can_transition
 
                 failure_stage = UpdateFailureStage.from_state(self.state)
@@ -189,7 +189,7 @@ class UpdateLifecycle:
                         )
                     )
                 except Exception as record_exc:
-                    _structlog.get_logger().warning("failure history recording failed", error=str(record_exc))
+                    structlog.get_logger().warning("failure history recording failed", error=str(record_exc))
                 raise
             finally:
                 import contextlib
@@ -371,13 +371,16 @@ class UpdateLifecycle:
             # post-migration check, so a migration that did not reach its target looked healthy.
             schema_after = current_schema_version(self.service.session_manager)
             health = self._check_release_health(base, manifest, snap, schema_after, staged=staged)
-            if health != "passed":
+            if health != HEALTH_PASSED:
                 from trace_core.updates.migration import rollback_release
 
                 self.transition(UpdateState.ROLLING_BACK)
                 try:
                     restored = rollback_release(base, self.service.session_manager, migration["backup"])
-                    restored_health = "passed" if fetch_db_snapshot(self.service.session_manager).healthy else "failed"
+                    restored_snap = fetch_db_snapshot(self.service.session_manager)
+                    restored_health = (
+                        HEALTH_PASSED if restored_snap.healthy and not restored_snap.pending else HEALTH_FAILED
+                    )
                 except (OSError, UpdateError) as e:
                     self.transition(UpdateState.RECOVERY_REQUIRED)
                     dto = UpdateHistoryCreateDto(

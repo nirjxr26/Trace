@@ -1,7 +1,7 @@
 """Application configuration using Pydantic Settings."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 from pydantic import Field, SecretStr
@@ -13,6 +13,8 @@ DEV_SECRET_SENTINEL = "trace-local-dev-key-change-in-production"
 # Shipped default database URL. Named once so the guard below cannot drift from the
 # field default if either is rotated (was two reflective model_fields lookups).
 DEV_DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/trace"
+
+_TRACE_HOME = Path.home() / ".trace"
 
 
 class Settings(BaseSettings):
@@ -45,7 +47,7 @@ class Settings(BaseSettings):
 
     # Base storage directory for cases & evidence
     storage_root: Path = Field(
-        default_factory=lambda: Path.home() / ".trace" / "storage",
+        default_factory=lambda: _TRACE_HOME / "storage",
         alias="TRACE_STORAGE_ROOT",
     )
 
@@ -55,14 +57,14 @@ class Settings(BaseSettings):
     # Update channel + release manifest location (local path or https URL).
     # Defaults to the official Trace release manifest. Can be overridden via
     # TRACE_UPDATE_MANIFEST or .env, or disabled by setting TRACE_UPDATE_MANIFEST="".
-    update_channel: str = Field(default="stable", alias="TRACE_UPDATE_CHANNEL")
+    update_channel: Literal["stable", "beta"] = Field(default="stable", alias="TRACE_UPDATE_CHANNEL")
     update_manifest: str | None = Field(
         default="https://github.com/nirjxr26/Trace/releases/latest/download/stable.json",
         alias="TRACE_UPDATE_MANIFEST",
     )
 
     model_config = SettingsConfigDict(
-        env_file=(".env", str(Path.home() / ".trace" / ".env")),
+        env_file=(".env", str(_TRACE_HOME / ".env")),
         env_file_encoding="utf-8",
         extra="ignore",
     )

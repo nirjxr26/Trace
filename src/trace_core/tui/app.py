@@ -25,7 +25,7 @@ class TraceApp(App[None]):
     TabbedContent { height: 1fr; }
     Tabs { height: 1; background: $surface; padding: 0 1; }
     Tab { padding: 0 2; color: $text-muted; height: 1; min-width: 7; background: transparent; }
-    Tab.-active { color: #E3E7EA; text-style: bold underline; background: transparent; border: none; }
+    Tab.-active { color: $text; text-style: bold underline; background: transparent; border: none; }
     Tab:hover { color: $text; background: transparent; }
     Underline { display: none; }
     #hint {

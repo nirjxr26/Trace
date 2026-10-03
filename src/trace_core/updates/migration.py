@@ -14,6 +14,9 @@ from trace_core.updates.errors import (
     UpdateInProgressError,
 )
 
+_PG_RESTORE_TIMEOUT_SECONDS = 600
+_PG_BACKUP_TIMEOUT_SECONDS = 300
+
 
 def migration_marker_path() -> Path:
     from trace_core.updates.marker import storage_state_path
@@ -77,7 +80,7 @@ def begin_update_migration(transaction_id: str) -> None:
 
 def finish_update_migration(transaction_id: str) -> None:
     state, active = marker_state()
-    if state == "active" and active and active.get("transaction_id") != transaction_id:
+    if state == "active" and active is not None and active.get("transaction_id") != transaction_id:
         raise UpdateInProgressError("another update transaction owns migration")
     migration_marker_path().unlink(missing_ok=True)
 
@@ -90,9 +93,10 @@ def applied_versions(manager: DatabaseSessionManager) -> list[int]:
 
 def current_schema_version(manager: DatabaseSessionManager) -> int:
     applied = applied_versions(manager)
-    if applied != list(range(1, max(applied, default=0) + 1)):
+    highest = max(applied, default=0)
+    if applied != list(range(1, highest + 1)):
         raise MigrationCompatibilityError(f"non-contiguous migrations applied: {applied}")
-    return max(applied, default=0)
+    return highest
 
 
 def verify_compatibility(manager: DatabaseSessionManager, schema_min: int | None, schema_target: int | None) -> None:
@@ -173,8 +177,6 @@ def restore_backup(backup_path: str | Path, manager: DatabaseSessionManager) -> 
         manager._session_factory = None
         return
     if url.startswith("postgresql"):
-        import subprocess
-
         clean_url, password = _pg_parts(url)
         try:
             env = _pg_env(password)
@@ -183,7 +185,7 @@ def restore_backup(backup_path: str | Path, manager: DatabaseSessionManager) -> 
                     ["psql", clean_url, "-f", "-"],
                     stdin=handle,
                     stderr=subprocess.DEVNULL,
-                    timeout=600,
+                    timeout=_PG_RESTORE_TIMEOUT_SECONDS,
                     check=True,
                     env=env,
                 )
@@ -266,7 +268,7 @@ def backup_database(manager: DatabaseSessionManager, dest_dir: str | Path) -> Pa
                     ["pg_dump", clean_url],
                     stdout=handle,
                     stderr=subprocess.DEVNULL,
-                    timeout=300,
+                    timeout=_PG_BACKUP_TIMEOUT_SECONDS,
                     check=True,
                     env=env,
                 )
@@ -290,7 +292,7 @@ def run_updater_migration(
     state, active = marker_state()
     if state == "corrupt":
         raise UpdateInProgressError("update marker corrupt; run trace recovery before migrating")
-    if state == "active" and active and active.get("transaction_id") != transaction_id:
+    if state == "active" and active is not None and active.get("transaction_id") != transaction_id:
         raise UpdateInProgressError("another update transaction owns migration")
     # H-17: when a caller already owns this transaction — the lifecycle does, for the
     # whole update — it owns the marker too. Clearing it here dropped the "an update

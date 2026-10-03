@@ -3,7 +3,7 @@
 import re
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -39,7 +39,7 @@ def require_utc(dt: datetime | None) -> datetime | None:
     return dt.astimezone(UTC)
 
 
-def parse_enum_value(enum_cls: Any, raw: str | None) -> Any:
+def parse_enum_value[EnumT: Enum](enum_cls: type[EnumT], raw: str | None) -> EnumT | None:
     """Uppercase name lookup returning the member or None. Single source for enum flag parsing."""
     if not raw:
         return None

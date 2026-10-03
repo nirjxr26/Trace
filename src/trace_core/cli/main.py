@@ -13,7 +13,6 @@ app = typer.Typer(
     name="trace",
     help="Trace — Forensic Data Imaging & Retrieval Tool.",
     no_args_is_help=False,
-    invoke_without_command=True,
 )
 
 # Register feature subcommands
