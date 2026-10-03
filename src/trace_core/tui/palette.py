@@ -58,7 +58,7 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
         view = self.query_one("#palette-list", ListView)
         view.clear()
         for cmd, meta in items:
-            view.append(ListItem(Static(f"{meta}"), id=cmd))
+            view.append(ListItem(Static(meta), id=cmd))
 
     @on(Input.Changed)
     def _typed(self, event: Input.Changed) -> None:
@@ -130,6 +130,8 @@ class KeysModal(_BaseModal, ModalScreen[None]):
         from rich.text import Text
         from textual.containers import VerticalScroll
 
+        from trace_core.core.ui.theme import THEME_HEX
+
         with Vertical(id="keys-box"):
             yield Label("Keys  (Esc backs out)")
             with VerticalScroll(id="keys-scroll"):
@@ -137,6 +139,6 @@ class KeysModal(_BaseModal, ModalScreen[None]):
                     yield Static(title, classes="group-title")
                     for key, desc in items:
                         txt = Text()
-                        txt.append(f"{key:<12} ", style="bold #E5EAF0")
+                        txt.append(f"{key:<12} ", style=f"bold {THEME_HEX['value']}")
                         txt.append(desc, style="dim")
                         yield Static(txt)

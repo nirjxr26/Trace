@@ -97,6 +97,22 @@ def test_close_case(service: CaseService) -> None:
         service.close_case("2026-CLOSE-0001", reason="Duplicate close")
 
 
+def test_close_refuses_when_the_audit_hook_publishes_no_position(service: CaseService, monkeypatch) -> None:
+    from trace_core.audit import service as audit_service_mod
+    from trace_core.core.domain import InvariantViolationError
+
+    service.create_case(CaseCreateDto(number="2026-CLOSE-0002", title="Anchor gap", lead_examiner="Examiner 1"))
+
+    class _SilentAuditService:
+        def record(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+    monkeypatch.setattr(audit_service_mod, "AuditService", _SilentAuditService)
+    with pytest.raises(InvariantViolationError, match="refusing to seal"):
+        service.close_case("2026-CLOSE-0002", reason="Sealing without a ledger position")
+    assert service.get_case("2026-CLOSE-0002").status != CaseStatus.CLOSED
+
+
 def test_soft_delete_and_purge(service: CaseService) -> None:
     dto = CaseCreateDto(
         number="2026-DEL-0001",

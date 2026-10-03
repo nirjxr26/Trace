@@ -208,6 +208,16 @@ def test_h52_lock_still_creates_and_reopens(tmp_path) -> None:  # type: ignore[n
         assert held is True
 
 
+def test_uncontended_try_lock_yields_true_and_is_released(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.fs import try_file_lock
+
+    lock = tmp_path / "update.lock"
+    with try_file_lock(lock) as held:
+        assert held is True
+    with try_file_lock(lock) as held:
+        assert held is True
+
+
 # --- H-60: allocation contended on the year row, outside the DB error handler ---
 
 

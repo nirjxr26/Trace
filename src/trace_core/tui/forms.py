@@ -19,10 +19,10 @@ class _BaseModal(ModalScreen):
 
     # Copied per class: assigning the shared list by reference meant an append on one
     # subclass mutated every other modal's bindings.
-    BINDINGS = list(ESCAPES)  # type: ignore[assignment]
+    BINDINGS = list(ESCAPES)
 
     def action_dismiss_cancel(self) -> None:
-        self.dismiss(None)  # type: ignore[attr-defined]
+        self.dismiss(None)
 
 
 FIELD_LABELS: dict[str, str] = {

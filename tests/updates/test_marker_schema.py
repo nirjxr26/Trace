@@ -40,6 +40,22 @@ def test_roundtrip(temp_storage_root: Path):
     assert data["state"] == "STAGED"
 
 
+def test_garbage_state_is_refused(temp_storage_root: Path):
+    from trace_core.updates.errors import UpdateError
+
+    path = temp_storage_root / "m.json"
+    with pytest.raises(UpdateError, match="is not an UpdateState"):
+        write_marker({"transaction_id": "t1", "state": "GARBAGE"}, path)
+
+
+def test_blank_transaction_id_is_refused(temp_storage_root: Path):
+    from trace_core.updates.errors import UpdateError
+
+    path = temp_storage_root / "m.json"
+    with pytest.raises(UpdateError, match="transaction_id"):
+        write_marker({"transaction_id": "   ", "state": "IDLE"}, path)
+
+
 def test_caller_cannot_override_schema(temp_storage_root: Path):
     """A caller-supplied marker_schema must not displace the enforced version."""
     path = temp_storage_root / "m.json"

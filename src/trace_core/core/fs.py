@@ -11,7 +11,7 @@ from typing import IO, Any
 def ensure_dir(path: str | Path, mode: int = 0o700) -> Path:
     """mkdir -p with explicit owner-only mode. Fails loudly instead of inheriting umask."""
     target = Path(path)
-    target.mkdir(parents=True, exist_ok=True)
+    target.mkdir(parents=True, exist_ok=True, mode=mode)
     os.chmod(target, mode)
     return target
 
@@ -270,7 +270,8 @@ def file_lock(path: str | Path, *, blocking: bool = True, raise_on_fail: bool = 
                 raise OSError(f"cannot acquire lock {path}")
             yield acquired
         finally:
-            _release(handle.fileno())
+            if acquired:
+                _release(handle.fileno())
             handle.close()
 
     return _lock()

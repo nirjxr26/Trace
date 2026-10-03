@@ -45,13 +45,13 @@ class TimestampMixin:
     opened_at: Mapped[datetime] = mapped_column(
         UTCDateTime,
         index=True,
-        default=lambda: now_utc(),
+        default=now_utc,
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime,
-        default=lambda: now_utc(),
-        onupdate=lambda: now_utc(),
+        default=now_utc,
+        onupdate=now_utc,
         nullable=False,
     )
 

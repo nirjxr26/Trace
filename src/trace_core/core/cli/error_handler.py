@@ -134,7 +134,12 @@ def _typed_error(e: Exception, operation_title: str | None, default_remediation:
             EXIT_ERROR,
         )
     if isinstance(e, StateTransitionError):
-        return operation_title or "Invalid State Transition", str(e), default_remediation, EXIT_ERROR
+        return (
+            operation_title or "Invalid State Transition",
+            str(e),
+            default_remediation or "Check the record's current state; retry from a state that allows this change.",
+            EXIT_ERROR,
+        )
     if isinstance(e, DomainError):
         return (
             operation_title or "Invalid Input",

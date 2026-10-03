@@ -166,7 +166,7 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         if status is not None:
             stmt = stmt.where(CaseModel.status == status.value)
 
-        normalized_search = search.strip() if search and search.strip() else None
+        normalized_search = (search.strip() or None) if search else None
         if normalized_search:
             stmt = stmt.where(
                 or_(

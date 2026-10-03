@@ -55,6 +55,37 @@ def test_anchor_path_contained() -> None:
         anchor_path("../../../../etc", 1)
 
 
+def test_oversized_anchor_is_refused_before_parsing(tmp_path, monkeypatch) -> None:
+    from trace_core.audit import anchor as anchor_mod
+
+    monkeypatch.setattr(anchor_mod.settings, "storage_root", tmp_path / "storage")
+    oversized = tmp_path / "anchor-2026-CR-0001-1.json"
+    oversized.write_text("x" * (anchor_mod.MAX_ANCHOR_BYTES + 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="exceeds"):
+        anchor_mod.read_anchor(oversized)
+
+
+def test_sanitized_db_url_masks_credentials_in_the_query_string() -> None:
+    from trace_core.core.database.session import sanitized_db_url
+
+    masked = sanitized_db_url("postgresql://user:pw@host:5432/trace?password=pw&sslmode=require")
+    assert "password=*****" in masked
+    assert "sslmode=require" in masked
+    assert ":pw@" not in masked
+    assert "=pw" not in masked
+
+
+def test_invalid_case_state_message_does_not_invent_states(service: CaseService) -> None:
+    from trace_core.cases.service import InvalidCaseStateError
+
+    service.create_case(CaseCreateDto(number="2026-STATE-0001", title="T", lead_examiner="Ex"))
+    service.delete_case("2026-STATE-0001")
+    with pytest.raises(InvalidCaseStateError) as exc:
+        service.delete_case("2026-STATE-0001")
+    assert "UNKNOWN" not in str(exc.value)
+    assert "already archived" in str(exc.value)
+
+
 def test_lookups_normalize_to_canonical(service: CaseService) -> None:
     service.create_case(CaseCreateDto(number="2026-NRM-0001", title="T", lead_examiner="Ex"))
     assert service.get_case("2026-nrm-0001").number == "2026-NRM-0001"

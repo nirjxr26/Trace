@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from trace_updater import updater as updater_mod
@@ -49,6 +51,30 @@ def test_staged_record_binding(tmp_path, signed_release):
 
     with pytest.raises(UpdateError):
         staging_mod.write_staged_record(staging, {"release_id": "x"})
+
+
+def test_staged_record_from_another_schema_is_not_verified(tmp_path, signed_release):
+    from trace_core.updates import staging as staging_mod
+
+    manifest, _, art_path, _ = signed_release()
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    record = {
+        "release_id": manifest.release_id,
+        "version": manifest.version,
+        "filename": art_path.name,
+        "expected_sha256": manifest.artifacts["default"].sha256,
+        "actual_sha256": manifest.artifacts["default"].sha256,
+        "signing_key_id": manifest.signing_key_id,
+        "verification": "passed",
+        "staged_schema": staging_mod.STAGED_SCHEMA + 1,
+    }
+    target = staging_mod.staged_record_path(staging)
+    from trace_core.core.fs import atomic_write_lines
+
+    atomic_write_lines(target, [json.dumps(record, indent=2)])
+    assert staging_mod.read_staged_record(staging) is None
+    assert staging_mod.is_verified_stage(staging, art_path) is False
 
 
 def test_version_owned_activation_and_rollback(tmp_path):

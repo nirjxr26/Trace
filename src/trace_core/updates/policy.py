@@ -8,7 +8,7 @@ from trace_core.updates.manifest import ManifestArtifact, ReleaseManifest
 
 
 def _parse_version(v: str) -> Version:
-    from packaging.version import InvalidVersion, Version
+    from packaging.version import InvalidVersion
 
     try:
         return Version(v)
@@ -68,7 +68,9 @@ def _current_platform() -> tuple[str, str]:
         "arm64": "arm64",
         "aarch64": "arm64",
     }.get(raw_machine.lower(), f"unknown({safe_machine})")
-    system = {"win32": "windows", "linux": "linux", "darwin": "macos"}.get(sys.platform, f"unknown({sys.platform})")
+    raw_system = sys.platform
+    safe_system = strip_controls(str(raw_system)).strip()[:32]
+    system = {"win32": "windows", "linux": "linux", "darwin": "macos"}.get(raw_system, f"unknown({safe_system})")
     return system, machine
 
 
