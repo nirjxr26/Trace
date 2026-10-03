@@ -8,6 +8,50 @@ from trace_core.updates.lifecycle import UpdateLifecycle
 from trace_core.updates.service import UpdateService
 
 
+@pytest.fixture
+def install_root(tmp_path, monkeypatch, release_keys):
+    from trace_core.core.settings import settings
+    from trace_core.updates import signing
+
+    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
+    signing.import_release_pubkey(release_keys["pub_hex"])
+    return tmp_path
+
+
+@pytest.fixture
+def seeded_install(install_root):
+    from trace_updater import updater as updater_mod
+
+    base = install_root / "install"
+    for version, payload in (("0.1.0", b"good"), ("0.2.0", b"bad")):
+        seed = install_root / f"seed-{version}"
+        seed.mkdir()
+        (seed / "trace.bin").write_bytes(payload)
+        updater_mod.stage_release(
+            seed,
+            base,
+            version,
+            expected=["trace.bin"],
+            release_meta={"version": version, "schema_min": 1, "schema_target": 99},
+        )
+        updater_mod.activate(base, version)
+    return base
+
+
+@pytest.fixture
+def failing_health_check(monkeypatch):
+    from trace_core.core.database import health as health_mod
+
+    real_snapshot = health_mod.fetch_db_snapshot
+
+    def _unhealthy(manager):
+        snap = real_snapshot(manager)
+        snap.healthy = False
+        return snap
+
+    monkeypatch.setattr(health_mod, "fetch_db_snapshot", _unhealthy)
+
+
 def test_full_lifecycle_success(
     session_manager, temp_storage_root, signed_release, release_keys, monkeypatch, tmp_path
 ):
@@ -55,71 +99,17 @@ def test_unknown_gate_fails_closed(session_manager, temp_storage_root, signed_re
         life.run(manifest, art_path, gate=gate)
 
 
-def test_health_failure_rolls_back(
-    session_manager, temp_storage_root, signed_release, release_keys, monkeypatch, tmp_path
-):
-    from trace_core.core.database import health as health_mod
-    from trace_core.core.settings import settings
-    from trace_updater import updater as updater_mod
-
-    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
-    from trace_core.updates import signing
-
-    signing.import_release_pubkey(release_keys["pub_hex"])
-    base = tmp_path / "install"
-    for version, payload in (("0.1.0", b"good"), ("0.2.0", b"bad")):
-        seed = tmp_path / f"seed-{version}"
-        seed.mkdir()
-        (seed / "trace.bin").write_bytes(payload)
-        updater_mod.stage_release(
-            seed,
-            base,
-            version,
-            expected=["trace.bin"],
-            release_meta={"version": version, "schema_min": 1, "schema_target": 99},
-        )
-        updater_mod.activate(base, version)
-
+def test_health_failure_rolls_back(session_manager, signed_release, seeded_install, failing_health_check):
     manifest, _, art_path, _ = signed_release()
     svc = UpdateService(session_manager)
-    real_snapshot = health_mod.fetch_db_snapshot
-
-    def _unhealthy(manager):
-        snap = real_snapshot(manager)
-        snap.healthy = False
-        return snap
-
-    monkeypatch.setattr(health_mod, "fetch_db_snapshot", _unhealthy)
     dto = UpdateLifecycle("tx-life-4", svc).run(manifest, art_path)
     assert dto.result == UpdateResult.ROLLED_BACK
     assert dto.rollback is True
 
 
-def test_rollback_onto_pending_migrations_is_not_passed(
-    session_manager, temp_storage_root, signed_release, release_keys, monkeypatch, tmp_path
-):
+def test_rollback_onto_pending_migrations_is_not_passed(session_manager, signed_release, seeded_install, monkeypatch):
     """A rollback landing on a schema with pending migrations is not "passed"."""
     from trace_core.core.database import health as health_mod
-    from trace_core.core.settings import settings
-    from trace_updater import updater as updater_mod
-
-    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
-    from trace_core.updates import signing
-
-    signing.import_release_pubkey(release_keys["pub_hex"])
-    base = tmp_path / "install"
-    for version, payload in (("0.1.0", b"good"), ("0.2.0", b"bad")):
-        seed = tmp_path / f"seed-{version}"
-        seed.mkdir()
-        (seed / "trace.bin").write_bytes(payload)
-        updater_mod.stage_release(
-            seed,
-            base,
-            version,
-            expected=["trace.bin"],
-            release_meta={"version": version, "schema_min": 1, "schema_target": 99},
-        )
-        updater_mod.activate(base, version)
 
     manifest, _, art_path, _ = signed_release()
     svc = UpdateService(session_manager)
@@ -141,25 +131,9 @@ def test_rollback_onto_pending_migrations_is_not_passed(
     assert dto.health_check_result.endswith("health failed")
 
 
-def test_rollback_failure_enters_recovery(
-    session_manager, temp_storage_root, signed_release, release_keys, monkeypatch, tmp_path
-):
-    from trace_core.core.database import health as health_mod
-    from trace_core.core.settings import settings
-    from trace_core.updates import signing
-
-    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
-    signing.import_release_pubkey(release_keys["pub_hex"])
+def test_rollback_failure_enters_recovery(session_manager, signed_release, install_root, failing_health_check):
     manifest, _, art_path, _ = signed_release()
     svc = UpdateService(session_manager)
-    real_snapshot = health_mod.fetch_db_snapshot
-
-    def _unhealthy(manager):
-        snap = real_snapshot(manager)
-        snap.healthy = False
-        return snap
-
-    monkeypatch.setattr(health_mod, "fetch_db_snapshot", _unhealthy)
     dto = UpdateLifecycle("tx-life-5", svc).run(manifest, art_path)
     assert dto.result == UpdateResult.FAILED
     assert dto.failure_stage == "health"
