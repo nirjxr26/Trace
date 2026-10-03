@@ -369,10 +369,10 @@ def test_auditor_is_read_only(session_manager: DatabaseSessionManager, as_user) 
     from trace_core.cases.dto import CaseCreateDto
     from trace_core.cases.service import CaseService
     from trace_core.core.errors import AuthorizationError
-    from trace_core.core.operators import ROLE_AUDITOR, get_or_provision
+    from trace_core.core.operators import ROLE_AUDITOR, get_or_provision_operator
 
     with session_manager.session() as session:
-        row = get_or_provision(session, "viewer", "workstation")
+        row = get_or_provision_operator(session, "viewer", "workstation")
         row.role = ROLE_AUDITOR
         session.commit()
     as_user("viewer")
@@ -381,6 +381,77 @@ def test_auditor_is_read_only(session_manager: DatabaseSessionManager, as_user) 
     with pytest.raises(AuthorizationError):
         reader.create_case(attempt)
     assert CaseService(session_manager).list_cases() == []
+
+
+def test_denied_admin_attempt_leaves_operator_record_intact(session_manager: DatabaseSessionManager, as_user) -> None:  # type: ignore[no-untyped-def]
+    from sqlalchemy import select
+
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+    from trace_core.core.errors import AuthorizationError
+    from trace_core.core.operators import OperatorModel
+
+    existing = CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+
+    as_user("blocked-intruder")
+    with pytest.raises(AuthorizationError):
+        CaseService(session_manager).delete_case(existing.number, purge=True)
+
+    assert CaseService(session_manager).get_case(existing.number).is_deleted is False
+    with session_manager.session() as session:
+        assert session.scalar(select(OperatorModel).where(OperatorModel.name == "blocked-intruder")) is not None
+
+
+def test_require_role_is_read_only(session_manager: DatabaseSessionManager, as_user) -> None:  # type: ignore[no-untyped-def]
+    from sqlalchemy import func, select
+
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+    from trace_core.core.errors import AuthorizationError
+    from trace_core.core.operators import OperatorModel, require_mutator
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+    as_user("never-seen")
+
+    with session_manager.session() as session:
+        before = session.scalar(select(func.count()).select_from(OperatorModel))
+        with pytest.raises(AuthorizationError):
+            require_mutator(session, action="create cases")
+        after = session.scalar(select(func.count()).select_from(OperatorModel))
+
+    assert after == before
+
+
+def test_bootstrap_writes_only_for_unknown_identity(session_manager: DatabaseSessionManager) -> None:
+    from sqlalchemy import func, select
+
+    from trace_core.core.operators import OperatorModel, bootstrap_current_operator
+
+    def operator_count() -> int:
+        with session_manager.session() as session:
+            count = session.scalar(select(func.count()).select_from(OperatorModel))
+        assert count is not None
+        return count
+
+    empty = operator_count()
+    assert bootstrap_current_operator(session_manager) is not None
+    assert operator_count() == empty + 1
+
+    assert bootstrap_current_operator(session_manager) is None
+    assert operator_count() == empty + 1
+
+
+def test_bootstrap_is_idempotent_under_repetition(session_manager: DatabaseSessionManager) -> None:
+    from sqlalchemy import select
+
+    from trace_core.core.operators import OperatorModel, bootstrap_current_operator
+
+    for _ in range(3):
+        bootstrap_current_operator(session_manager)
+
+    with session_manager.session() as session:
+        rows = session.scalars(select(OperatorModel)).all()
+    assert len(rows) == 1
 
 
 def test_only_admin_purges(session_manager: DatabaseSessionManager, as_user) -> None:  # type: ignore[no-untyped-def]

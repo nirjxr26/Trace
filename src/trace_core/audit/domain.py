@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Final
 
-from trace_core.core.canonical import canonical_json, canonical_ts
+from trace_core.core.canonical import canonical_json, canonical_ts, is_naive
 from trace_core.core.clock import now_utc
 from trace_core.core.domain import InvariantViolationError
 
@@ -24,6 +24,9 @@ class AuditAction(StrEnum):
     CASE_ARCHIVED = "CASE_ARCHIVED"
     CASE_RESTORED = "CASE_RESTORED"
     CASE_PURGED = "CASE_PURGED"
+    DEVICE_INSPECTED = "DEVICE_INSPECTED"
+    DEVICE_GATE_CHECKED = "DEVICE_GATE_CHECKED"
+    DEVICE_OVERRIDE = "DEVICE_OVERRIDE"
 
 
 ACTION_TITLES: Final[dict[str, str]] = {
@@ -33,6 +36,9 @@ ACTION_TITLES: Final[dict[str, str]] = {
     "CASE_ARCHIVED": "Case archived",
     "CASE_RESTORED": "Case restored",
     "CASE_PURGED": "Case purged",
+    "DEVICE_INSPECTED": "Device inspected",
+    "DEVICE_GATE_CHECKED": "Device write-protection checked",
+    "DEVICE_OVERRIDE": "Device check overridden",
 }
 
 
@@ -65,7 +71,7 @@ def build_payload(
 ) -> dict[str, Any]:
     """Build canonical payload dict for hashing."""
     ts_val = ts if ts is not None else now_utc()
-    if ts_val.tzinfo is None or ts_val.tzinfo.utcoffset(ts_val) is None:
+    if is_naive(ts_val):
         raise InvariantViolationError("Audit ts must be timezone-aware UTC.")
     ts_utc = canonical_ts(ts_val)
     return {
