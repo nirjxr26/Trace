@@ -2951,3 +2951,19 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Verification: `./check-pr.ps1` PASSED all six stages — ruff format and lint clean, `mypy` strict with 0 errors, 493 passed / 15 skipped at 76.82% coverage against the 70% gate. The suite count is identical to the pre-change baseline, confirming no test was weakened.
 
   **An intermediate failure is recorded rather than hidden.** The first attempt at the `screens/audit.py` constant used `query_one(AUDIT_DETAIL_ID, ...)` without the `#` CSS prefix and broke 9 TUI tests. The file's existing convention is bare constants for the `id=` kwarg and `f"#{CONST}"` for queries; corrected to `f"#{AUDIT_DETAIL_ID}"` and the suite returned to green.
+
+## 2026-10-03 (mojibake repair on `release/v0.2.9`)
+
+- Summary: Repaired 17 UTF-8-to-cp1252 double-encoded sequences across five files. An earlier tool read UTF-8 bytes as Windows-1252 and wrote the result back as UTF-8, so glyphs and punctuation displayed as mojibake: `trace update` history rendered `â€”` in its rollback column, the shell handler printed `â€”` in its usage line, and the TUI theme module's select prefix, status glyphs, stage glyph, ellipsis and header separator were all corrupted.
+
+  **Plain round-tripping is insufficient here, and that is the non-obvious part.** cp1252 leaves five byte slots undefined (`0x81`, `0x8D`, `0x8F`, `0x90`, `0x9D`). The original corruption did not error on them; it carried them through as raw C1 control characters, so `text.encode("cp1252")` raises on the damaged text and a naive `encode("cp1252").decode("utf-8")` repair cannot even run. The repair maps those five codepoints back to their byte values first. The check glyph is `●` (U+25CF), not `✓` — the byte sequence `E2 97 8F` is unambiguous, and `●`/`×` is a coherent success/failure pair.
+
+  **Two detector failures are recorded because both would have produced a false all-clear.** Testing each character in isolation reports nothing, because mojibake is a multi-character run (`â€º` is three codepoints) and no single one decodes alone. And a plain text grep for `â` finds four of the five files but misses `cases/domain.py`, whose sequence begins with `Ã`. The repair was therefore run against every tracked file rather than a hand-built list, and the final scan reports the repository clean.
+
+  Read and written as bytes throughout, so the CRLF line endings these files carry could not be silently translated to LF.
+
+- Files: `src/trace_core/tui/theme.py`, `src/trace_core/updates/cache.py`, `src/trace_core/updates/commands.py`, `src/trace_core/updates/shell_handler.py`, `src/trace_core/cases/domain.py`, `changelog/nirjar/changelog.md`.
+
+- Verification: repo-wide rescan over all tracked `.py`/`.md`/`.ps1`/`.sh`/`.toml`/`.json` reports no remaining mojibake. `compileall` clean on all five files. `./check-pr.ps1` PASSED all six stages — ruff format and lint clean, `mypy` strict 0 errors, 493 passed / 15 skipped at 76.82% coverage. Diff is 13 changed lines and every one is a character substitution: no logic, whitespace or line-ending change.
+
+  **Pre-existing, not introduced by this branch.** Confirmed present on `origin/main` and absent from this branch's SonarCloud batch 1 commit, which touched none of these five files. The corruption therefore shipped in v0.2.8.

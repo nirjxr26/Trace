@@ -20,7 +20,7 @@ class UpdateShellCommandHandler(BaseShellHandler):
             for usage, _, desc in self.get_help_entries():
                 from trace_core.core.ui.renderers import console
 
-                console.print(f"[dim]{usage}[/dim] â€” {desc}")
+                console.print(f"[dim]{usage}[/dim] — {desc}")
             return True
         if act == "check":
             return self._shell_check(args)

@@ -47,7 +47,7 @@ def status_text(status, is_deleted: bool = False):  # type: ignore[no-untyped-de
     return Text(label, style=style)
 
 
-SELECT_PREFIX = "â€º "
+SELECT_PREFIX = "› "
 
 DOT_OK = THEME_HEX["green"]
 DOT_BAD = THEME_HEX["red"]
@@ -55,8 +55,8 @@ DOT_INFO = THEME_HEX["blue"]
 
 
 def dot_line(ok: bool, label: str):  # type: ignore[no-untyped-def]
-    """Single source for â—/Ã— status lines. Never color-only: glyph differs too."""
-    glyph = "â— " if ok else "Ã— "
+    """Single source for ●/× status lines. Never color-only: glyph differs too."""
+    glyph = "● " if ok else "× "
     body = Text()
     body.append(glyph, style=DOT_OK if ok else DOT_BAD)
     body.append(label)
@@ -67,7 +67,7 @@ def update_status_text(kind: str):  # type: ignore[no-untyped-def]
     """Single source for Updates Previous/Current/Status states. No raw unknown."""
     if kind == "available":
         body = Text()
-        body.append("â†‘ ", style=DOT_INFO)
+        body.append("↑ ", style=DOT_INFO)
         body.append("Update available")
         return body
     if kind == "failed":
@@ -76,13 +76,13 @@ def update_status_text(kind: str):  # type: ignore[no-untyped-def]
 
 
 def stage_line(status: StageStatus, label: str):
-    """Single source for install-stage â—/Ã—/â—Œ lines. Typed on StageStatus."""
+    """Single source for install-stage ●/×/◌ lines. Typed on StageStatus."""
     if status == StageStatus.DONE:
         return dot_line(True, label)
     if status == StageStatus.FAILED:
         return dot_line(False, label)
     body = Text()
-    body.append("â—Œ ", style=DOT_INFO)
+    body.append("◌ ", style=DOT_INFO)
     body.append(label)
     return body
 
@@ -100,7 +100,7 @@ def append_kv(body: Text, label: str, value: str) -> None:
 
 def detail_placeholder(has_rows: bool, empty_message: str) -> Text:
     """Detail-pane placeholder shared by Cases/Audit: empty-list message vs select hint."""
-    return Text(empty_message if not has_rows else "Select an entryâ€¦", style="dim")
+    return Text(empty_message if not has_rows else "Select an entry…", style="dim")
 
 
 def table_head_text(columns: list[tuple[str, int]]) -> str:
@@ -115,6 +115,6 @@ def table_head_text(columns: list[tuple[str, int]]) -> str:
 
 
 def header_with_count(columns: Sequence[tuple[str, int]], count: int) -> str:
-    """Header row plus the `Â· N` count suffix. Single source for the two views
+    """Header row plus the `· N` count suffix. Single source for the two views
     that each assembled this separately in on_mount and again on refresh."""
-    return f"{table_head_text(list(columns))}  Â· {count}"
+    return f"{table_head_text(list(columns))}  · {count}"

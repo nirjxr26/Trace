@@ -25,7 +25,7 @@ HISTORY_COLUMNS: list[tuple[str, dict[str, object]]] = [
 def history_table_rows(rows: list[UpdateHistoryDto]) -> list[list[str]]:
     """Single source for history table rows. Shared by CLI and REPL shell."""
     yes = get_success_icon()
-    return [[r.from_version, r.to_version, r.channel, r.result, yes if r.rollback else "â€”"] for r in rows]
+    return [[r.from_version, r.to_version, r.channel, r.result, yes if r.rollback else "—"] for r in rows]
 
 
 def load_update(manifest: str | None, artifact: str | None) -> tuple[ReleaseManifest, str, str, ManifestArtifact]:

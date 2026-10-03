@@ -60,7 +60,7 @@ def manifest_identity(target: str) -> dict[str, Any] | None:
 
     A (mtime, size) fast-path was removed: on coarse filesystems an equal-size
     rewrite inside one mtime tick reused the old sha and served a stale
-    manifest for the full TTL â€” hiding even security releases. Manifests are
+    manifest for the full TTL — hiding even security releases. Manifests are
     capped at 1 MiB, so hashing costs milliseconds. Correctness over micro-perf.
     """
     from trace_core.updates.sources import is_http_url

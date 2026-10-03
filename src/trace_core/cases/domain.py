@@ -198,7 +198,7 @@ class Case(BaseEntity):
     @field_validator("tags")
     @classmethod
     def validate_tags(cls, v: list[str]) -> list[str]:
-        """Strip whitespace, lowercase, discard empty tags, deduplicate, cap 50 tags Ã—50 chars."""
+        """Strip whitespace, lowercase, discard empty tags, deduplicate, cap 50 tags ×50 chars."""
         cleaned: list[str] = []
         for tag in v:
             stripped = strip_controls(tag).strip().lower()
