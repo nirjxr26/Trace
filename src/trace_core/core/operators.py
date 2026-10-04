@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from trace_core.core.clock import now_utc
 from trace_core.core.database.base import Base, UTCDateTime
+from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.errors import ApplicationError, AuthorizationError
 
 ROLE_INVESTIGATOR = "investigator"
@@ -64,16 +65,21 @@ def current_identity() -> tuple[str, str]:
     return user, host
 
 
-def get_or_provision(session: Session, name: str, host: str) -> OperatorModel:
-    """Fetch the operator row, creating it (first-ever becomes admin)."""
+def find_operator(session: Session, name: str, host: str) -> OperatorModel | None:
+    """Resolve an operator by identity, or None if never provisioned. SELECT only."""
     try:
-        existing = session.scalar(select(OperatorModel).where(OperatorModel.name == name, OperatorModel.host == host))
+        return session.scalar(select(OperatorModel).where(OperatorModel.name == name, OperatorModel.host == host))
     except Exception as exc:
         from trace_core.core.database.health import is_missing_relation_error
 
         if is_missing_relation_error(exc):
             raise ApplicationError("Operator store not initialized. Run `trace db migrate`.") from exc
         raise
+
+
+def get_or_provision_operator(session: Session, name: str, host: str) -> OperatorModel:
+    """Fetch the operator row, inserting it when absent (first-ever becomes admin). Caller owns the COMMIT."""
+    existing = find_operator(session, name, host)
     if existing is not None:
         return existing
     first_ever = session.scalar(select(OperatorModel.id).limit(1)) is None
@@ -85,17 +91,28 @@ def get_or_provision(session: Session, name: str, host: str) -> OperatorModel:
             session.flush()
     except IntegrityError:
         # Concurrent first-use race: someone else provisioned (possibly as admin); take theirs.
-        existing = session.scalar(select(OperatorModel).where(OperatorModel.name == name, OperatorModel.host == host))
-        if existing is None:
+        winner = find_operator(session, name, host)
+        if winner is None:
             raise
-        return existing
+        return winner
     return row
 
 
 def current_operator(session: Session) -> OperatorModel:
     """Operator for this process. Auto-provisions on first mutating use."""
     name, host = current_identity()
-    return get_or_provision(session, name, host)
+    return get_or_provision_operator(session, name, host)
+
+
+def bootstrap_current_operator(session_manager: DatabaseSessionManager) -> OperatorModel | None:
+    """Provision this identity on its own committed session. Returns the new row, or None if it already existed."""
+    name, host = current_identity()
+    with session_manager.session() as session:
+        if find_operator(session, name, host) is not None:
+            return None
+        operator = get_or_provision_operator(session, name, host)
+        session.commit()
+        return operator
 
 
 def require_role(session: Session, *roles: str, action: str = DEFAULT_ACTION) -> OperatorModel:
@@ -104,7 +121,10 @@ def require_role(session: Session, *roles: str, action: str = DEFAULT_ACTION) ->
     Roles are compared normalised so a stored `Admin ` or `admin` still matches,
     matching the .upper() convention every other lookup in this codebase uses.
     """
-    operator = current_operator(session)
+    name, host = current_identity()
+    operator = find_operator(session, name, host)
+    if operator is None:
+        raise AuthorizationError(f"Operator '{name}' on '{host}' is not provisioned and may not {action}.")
     if operator.status != STATUS_ACTIVE or operator.role.upper() not in {r.upper() for r in roles}:
         raise AuthorizationError(f"Operator '{operator.name}' with role '{operator.role}' may not {action}.")
     return operator

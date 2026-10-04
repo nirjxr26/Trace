@@ -2,8 +2,23 @@
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 from uuid import UUID
+
+SUBJECT_TYPE_CASE: Final[str] = "case"
+SUBJECT_TYPE_EVIDENCE: Final[str] = "evidence"
+SUBJECT_TYPE_REPORT: Final[str] = "report"
+SUBJECT_TYPE_DEVICE: Final[str] = "device"
+SUBJECT_TYPE_SYSTEM: Final[str] = "system"
+SUBJECT_TYPES: Final[frozenset[str]] = frozenset(
+    {
+        SUBJECT_TYPE_CASE,
+        SUBJECT_TYPE_EVIDENCE,
+        SUBJECT_TYPE_REPORT,
+        SUBJECT_TYPE_DEVICE,
+        SUBJECT_TYPE_SYSTEM,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -11,7 +26,7 @@ class Subject:
     """Who/what the event is about. V1: type=case, V2: evidence/report/device."""
 
     type: str  # case | evidence | report | device | system
-    number: str  # human id, e.g. 2026-CR-0029
+    number: str | None = None  # human id, e.g. 2026-CR-0029; None when type != case
     id: UUID | None = None
 
 

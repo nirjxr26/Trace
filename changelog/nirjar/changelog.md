@@ -2890,6 +2890,26 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 
 - Verification: `ruff check src tests` ? all checks passed. `mypy src` ? no issues found in 100 source files. `git diff` on `shell_handler.py` and `dto.py` is now empty, confirming a full revert rather than an approximation; both files were also checked for valid UTF-8 after a PowerShell rewrite mangled three lines, and those lines were restored from `HEAD`. Drove the reverted `case edit` through `InteractiveShell.execute_line` and confirmed the original `Editing Case ... (press Enter to keep current value)` header and one-line diff dump. Re-ran the real binary for `case show 2026-CR-0007` and `audit show --case 2026-CR-0074` to confirm the kept views are unchanged. **`pytest` NOT run — still deferred at the owner''s request.** Note that `test_shell_edit_clear_rules` patches `prompt_confirm`, which the reverted flow does call again, so that test''s monkeypatches are aligned with the code once more.
 
+## 2026-10-03
+
+- Summary: Resolved D18 (H-74) as an architectural refactor and corrected the record on a claim that did not survive verification. The original finding asserted two things: that reading a role writes to the database, and that a denied first-ever action therefore rolls the provisioning row back so the rejected attempt's identity is lost. The first is real and was already documented. The second was inferred from a code-level reading of `require_role` -> `current_operator` -> `get_or_provision` -> `session.add(row) + flush()` inside `BaseService.transaction()`, and it does not hold: with an operator already present, an unknown operator attempting an admin-only operation is denied with `AuthorizationError`, the forensic transaction rolls back, and the operator row is still present afterwards. The rollback-loss claim is withdrawn. The mechanism by which the row survives is not established and is not recorded as understood. What remains valid is D18 itself, that authorization must be read-only, which is now satisfied by construction.
+
+  `require_role` no longer provisions. It resolves the operator through a new `find_operator` and raises `AuthorizationError` naming the identity when none exists. Provisioning moved out of the forensic unit of work into `bootstrap_current_operator`, which runs on its own session and commits before `BaseService.transaction()` yields the UoW, so an INSERT can never sit inside the rollback scope of the operation it authorizes. The warm path is one indexed SELECT and no write; only a genuinely unknown identity inserts. `get_or_provision` is renamed `get_or_provision_operator` and `current_operator` keeps its first-use provisioning contract, so the existing self-provisioning behaviour is unchanged: the first operator is still admin and later operators are still investigators. Concurrent bootstrap still resolves through the `uq_operators_name_host` unique constraint, adopting the winner's row rather than minting a second identity.
+
+  Tests are split into two distinct properties that were previously conflated in a single misleading name. `test_denied_admin_attempt_leaves_operator_record_intact` documents the observed behaviour that a denial does not destroy the operator record; this passed against the old implementation and is explicitly not a regression guard for a rollback bug. `test_require_role_is_read_only` is the D18 guard, asserting the operator count is unchanged across a denied `require_mutator` call. `test_bootstrap_writes_only_for_unknown_identity` and `test_bootstrap_is_idempotent_under_repetition` cover the cold path inserting and the warm path writing nothing.
+
+  The correction is recorded in all six places the claim was copied: `docs/findings/LEDGER.md`, `docs/STATUS.md`, `CODE-AUDIT.md`, `HIGH-FINDINGS-PLAN.md`, `docs/roadmap/subpart-3-devices.md` (lines 64, 143, 217, 695, 832, 1034) and `docs/roadmap/devices-tui-blueprint.md`. The subpart plan's failure-mode row is retitled from "Operator row missing at a denial point" to "Authorization path must not write", since the former describes the disproved behaviour, and the Authorship row now states the D18 invariant instead of the retracted consequence.
+
+- Files: `src/trace_core/core/operators.py`, `src/trace_core/core/service.py`, `tests/unit/test_security_regressions.py`, `CODE-AUDIT.md`, `HIGH-FINDINGS-PLAN.md`, `docs/findings/LEDGER.md`, `docs/STATUS.md`, `docs/roadmap/subpart-3-devices.md`, `docs/roadmap/devices-tui-blueprint.md`, `changelog/nirjar/changelog.md`.
+
+- Verification: `./check-pr.ps1` PASSED all six stages, including `mypy src tests` strict with 0 errors, `ruff format --check` and `ruff check` clean, and 485 passed / 15 skipped at 76.65% coverage against the 70% gate. The operator-focused subset was run on its own during development (7 passed). The stash-and-rerun check that exposed the false claim was performed against the unmodified implementation: stashing only `operators.py` and `service.py` and executing the denial path directly showed the operator row surviving, which is what retracted the original finding. Concurrency is covered by the unique constraint plus the idempotency test rather than a threaded race test; a true multi-process race is not covered. PostgreSQL integration remains skipped for want of `TRACE_TEST_POSTGRES_URL`.
+
+- Summary (addendum): Recorded the standing no-comments rule and the D18 / exit-code semantics in `AGENTS.md` §10, §13 and §14 so they survive past this conversation, and added the two approved semantic exit codes plus the device audit vocabulary. `EXIT_UNKNOWN = 9` and `EXIT_SOURCE_WRITABLE = 10` follow the owner's table; §14 item 10 records that `9` is a semantic device/preflight outcome and must NOT absorb a malformed configuration, database failure or unexpected exception — only the device gate returning UNKNOWN may produce it. §14 item 9 records D18 as an architectural invariant and states plainly that it is not a demonstrated defect fix. `AGENTS.md` §10 now carries the owner's standing no-comments rule, overriding the older "add comments where the style warrants" guidance, with the single exception that a now-factually-incorrect comment must be corrected or removed. `AuditAction` gains `DEVICE_INSPECTED`, `DEVICE_GATE_CHECKED` and `DEVICE_OVERRIDE`, each with an explicit `ACTION_TITLES` entry so no title falls back to the derived default. Both exit codes are currently unreferenced constants; nothing emits them yet, which is correct because the device gate does not exist.
+
+- Files (addendum): `AGENTS.md`, `src/trace_core/core/cli/exit_codes.py`, `src/trace_core/audit/domain.py`, `changelog/nirjar/changelog.md`.
+
+- Verification (addendum): `./check-pr.ps1` PASSED all six stages again after these additions — `mypy src tests` strict 0 errors, `ruff format --check` and `ruff check` clean, 485 passed / 15 skipped at 76.66% coverage. Both new exit-code constants and all three new audit actions are unreferenced by any emitting code path, which is unverified against a device gate by definition since none exists yet.
+
 ## 2026-10-03 (batch J on `fixes`)
 
 - Summary: Batch J — 27 of the 30 reported quick-fix findings closed on the new `fixes` branch (cut from `feature/devices-subpart3` at `80836ae`), all root-cause, none temporary. C-02's forensic-gate wiring and everything in `migrations.py` were excluded untouched (subpart-3 territory and the H-57 checksum landmine), as were the two files carrying device vocabulary.
@@ -2907,6 +2927,44 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Files: `src/trace_core/tui/app.py`, `src/trace_core/tui/palette.py`, `src/trace_core/tui/forms.py`, `src/trace_core/tui/screens/cases.py`, `src/trace_core/tui/screens/settings.py`, `src/trace_core/updates/lifecycle.py`, `src/trace_core/updates/migration.py`, `src/trace_core/core/settings.py`, `src/trace_core/core/cli/error_handler.py`, `src/trace_core/core/database/repository.py`, `src/trace_core/core/database/base.py`, `src/trace_core/audit/domain.py`, `src/trace_core/audit/builder.py`, `src/trace_core/cases/domain.py`, `src/trace_core/cases/models.py`, `src/trace_core/cases/renderers.py`, `src/trace_core/cases/repository.py`, `src/trace_core/cases/shell_handler.py`, `src/trace_core/cli/main.py`, `tests/updates/test_lifecycle_recovery.py`, `tests/unit/test_database_migrations_and_lifecycle.py`, `tests/unit/test_case_state_machine.py`, `changelog/nirjar/changelog.md`.
 
 - Verification: `ruff check src tests release` all checks passed; `mypy src` no issues in 100 source files; `pytest -q` 488 passed, 15 skipped (three new: rollback-onto-pending, channel-Literal pinning, same-state transition). The suite ran green with the concurrent D18/exit-code work in the same working tree; those files (`operators.py`, `service.py`, `exit_codes.py`, `test_security_regressions.py`, `AGENTS.md`) are not part of this batch. No new comments per §10; the initial comment additions this batch made were stripped in the same session.
+
+## 2026-10-03
+
+- Summary: STEP 4-6 of Subpart 3 — the device domain value objects and the [D27] adapter setting. `src/trace_core/devices/domain.py` declares the four enums (`DeviceInterface`, `WpVerdict`, `DeviceKind`, `UnknownCause`) and the frozen Pydantic models (`ObservedSerial`, `DeviceInfo`, `DeviceFingerprint`, `ProtectionCheck`, `ProtectionEvidence`, `DeviceInspection`, `GateCheck`, `DevicePreflight`) plus the five domain errors, all with zero I/O. No adapter, repository, service or CLI exists yet — this is the value layer only, and `trace devices` is still not a command.
+
+  Three decisions worth stating explicitly, because each one is a place where reading the plan closely changed the implementation:
+
+  **[D25] representation is frozen Pydantic, not dataclass.** These types land in signed, hash-committed audit payloads, and `core/canonical.py::canonical_json` is the signing path. A frozen dataclass does not serialise identically to it, and the plan is explicit that deciding this later would mean re-signing stored evidence.
+
+  **[D21] bounds truncate, they do not reject.** The first implementation put `max_length` on the Pydantic `Field`, which made a 5000-character hostile `MODEL` string a validation *error*. The plan says "the validator truncates at the field level", and the reasoning is sound: a crafted USB device must not be able to OOM the tool, but its hostile string is still evidence worth keeping. `max_length` was removed from every field and the truncation lives in the validator, where it can run. Caps are `MAX_DEVICE_STRING = 512` for device-supplied text and `MAX_NODE_LENGTH = 4096` for the node path. **These two numbers are mine, not the plan's** — the plan mandates the bounding but never states a cap, so they need review before they harden into evidence.
+
+  **[D19] the unknown cause is required when the verdict is UNKNOWN, and permitted otherwise.** A `model_validator` on `GateCheck` rejects an UNKNOWN verdict whose evidence carries no `unknown_cause`, because `original_verdict` alone cannot distinguish "we could not tell" from "we could not tell and it was slow". The inverse is deliberately *not* enforced: a READ_ONLY device whose secondary probe hit EACCES is still READ_ONLY, and dropping that cause would discard the reason. I initially wrote a test forbidding it, then removed it — the constraint was mine, not the plan's, and it was wrong.
+
+  [D24] keeps `DeviceKind` (what it is) separate from `requires_real_hardware_opt_in` (whether the flag is needed). The gate reads the boolean, never the classification, so a loopback device can be OS-backed and still risk-free.
+
+  [R1]/[D13] `ObservedSerial` is a distinct type rather than a bare `str`, so no signature path can accept a hardware-supplied serial where an authenticated identity is required. `DeviceFingerprint.serial` is typed `ObservedSerial`.
+
+  [D30] all three timestamps reject naive datetimes and coerce aware values to UTC via the existing `core.domain.require_utc`, matching invariant 4. [D30] forbids any other clock.
+
+  [D27] `settings.device_adapter` is a closed `Literal["file", "linux", "win32"]` defaulting to `file`, read through `TRACE_DEVICE_ADAPTER`. Following the existing `update_channel` convention, it is a `Literal` rather than a validator importing an adapter enum, because core must not import the devices package. The setting selects which adapter is constructed; it does not and cannot bypass `--allow-real-hardware`. That gate is not built yet, so the flag-bypass property is recorded as a test intent but is currently only UNVERIFIED against a real gate.
+
+- Files: `src/trace_core/devices/__init__.py`, `src/trace_core/devices/domain.py`, `src/trace_core/core/settings.py`, `tests/unit/test_devices_domain.py`, `changelog/nirjar/changelog.md`.
+
+- Verification: `./check-pr.ps1` PASSED all six stages — ruff format and lint clean, `mypy src tests` strict with 0 errors across 161 files, 506 passed / 7 skipped at 77.01% coverage against the 70% gate. `tests/unit/test_devices_domain.py` adds 21 tests covering frozen-ness, the serial type distinction, the UNKNOWN-cause rule across all nine `UnknownCause` members, kind/opt-in independence, naive-timestamp rejection, UTC coercion from a +05:30 offset, truncation at 5000 characters, control-character stripping, and negative-capacity rejection. Four of those tests failed on first run and caught three real defects: `max_length` rejecting instead of truncating, `InvariantViolationError` being wrapped into `ValidationError` by Pydantic, and the invented constraint described above. `WriteProtectionError` was moved after the models so its annotation resolves without a forward reference. **UNVERIFIED:** the `--allow-real-hardware` bypass property, since no gate exists yet; STEP 4-6 are value objects only, and STEP 7-11 remain blocked on the §12.1 preconditions (D14 schema and D15 migration sequencing in particular).
+
+## 2026-10-03
+
+- Summary: D17 — trusted-root symlink resolution for device nodes, as a new primitive rather than a change to the existing one. `core.fs.check_device_contained(path, root="/dev")` resolves both sides of the comparison, so the by-id indirection is traversed and containment is judged on the real target: `/dev/disk/by-id/nvme-Samsung_...` resolving to `/dev/nvme0n1` is accepted when the trusted root is `/dev`.
+
+  `check_contained` is untouched. H-21 made it compare the root literally and never resolve it, because resolving both sides let a symlinked root make every candidate vacuously contained so the check could never fire. That reasoning is sound and still is. The consequence is that it rejects a legitimate device node, since Linux exposes stable identity at `/dev/disk/by-id/...` which is a symlink by design, and the literal root `/dev/disk/by-id` does not contain its resolved target. Rather than widen a primitive that guards storage and trust roots, D17 adds a separate one reachable only from device call sites, so there is no path by which a storage or trust-root check can gain symlink-following. Containment in the new primitive is strictly stronger than the literal comparison, not weaker: the root is resolved and must be an existing directory, the candidate is resolved with `strict=True` so a missing or dangling target fails closed, and a resolved candidate equal to the root itself is refused.
+
+  `file_lock` and its `O_NOFOLLOW` behaviour are untouched, per instruction. A device node is not locked through this path. The H-21 and H-52 regression tests were not modified and pass unchanged.
+
+  Steps 1-3 of the owner's instruction are also complete: `CODE-AUDIT.md` and `HIGH-FINDINGS-PLAN.md` were copied into this worktree as working documents so the H-74 retraction is no longer reachable only through the shared checkout, and the D18 commit message was amended to state that the shipped correction is `AGENTS.md` section 14 item 9, explicitly noting that the ledger and audit-document edits are gitignored and therefore not part of that commit.
+
+- Files: `src/trace_core/core/fs.py`, `tests/unit/test_device_containment.py`, `changelog/nirjar/changelog.md`. Working documents copied but gitignored, not committed: `CODE-AUDIT.md`, `HIGH-FINDINGS-PLAN.md`.
+
+- Verification: `./check-pr.ps1` PASSED all six stages — ruff format and lint clean, `mypy src tests` strict with 0 errors across 162 files, 512 passed / 11 skipped at 77.06% coverage against the 70% gate. `tests/unit/test_device_containment.py` adds 10 tests: by-id symlink inside the trusted root accepted, direct device path accepted, by-id symlink resolving outside the root rejected, dot-dot traversal rejected, nonexistent path rejected, dangling symlink rejected, unresolvable root rejected, non-directory root rejected, root-itself rejected, empty path rejected, and one negative test asserting `check_contained` still refuses the by-id shape at a literal `/dev/disk/by-id` root — that last test is the guard against D17 having widened the storage boundary. The 4 symlink-dependent tests initially skipped because this host refused `os.symlink` without elevation. With Windows Developer Mode enabled they were re-run and all 10 tests in the file pass, so D17's core behaviour -- a by-id symlink accepted, one resolving outside the root rejected, a dangling link failing closed -- is verified on this host and not merely inferred from Linux CI. Per instruction, stopped after D17; STEP 7-11 remain blocked on the §12.1 preconditions (D14 schema and D15 migration sequencing).
 
 ## 2026-10-03 (batch K on `fixes`)
 
@@ -3046,3 +3104,82 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
   `updates/lifecycle.py:100` (17). Each is a behavioural function in the release, CLI,
   TUI and update paths; splitting them is a separate change that wants its own
   verification budget rather than being folded into a lint cleanup.
+## 2026-10-03
+
+- Summary: [D14] STEP 1 of Subpart 3 - the audit subject model, as migration 17. Every
+  `audit_events` row now carries an explicit `subject_type`, and `subject_case_number` is
+  nullable so a subject that is not a case can be recorded without inventing a pseudo-case
+  number. A device subject is therefore representable in the ledger, which is what STEP 12
+  needs and what the plan named as the one architectural blocker before STEP 7.
+
+  The vocabulary is the lowercase one `audit/events.py` already declared (`case`,
+  `evidence`, `report`, `device`, `system`), now promoted to module constants rather than
+  a comment. `AuditAction` member names stay uppercase and are a different axis: an action
+  is what happened, a subject is what it happened to. No second spelling was introduced.
+  `SqlAlchemyAuditRepository.append` takes `subject_type` as a required keyword and rejects
+  an unknown value, so a device event cannot be filed as a case by omission.
+
+  **`subject.type` was already being accepted and discarded.** `AuditService.record` took
+  a `Subject` and forwarded only `subject.number` and `subject.id` to `append()`. The type
+  was never missing from the domain; it was dropped at the persistence boundary. D14 stops
+  that discard rather than inventing a new concept.
+
+  **The canonical payload always carries the key.** For a non-case subject the value is
+  JSON `null`, never an omitted key. Omitting it would have given case and non-case events
+  different payload shapes, so every stored hash would depend on the subject type. Existing
+  `CASE_*` payloads are byte-identical: same keys, same values, same hashes. A test pins
+  the exact key set so this cannot drift.
+
+  **Two renderer defects would have shipped silently.** `safe_text` is
+  `escape(sanitize_terminal(str(value)))`, so a NULL reaching it renders as the text
+  `None` - plausible-looking, wrong, and raising nothing. The case-cardinality set
+  `{e.subject_case_number for e in events}` also counted `None` as a distinct case and
+  inflated a reported statistic by one. Both are now explicit: `subject_case_label` renders
+  `(no case)`, and the cardinality set filters NULL. Tests assert the string `None` appears
+  nowhere in the output.
+
+  **Migration 17 drops the append-only triggers, backfills, and reinstalls them inside the
+  migration transaction.** The backfill cannot run otherwise - the trigger blocks its own
+  UPDATE. Unlike `_safe_nested_execute`, which swallows failures, the backfill is allowed
+  to raise: a silent failure would leave rows unlabelled on a NOT NULL column. The verifier
+  re-checks trigger survival, so a reinstall that silently did nothing fails the migration
+  and rolls back rather than recording a lie.
+
+  **SQLite cannot `DROP NOT NULL`, so the table is rebuilt** from the current model DDL.
+  Existing index DDL is captured from `sqlite_master` and recreated verbatim; all rows are
+  copied; the append-only triggers are reinstalled by the caller. PostgreSQL takes the
+  ordinary path: `DROP NOT NULL` plus `SET NOT NULL` on the new column.
+
+  **The backfill touches only the new column.** No payload is rewritten and no hash changes;
+  a test compares `payload_json`, `payload_hash`, `prev_chain` and `chain_hash` before and
+  after and requires byte equality, on both backends.
+
+- Interpretation: `§12.1` named four readers and one of them, `audit recovery`, does not
+  exist. The audit surface is `show`, `verify`, `export`, `decrypt`, `keys init/rotate/list`,
+  and `trace recovery` is the *update* lifecycle, which touches no `audit_events` code. The
+  fourth reader is `audit decrypt`, and the round-trip is now tested through a real sealed
+  bundle.
+
+  `audit verify` turned out to be structurally immune: `verifier.py` recomputes from
+  `payload_json` and never reads the column. The column change cannot break it, but the
+  *payload* could have, which is why the test pins the key rather than the outcome.
+
+- Files: `audit/events.py`, `audit/domain.py`, `audit/models.py`, `audit/dto.py`,
+  `audit/repository.py`, `audit/service.py`, `audit/builder.py`, `audit/renderers.py`,
+  `core/database/migrations.py`, `tests/unit/test_audit_subject_model.py`,
+  `tests/unit/test_migration_017.py`, `tests/integration/test_postgres.py`,
+  `tests/unit/test_audit_ledger.py`, `tests/unit/test_security_regressions.py`,
+  `tests/updates/test_lifecycle_gates.py`.
+
+- Not done, deliberately: no device audit integration. `trace devices` still does not exist,
+  and no `DEVICE_*` event can be written until STEP 12. `builder._subject_device` exists so
+  STEP 12 has the constructor, and nothing calls it.
+
+- Also fixed while here, not part of D14: `tests/updates/test_lifecycle_gates.py` registered
+  a probe migration at a hardcoded version 17 and cleaned up by popping that version from
+  `MIGRATION_VERIFIERS`. With a real migration 17 present, the registration collided and the
+  cleanup would have deleted the real verifier. Both are now derived from
+  `len(MIGRATIONS) + 1`, so the probe can neither collide with nor erase a shipped
+  migration again.
+
+- Verification: gate run recorded with this commit.

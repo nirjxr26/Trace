@@ -5,7 +5,7 @@ from typing import Any
 from uuid import UUID
 
 from trace_core.audit.domain import AuditAction
-from trace_core.audit.events import Context, Subject
+from trace_core.audit.events import SUBJECT_TYPE_CASE, SUBJECT_TYPE_DEVICE, Context, Subject
 from trace_core.core.operators import process_session_id
 from trace_core.core.settings import settings
 
@@ -46,7 +46,11 @@ def _ctx(command: str | None) -> Context:
 
 
 def _subject_case(number: str, sid: UUID | None) -> Subject:
-    return Subject(type="case", number=number, id=sid)
+    return Subject(type=SUBJECT_TYPE_CASE, number=number, id=sid)
+
+
+def _subject_device() -> Subject:
+    return Subject(type=SUBJECT_TYPE_DEVICE, number=None, id=None)
 
 
 def _case_event(

@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from trace_core.core.database.session import DatabaseSessionManager, db_manager
+from trace_core.core.operators import bootstrap_current_operator
 
 
 class UnitOfWork:
@@ -46,6 +47,7 @@ class BaseService:
     @contextmanager
     def transaction(self) -> Generator[UnitOfWork, None, None]:
         """Transactional Unit-of-Work boundary enforcing pre-commit hooks before commit and post-commit side effects."""
+        bootstrap_current_operator(self.session_manager)
         with self.session_manager.session() as session:
             uow = UnitOfWork(session)
             yield uow

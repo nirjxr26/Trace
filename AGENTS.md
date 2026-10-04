@@ -168,11 +168,17 @@ mark the task "unverified".
 
 ## 10. Comments
 
-- Comments explain WHY, not WHAT.
-- Preserve existing comments unless they are now incorrect.
-- Add comments only where the surrounding code's own style would (non-obvious logic,
-  safety-critical checks, workarounds).
-- Do not strip comments during unrelated edits. Do not add comment noise.
+**Standing rule (owner, 2026-10-03): do not write comments in the codebase.** No new
+comments, no new docstrings explaining rationale, no inline commentary. This overrides the
+weaker guidance below, which is retained only to describe the treatment of *existing*
+comments.
+
+- Existing comments are left as they are. Do not strip them during unrelated edits.
+- The only exception: a comment that is now factually incorrect. Correcting or deleting it is
+  required, not optional — a false claim left in place is a defect. Say which one and why.
+- When code needs explanation, it goes in the changelog entry or the relevant findings
+  document, not in the source file.
+- Rationale for a test belongs in its name and the changelog, not a docstring above it.
 
 ## 11. Workflow
 
@@ -219,7 +225,8 @@ final report:
 - [ ] No security control weakened; no secret exposed.
 - [ ] Only files listed in the Preflight plan were touched.
 - [ ] No new dependency, abstraction, or convention introduced.
-- [ ] Comments preserved/added per Section 10.
+- [ ] No new comments written; existing comments preserved, and any now-incorrect
+      comment corrected or removed per Section 10.
 - [ ] Tests/lint/types executed and results reported honestly.
 - [ ] Changelog entry written.
 - [ ] Out-of-scope observations listed separately.
@@ -246,6 +253,18 @@ If a request would violate one, refuse that part and explain.
 7. **Audit integrity**: audit entries are append-only. NEVER update or delete them.
 8. **Invariants live in the domain layer**: never rely on UI or CLI validation alone to
    protect an invariant.
+9. **Read-only authorization** (owner, 2026-10-03): role and authorization lookup MUST NOT
+   write. `require_role` resolves through `find_operator` and denies when the identity is
+   absent. Operator provisioning is a separate identity bootstrap (`bootstrap_current_operator`)
+   that commits on its own session BEFORE `BaseService.transaction()` yields the
+   unit-of-work, so an INSERT can never sit inside the rollback scope of the operation it
+   authorizes. Note: this is an architectural invariant, not a demonstrated defect fix — the
+   original H-74 claim that a denied action rolls the provisioning row back was disproved at
+   runtime. See `CODE-AUDIT.md` and `HIGH-FINDINGS-PLAN.md`.
+10. **Semantic exit codes** (owner, 2026-10-03): `9` is the device/preflight UNKNOWN outcome
+    and `10` is source-writable. `9` is materially NOT a general-error band: a malformed
+    configuration, database failure or unexpected exception MUST NOT be converted into exit
+    `9`. Only the device gate returning UNKNOWN may produce it.
 
 ## 15. Required Final Report Format
 

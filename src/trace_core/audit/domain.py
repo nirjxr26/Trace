@@ -25,6 +25,9 @@ class AuditAction(StrEnum):
     CASE_ARCHIVED = "CASE_ARCHIVED"
     CASE_RESTORED = "CASE_RESTORED"
     CASE_PURGED = "CASE_PURGED"
+    DEVICE_INSPECTED = "DEVICE_INSPECTED"
+    DEVICE_GATE_CHECKED = "DEVICE_GATE_CHECKED"
+    DEVICE_OVERRIDE = "DEVICE_OVERRIDE"
 
 
 ACTION_TITLES: Final[dict[str, str]] = {
@@ -34,6 +37,9 @@ ACTION_TITLES: Final[dict[str, str]] = {
     "CASE_ARCHIVED": "Case archived",
     "CASE_RESTORED": "Case restored",
     "CASE_PURGED": "Case purged",
+    "DEVICE_INSPECTED": "Device inspected",
+    "DEVICE_GATE_CHECKED": "Device write-protection checked",
+    "DEVICE_OVERRIDE": "Device check overridden",
 }
 
 
@@ -61,7 +67,7 @@ def chain_hash(prev_chain: str, p_hash: str, seq: int) -> str:
 
 def build_payload(
     action: AuditAction,
-    subject_case_number: str,
+    subject_case_number: str | None,
     actor: str,
     details: dict[str, Any] | None = None,
     ts: datetime | None = None,

@@ -5,6 +5,8 @@ from typing import Final
 EXIT_SUCCESS: Final[int] = 0
 EXIT_ERROR: Final[int] = 1
 EXIT_USAGE: Final[int] = 2
+EXIT_UNKNOWN: Final[int] = 9
+EXIT_SOURCE_WRITABLE: Final[int] = 10
 EXIT_VERIFY_FAILED: Final[int] = 11
 EXIT_NOT_FOUND: Final[int] = 12
 EXIT_CONFLICT: Final[int] = 13

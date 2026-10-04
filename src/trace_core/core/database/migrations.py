@@ -727,3 +727,130 @@ def _migration_016_update_roundtrip(bind: Engine | Connection) -> None:
     else:
         with bind.begin() as conn:
             _run_migration_016(conn)
+
+
+SUBJECT_TYPE_COLUMN = "subject_type"
+SUBJECT_TYPE_INDEX = "ix_audit_events_subject_type"
+AUDIT_EVENTS_REBUILD_TABLE = "_audit_events_d14"
+
+
+def _column_allows_null(conn: Connection, table: str, column: str) -> bool:
+    for col in inspect(conn).get_columns(table):
+        if col["name"] == column:
+            return bool(col["nullable"])
+    return False
+
+
+def _drop_audit_write_triggers(conn: Connection) -> None:
+    if conn.dialect.name == "postgresql":
+        for ddl in (
+            "DROP TRIGGER IF EXISTS audit_events_no_update_delete ON audit_events",
+            "DROP TRIGGER IF EXISTS audit_events_no_truncate ON audit_events",
+        ):
+            conn.execute(text(ddl))
+        return
+    for ddl in (
+        "DROP TRIGGER IF EXISTS audit_events_no_update",
+        "DROP TRIGGER IF EXISTS audit_events_no_delete",
+    ):
+        conn.execute(text(ddl))
+
+
+def _install_audit_write_triggers(conn: Connection) -> None:
+    _install_pg_audit_trigger(conn)
+    _install_sqlite_audit_triggers(conn)
+
+
+def _sqlite_rebuild_audit_events(conn: Connection) -> None:
+    """SQLite cannot DROP NOT NULL, so the table is rebuilt from the model definition.
+
+    Existing index DDL and data are preserved verbatim; the append-only triggers are
+    reinstalled by the caller because a rebuild drops them.
+    """
+    from sqlalchemy import MetaData
+    from sqlalchemy.schema import CreateTable
+
+    import trace_core.audit.models  # noqa: F401
+
+    saved_indexes = [
+        (row[0], row[1])
+        for row in conn.execute(
+            text(
+                "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='audit_events' AND sql IS NOT NULL"
+            )
+        ).fetchall()
+    ]
+    old_columns = {c["name"] for c in inspect(conn).get_columns("audit_events")}
+    rebuilt = Base.metadata.tables["audit_events"].to_metadata(MetaData(), name=AUDIT_EVENTS_REBUILD_TABLE)
+    conn.execute(text(str(CreateTable(rebuilt).compile(dialect=conn.dialect))))
+    shared = [c.name for c in rebuilt.columns if c.name in old_columns]
+    column_list = ", ".join(shared)
+    conn.execute(
+        text(f"INSERT INTO {AUDIT_EVENTS_REBUILD_TABLE} ({column_list}) SELECT {column_list} FROM audit_events")
+    )
+    conn.execute(text("DROP TABLE audit_events"))
+    conn.execute(text(f"ALTER TABLE {AUDIT_EVENTS_REBUILD_TABLE} RENAME TO audit_events"))
+    for _name, ddl in saved_indexes:
+        conn.execute(text(ddl))
+
+
+def _run_migration_017(conn: Connection) -> None:
+    if "audit_events" not in inspect(conn).get_table_names():
+        return
+    columns = _column_names(conn, "audit_events")
+    is_sqlite = conn.dialect.name == "sqlite"
+    if SUBJECT_TYPE_COLUMN not in columns:
+        conn.execute(text(f"ALTER TABLE audit_events ADD COLUMN {SUBJECT_TYPE_COLUMN} VARCHAR(32)"))
+
+    _drop_audit_write_triggers(conn)
+    try:
+        conn.execute(
+            text(f"UPDATE audit_events SET {SUBJECT_TYPE_COLUMN} = 'case' WHERE {SUBJECT_TYPE_COLUMN} IS NULL")
+        )
+        if is_sqlite:
+            _sqlite_rebuild_audit_events(conn)
+        else:
+            conn.execute(text("ALTER TABLE audit_events ALTER COLUMN subject_case_number DROP NOT NULL"))
+            conn.execute(text(f"ALTER TABLE audit_events ALTER COLUMN {SUBJECT_TYPE_COLUMN} SET NOT NULL"))
+    finally:
+        _install_audit_write_triggers(conn)
+
+    if not _index_exists(conn, "audit_events", SUBJECT_TYPE_INDEX):
+        conn.execute(text(f"CREATE INDEX {SUBJECT_TYPE_INDEX} ON audit_events ({SUBJECT_TYPE_COLUMN})"))
+
+
+def _verify_017_audit_subject_type(conn: Connection) -> bool:
+    if "audit_events" not in inspect(conn).get_table_names():
+        return True
+    columns = _column_names(conn, "audit_events")
+    if SUBJECT_TYPE_COLUMN not in columns:
+        return False
+    unlabelled = conn.execute(text(f"SELECT count(*) FROM audit_events WHERE {SUBJECT_TYPE_COLUMN} IS NULL")).scalar()
+    if unlabelled:
+        return False
+    if not _column_allows_null(conn, "audit_events", "subject_case_number"):
+        return False
+    if _column_allows_null(conn, "audit_events", SUBJECT_TYPE_COLUMN):
+        return False
+    return _verify_008_audit_protection(conn)
+
+
+@register_migration(
+    17,
+    "017_audit_subject_type",
+    operations=(
+        "ALTER TABLE audit_events ADD COLUMN subject_type VARCHAR(32)",
+        "backfill audit_events.subject_type from NULL to 'case'",
+        "relax audit_events.subject_case_number to nullable",
+        "restore audit_events append-only triggers after backfill",
+        "CREATE INDEX ix_audit_events_subject_type ON audit_events (subject_type)",
+    ),
+    verify=lambda conn: _verify_017_audit_subject_type(conn),
+)
+def _migration_017_audit_subject_type(bind: Engine | Connection) -> None:
+    """Give every audit row an explicit subject type and allow a subject with no case."""
+    if isinstance(bind, Connection):
+        _run_migration_017(bind)
+    else:
+        with bind.begin() as conn:
+            _run_migration_017(conn)

@@ -62,6 +62,11 @@ class Settings(BaseSettings):
         default="https://github.com/nirjxr26/Trace/releases/latest/download/stable.json",
         alias="TRACE_UPDATE_MANIFEST",
     )
+    # Selects which device adapter is constructed. It does NOT bypass the
+    # --allow-real-hardware opt-in [D27]: asking for `linux` still requires the
+    # flag for any non-file target, so an env var can never silently authorise
+    # real-device access.
+    device_adapter: Literal["file", "linux", "win32"] = Field(default="file", alias="TRACE_DEVICE_ADAPTER")
 
     model_config = SettingsConfigDict(
         env_file=(".env", str(_TRACE_HOME / ".env")),

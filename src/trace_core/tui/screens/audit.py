@@ -10,7 +10,7 @@ from textual.widgets import DataTable, Input, Rule, Static
 
 from trace_core.audit.dto import AuditEventDto, AuditFilterDto
 from trace_core.audit.events import parse_details
-from trace_core.audit.renderers import action_title
+from trace_core.audit.renderers import action_title, subject_case_label
 from trace_core.audit.service import AuditService
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.ui.renderers import format_india_datetime, sanitize_terminal
@@ -59,7 +59,7 @@ class AuditView(Vertical):
                 yield Rule()
                 yield DataTable(id=TABLE_ID, cursor_type="row", show_header=False)
             with DossierScroll(id="audit-right"):
-                yield Static("Select an event…", id="audit-detail")
+                yield Static("Select an event…", id=AUDIT_DETAIL_ID)
 
     def on_mount(self) -> None:
         from trace_core.tui.widgets import mount_header_table
@@ -150,7 +150,7 @@ class AuditView(Vertical):
         body.append(rule)
         body.append("\n")
         body.append("Case    ", style="dim")
-        body.append(f"{sanitize_terminal(e.subject_case_number)}\n")
+        body.append(f"{sanitize_terminal(subject_case_label(e.subject_case_number))}\n")
         body.append("Actor   ", style="dim")
         body.append(f"{sanitize_terminal(e.actor)}\n")
         body.append("When    ", style="dim")

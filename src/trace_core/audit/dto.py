@@ -16,7 +16,8 @@ class AuditEventDto(BaseDto):
     ts: datetime
     action: AuditAction
     actor: str
-    subject_case_number: str
+    subject_type: str
+    subject_case_number: str | None
     subject_case_id: UUID | None = None
     payload_json: str
     # Lowercase-hex charset, not length alone: the verifier compares these with

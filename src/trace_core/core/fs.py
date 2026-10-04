@@ -39,6 +39,44 @@ def check_contained(path: str | Path, root: str | Path, *, what: str = "path") -
     return resolved
 
 
+def check_device_contained(path: str | Path, root: str | Path = "/dev", *, what: str = "device") -> Path:
+    """Containment for device nodes, where a symlink is legitimate identity [D17].
+
+    `check_contained` deliberately compares the root literally and never resolves it, so
+    that a symlinked root cannot make every candidate vacuously contained (H-21). That is
+    correct for the storage and trust roots, and it rejects a real device node: Linux
+    exposes stable identity at `/dev/disk/by-id/...`, which is a symlink *by design*, and
+    the literal root `/dev/disk/by-id` would not contain its own resolved target
+    `/dev/nvme0n1`.
+
+    Here the root is a caller-declared device trust boundary that is resolved, so the
+    by-id indirection is traversed and containment is judged on the real target. The
+    check is therefore stronger than the literal comparison, not weaker: a link inside
+    the trusted root is followed and must still land inside it.
+
+    Separate from `check_contained` on purpose so this cannot be reached by a storage or
+    trust-root call site. `file_lock` and its O_NOFOLLOW behaviour are untouched; a device
+    node is not locked through this path.
+    """
+    base = Path(root)
+    try:
+        base_real = base.resolve(strict=True)
+    except OSError:
+        raise ValueError(f"Refusing {what} with unresolvable device root")
+    if not base_real.is_dir():
+        raise ValueError(f"Refusing {what} with non-directory device root")
+    candidate = Path(path)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError:
+        raise ValueError(f"Refusing {what} that does not exist")
+    if resolved == base_real:
+        raise ValueError(f"Refusing {what} that is the device root itself")
+    if not resolved.is_relative_to(base_real):
+        raise ValueError(f"Refusing {what} escaping the trusted device root")
+    return resolved
+
+
 def sha256_file(path: str | Path) -> str:
     import hashlib
 
