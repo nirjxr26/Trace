@@ -1224,6 +1224,7 @@ def test_audit_hash_fields_reject_non_hex(session_manager: DatabaseSessionManage
         "ts": now_utc(),
         "action": "CASE_CREATED",
         "actor": "a",
+        "subject_type": "case",
         "subject_case_number": "2026-CR-0001",
         "payload_json": "{}",
     }

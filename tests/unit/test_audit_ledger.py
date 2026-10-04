@@ -281,7 +281,9 @@ def test_append_retries_transient_head_collision(session_manager, monkeypatch) -
 
     monkeypatch.setattr(SqlAlchemyAuditRepository, "_append_locked", flaky)
     with session_manager.session() as s:
-        dto = SqlAlchemyAuditRepository(s).append(AuditAction.CASE_CREATED, "Ex", "2026-CR-0001", None, {})
+        dto = SqlAlchemyAuditRepository(s).append(
+            AuditAction.CASE_CREATED, "Ex", "2026-CR-0001", None, {}, subject_type="case"
+        )
     assert dto.seq == 1
     assert calls["n"] == 3
 

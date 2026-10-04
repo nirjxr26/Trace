@@ -67,7 +67,7 @@ def chain_hash(prev_chain: str, p_hash: str, seq: int) -> str:
 
 def build_payload(
     action: AuditAction,
-    subject_case_number: str,
+    subject_case_number: str | None,
     actor: str,
     details: dict[str, Any] | None = None,
     ts: datetime | None = None,

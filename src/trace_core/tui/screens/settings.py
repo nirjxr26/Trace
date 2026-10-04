@@ -11,6 +11,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, ListItem, ListView, Rule, Static
 
+from trace_core.audit.renderers import subject_case_label
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.updates.stages import STAGE_ORDER, Stage, StageStatus
 
@@ -305,7 +306,7 @@ class SettingsView(Vertical):
         if event is None:
             return
         body.append("\nSelected Event\n", style=THEME_HEX["blue"])
-        body.append(f"Seq {event.seq}  {event.subject_case_number}\n", style="dim")
+        body.append(f"Seq {event.seq}  {subject_case_label(event.subject_case_number)}\n", style="dim")
         body.append(f"Payload Hash   {event.payload_hash}\n", style="dim")
         body.append(f"Previous Hash  {event.prev_chain}\n", style="dim")
         body.append(f"Chain Hash     {event.chain_hash}\n", style="dim")

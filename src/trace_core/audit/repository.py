@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from trace_core.audit.domain import GENESIS_CHAIN, AuditAction, build_payload, chain_hash, payload_hash
 from trace_core.audit.dto import AuditEventDto, AuditFilterDto
+from trace_core.audit.events import SUBJECT_TYPES
 from trace_core.audit.models import AuditChainStateModel, AuditEventModel
 from trace_core.cases.domain import normalize_number
 from trace_core.core.canonical import coerce_utc
@@ -23,6 +24,7 @@ def _base_fields(m: AuditEventModel) -> dict[str, Any]:
         "ts": coerce_utc(m.ts),  # type: ignore[arg-type]
         "action": AuditAction(m.action),
         "actor": m.actor,
+        "subject_type": m.subject_type,
         "subject_case_number": m.subject_case_number,
         "subject_case_id": m.subject_case_id,
         "payload_json": m.payload_json,
@@ -68,9 +70,11 @@ class SqlAlchemyAuditRepository:
         self,
         action: AuditAction,
         actor: str,
-        subject_case_number: str,
+        subject_case_number: str | None,
         subject_case_id: UUID | None,
         payload_details: dict[str, Any] | None = None,
+        *,
+        subject_type: str,
     ) -> AuditEventDto:
         """Append one event. Retries transient head/seq collisions on a savepoint.
 
@@ -79,11 +83,15 @@ class SqlAlchemyAuditRepository:
         attempt rebuilds the payload (fresh timestamp), so attempts are
         self-consistent. The last error wins after exhausting attempts.
         """
+        if subject_type not in SUBJECT_TYPES:
+            raise ValueError(f"Unknown audit subject type: {subject_type!r}")
         errors: list[Exception] = []
         for _ in range(_APPEND_ATTEMPTS):
             try:
                 with self.session.begin_nested():
-                    return self._append_locked(action, actor, subject_case_number, subject_case_id, payload_details)
+                    return self._append_locked(
+                        action, actor, subject_case_number, subject_case_id, payload_details, subject_type
+                    )
             except (IntegrityError, OperationalError) as e:
                 errors.append(e)
         raise errors[-1]
@@ -92,9 +100,10 @@ class SqlAlchemyAuditRepository:
         self,
         action: AuditAction,
         actor: str,
-        subject_case_number: str,
+        subject_case_number: str | None,
         subject_case_id: UUID | None,
         payload_details: dict[str, Any] | None,
+        subject_type: str,
     ) -> AuditEventDto:
         from trace_core.audit.signing import sign_bytes
         from trace_core.core.canonical import canonical_json_str
@@ -117,6 +126,7 @@ class SqlAlchemyAuditRepository:
             ts=ts_val,
             action=action.value,
             actor=actor,
+            subject_type=subject_type,
             subject_case_number=subject_case_number,
             subject_case_id=subject_case_id,
             payload_json=payload_json_str,

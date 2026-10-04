@@ -20,6 +20,12 @@ from trace_core.core.ui.renderers import (
 )
 from trace_core.core.ui.theme import THEME_TOKENS
 
+NO_CASE_LABEL: Final[str] = "(no case)"
+
+
+def subject_case_label(number: str | None) -> str:
+    return NO_CASE_LABEL if number is None else number
+
 
 def _audit_table_columns(bp: str) -> list[tuple[str, dict[str, Any]]]:
     """Single source for audit columns. Actor/Command live in the detail view, never the list."""
@@ -47,7 +53,7 @@ def render_audit_table(events: list[AuditEventDto]) -> None:
     for e in events:
         _, style, _ = get_status_style_and_label(e.action, False)
         # Plain-string cells parse Rich markup: sanitize + escape. Text() cells: sanitize.
-        number = safe_text(e.subject_case_number)
+        number = safe_text(subject_case_label(e.subject_case_number))
         if bp == "XS":
             rows.append(
                 [
@@ -74,7 +80,8 @@ def render_audit_table(events: list[AuditEventDto]) -> None:
     if events:
         from trace_core.core.ui.renderers import console
 
-        cases = len({e.subject_case_number for e in events})
+        # None is the absence of a case, not a case: it must not be counted as one.
+        cases = len({e.subject_case_number for e in events if e.subject_case_number is not None})
         actors = len({e.actor for e in events})
         if bp == "XS" and term_w < 60:
             console.print(f"[dim]Chain: {len(events)} events · run `trace audit verify` for integrity[/dim]\n")
@@ -337,7 +344,7 @@ def render_audit_detail(e: AuditEventDto) -> None:
         "AUDIT",
         f"#{e.seq}",
         action_title(e.action.value),
-        f"{sanitize_terminal(e.subject_case_number)} · {format_india_datetime(e.ts)}",
+        f"{sanitize_terminal(subject_case_label(e.subject_case_number))} · {format_india_datetime(e.ts)}",
     )
     console.print(
         create_key_value_grid(

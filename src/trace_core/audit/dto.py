@@ -8,22 +8,25 @@ from pydantic import Field
 from trace_core.audit.domain import ACTION_TITLES, AuditAction
 from trace_core.core.dto import BaseDto, BaseFilterDto
 
+_HASH_PATTERN = r"^[0-9a-f]{64}$"
+
 
 class AuditEventDto(BaseDto):
     seq: int
     ts: datetime
     action: AuditAction
     actor: str
-    subject_case_number: str
+    subject_type: str
+    subject_case_number: str | None
     subject_case_id: UUID | None = None
     payload_json: str
     # Lowercase-hex charset, not length alone: the verifier compares these with
     # case-sensitive hmac.compare_digest, so an uppercase value would fail as
     # "tampering" rather than as malformed input. This constraint used to live only
     # on AuditEvent, which nothing constructs, so it guarded no read path at all.
-    payload_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    prev_chain: str = Field(pattern=r"^[0-9a-f]{64}$")
-    chain_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    payload_hash: str = Field(pattern=_HASH_PATTERN)
+    prev_chain: str = Field(pattern=_HASH_PATTERN)
+    chain_hash: str = Field(pattern=_HASH_PATTERN)
     key_id: str | None = None
     signature: str | None = None
 

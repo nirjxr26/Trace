@@ -2993,3 +2993,83 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Files: `src/trace_core/core/errors.py`, `src/trace_core/core/domain.py`, `src/trace_core/core/database/session.py`, `src/trace_core/audit/anchor.py`, `src/trace_core/audit/domain.py`, `src/trace_core/cases/service.py`, `src/trace_core/cases/domain.py`, `src/trace_core/updates/service.py`, `src/trace_core/updates/policy.py`, `tests/unit/test_audit_ledger.py`, `tests/unit/test_security_regressions.py`, `CODE-AUDIT.md`, `changelog/nirjar/changelog.md`.
 
 - Verification: `ruff check src tests release` all checks passed; `mypy src` no issues in 100 source files; `pytest -q` 497 passed, 15 skipped (four new: chain-hash length refusal, oversized anchor refusal, query-string credential masking, UNKNOWN-free lifecycle message). No existing test modified or deleted; the duplicate-number path is still exercised by the existing create-path tests.
+
+## 2026-10-03
+
+- Summary: [D14] STEP 1 of Subpart 3 - the audit subject model, as migration 17. Every
+  `audit_events` row now carries an explicit `subject_type`, and `subject_case_number` is
+  nullable so a subject that is not a case can be recorded without inventing a pseudo-case
+  number. A device subject is therefore representable in the ledger, which is what STEP 12
+  needs and what the plan named as the one architectural blocker before STEP 7.
+
+  The vocabulary is the lowercase one `audit/events.py` already declared (`case`,
+  `evidence`, `report`, `device`, `system`), now promoted to module constants rather than
+  a comment. `AuditAction` member names stay uppercase and are a different axis: an action
+  is what happened, a subject is what it happened to. No second spelling was introduced.
+  `SqlAlchemyAuditRepository.append` takes `subject_type` as a required keyword and rejects
+  an unknown value, so a device event cannot be filed as a case by omission.
+
+  **`subject.type` was already being accepted and discarded.** `AuditService.record` took
+  a `Subject` and forwarded only `subject.number` and `subject.id` to `append()`. The type
+  was never missing from the domain; it was dropped at the persistence boundary. D14 stops
+  that discard rather than inventing a new concept.
+
+  **The canonical payload always carries the key.** For a non-case subject the value is
+  JSON `null`, never an omitted key. Omitting it would have given case and non-case events
+  different payload shapes, so every stored hash would depend on the subject type. Existing
+  `CASE_*` payloads are byte-identical: same keys, same values, same hashes. A test pins
+  the exact key set so this cannot drift.
+
+  **Two renderer defects would have shipped silently.** `safe_text` is
+  `escape(sanitize_terminal(str(value)))`, so a NULL reaching it renders as the text
+  `None` - plausible-looking, wrong, and raising nothing. The case-cardinality set
+  `{e.subject_case_number for e in events}` also counted `None` as a distinct case and
+  inflated a reported statistic by one. Both are now explicit: `subject_case_label` renders
+  `(no case)`, and the cardinality set filters NULL. Tests assert the string `None` appears
+  nowhere in the output.
+
+  **Migration 17 drops the append-only triggers, backfills, and reinstalls them inside the
+  migration transaction.** The backfill cannot run otherwise - the trigger blocks its own
+  UPDATE. Unlike `_safe_nested_execute`, which swallows failures, the backfill is allowed
+  to raise: a silent failure would leave rows unlabelled on a NOT NULL column. The verifier
+  re-checks trigger survival, so a reinstall that silently did nothing fails the migration
+  and rolls back rather than recording a lie.
+
+  **SQLite cannot `DROP NOT NULL`, so the table is rebuilt** from the current model DDL.
+  Existing index DDL is captured from `sqlite_master` and recreated verbatim; all rows are
+  copied; the append-only triggers are reinstalled by the caller. PostgreSQL takes the
+  ordinary path: `DROP NOT NULL` plus `SET NOT NULL` on the new column.
+
+  **The backfill touches only the new column.** No payload is rewritten and no hash changes;
+  a test compares `payload_json`, `payload_hash`, `prev_chain` and `chain_hash` before and
+  after and requires byte equality, on both backends.
+
+- Interpretation: `§12.1` named four readers and one of them, `audit recovery`, does not
+  exist. The audit surface is `show`, `verify`, `export`, `decrypt`, `keys init/rotate/list`,
+  and `trace recovery` is the *update* lifecycle, which touches no `audit_events` code. The
+  fourth reader is `audit decrypt`, and the round-trip is now tested through a real sealed
+  bundle.
+
+  `audit verify` turned out to be structurally immune: `verifier.py` recomputes from
+  `payload_json` and never reads the column. The column change cannot break it, but the
+  *payload* could have, which is why the test pins the key rather than the outcome.
+
+- Files: `audit/events.py`, `audit/domain.py`, `audit/models.py`, `audit/dto.py`,
+  `audit/repository.py`, `audit/service.py`, `audit/builder.py`, `audit/renderers.py`,
+  `core/database/migrations.py`, `tests/unit/test_audit_subject_model.py`,
+  `tests/unit/test_migration_017.py`, `tests/integration/test_postgres.py`,
+  `tests/unit/test_audit_ledger.py`, `tests/unit/test_security_regressions.py`,
+  `tests/updates/test_lifecycle_gates.py`.
+
+- Not done, deliberately: no device audit integration. `trace devices` still does not exist,
+  and no `DEVICE_*` event can be written until STEP 12. `builder._subject_device` exists so
+  STEP 12 has the constructor, and nothing calls it.
+
+- Also fixed while here, not part of D14: `tests/updates/test_lifecycle_gates.py` registered
+  a probe migration at a hardcoded version 17 and cleaned up by popping that version from
+  `MIGRATION_VERIFIERS`. With a real migration 17 present, the registration collided and the
+  cleanup would have deleted the real verifier. Both are now derived from
+  `len(MIGRATIONS) + 1`, so the probe can neither collide with nor erase a shipped
+  migration again.
+
+- Verification: gate run recorded with this commit.

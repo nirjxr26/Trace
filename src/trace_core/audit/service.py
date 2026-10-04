@@ -72,12 +72,14 @@ class AuditService(BaseService):
                 ctx_obj = Context(
                     host=ctx_obj.host,
                     trace_version=ctx_obj.trace_version,
-                    command=f"{action.value} {subject.number}",
+                    command=f"{action.value} {subject.number or ''}".rstrip(),
                     os_user=ctx_obj.os_user,
                     session_id=ctx_obj.session_id,
                 )
         merged = merge_details_context(details or {}, ctx_obj)
-        return SqlAlchemyAuditRepository(session).append(action, actor, subject.number, subject.id, merged)
+        return SqlAlchemyAuditRepository(session).append(
+            action, actor, subject.number, subject.id, merged, subject_type=subject.type
+        )
 
     def get_by_seq(self, seq: int):  # type: ignore[no-untyped-def]
         if seq < 1:

@@ -97,12 +97,14 @@ def test_waiver_recorded_on_advancing_schema(session_manager, signed_release, re
     meta = MetaData()
     Table("waiver_probe", meta, Column("id", Integer, primary_key=True))
 
-    @mig_mod.register_migration(17, "017_test_waiver_probe", operations=("create_all:waiver_probe",))
+    probe_version = len(mig_mod.MIGRATIONS) + 1
+
+    @mig_mod.register_migration(probe_version, "017_test_waiver_probe", operations=("create_all:waiver_probe",))
     def _probe(bind):
         meta.create_all(bind=bind)
 
     try:
-        manifest, _, art_path, _ = signed_release(schema_min=1, schema_target=17, backup_waiver="lab device")
+        manifest, _, art_path, _ = signed_release(schema_min=1, schema_target=probe_version, backup_waiver="lab device")
         svc = UpdateService(session_manager)
         dto = UpdateLifecycle("tx-gate-7", svc).run(manifest, art_path)
         assert dto.result == "SUCCESS"
@@ -110,8 +112,8 @@ def test_waiver_recorded_on_advancing_schema(session_manager, signed_release, re
         assert "lab device" in dto.override_reason
     finally:
         mig_mod.MIGRATIONS[:] = [m for m in mig_mod.MIGRATIONS if m[1] != "017_test_waiver_probe"]
-        mig_mod.MIGRATION_VERIFIERS.pop(17, None)
-        mig_mod.MIGRATION_OPERATIONS.pop(17, None)
+        mig_mod.MIGRATION_VERIFIERS.pop(probe_version, None)
+        mig_mod.MIGRATION_OPERATIONS.pop(probe_version, None)
 
 
 def test_started_at_captured(session_manager, signed_release, release_keys, monkeypatch, tmp_path):
