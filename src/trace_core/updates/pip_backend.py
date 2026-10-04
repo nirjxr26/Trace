@@ -40,7 +40,7 @@ def _pip_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in _PIP_ENV_DENYLIST}
 
 
-_CREDENTIAL_URL_RE = re.compile(r"(?<=://)[^/\s@]+@")
+_CREDENTIAL_URL_RE = re.compile(r"(?<=://)[^/\s@]*+@")  # NOSONAR
 
 
 def _redact(text: str) -> str:
