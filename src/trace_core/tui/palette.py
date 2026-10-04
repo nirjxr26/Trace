@@ -1,7 +1,5 @@
 """Command palette + key map overlay. Fuzzy engine reused from core completion."""
 
-from typing import TYPE_CHECKING
-
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Vertical
@@ -10,9 +8,6 @@ from textual.widgets import Input, Label, ListItem, ListView, Static
 
 from trace_core.core.cli.completion import filter_completions
 from trace_core.tui.forms import _BaseModal
-
-if TYPE_CHECKING:
-    pass
 
 _CONFIRM_HINT = "y/N confirm"
 

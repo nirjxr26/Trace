@@ -233,7 +233,7 @@ class CaseService(BaseService):
                 # The domain lowercases tags on validation; comparing the raw DTO list
                 # against the normalised entity value minted phantom "tags" diffs
                 # (e.g. --tags USB on a case holding usb) with before == after.
-                normalised_tags = sorted(set(t.strip().lower() for t in dto.tags if t.strip()))
+                normalised_tags = sorted({t.strip().lower() for t in dto.tags if t.strip()})
                 if normalised_tags != sorted(set(case.tags)):
                     changed.append("tags")
                     case.tags = list(normalised_tags)

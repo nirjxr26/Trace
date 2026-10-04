@@ -717,13 +717,15 @@ def render_entity_panel(
     if sections:
         for sec_title, sec_content in sections:
             if sec_content:
-                elements.append(Text(""))
-                elements.append(
-                    Rule(
-                        title=f"[{THEME_TOKENS['section_title']}] {sec_title} [/{THEME_TOKENS['section_title']}]",
-                        characters="-",
-                        style=THEME_TOKENS["border_primary"],
-                    )
+                elements.extend(
+                    [
+                        Text(""),
+                        Rule(
+                            title=f"[{THEME_TOKENS['section_title']}] {sec_title} [/{THEME_TOKENS['section_title']}]",
+                            characters="-",
+                            style=THEME_TOKENS["border_primary"],
+                        ),
+                    ]
                 )
                 elements.append(Text(sec_content, style=THEME_TOKENS["value"]))
 

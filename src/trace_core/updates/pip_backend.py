@@ -40,7 +40,7 @@ def _pip_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in _PIP_ENV_DENYLIST}
 
 
-_CREDENTIAL_URL_RE = re.compile(r"(?<=://)[^/\s@]++@")
+_CREDENTIAL_URL_RE = re.compile(r"(://)[^/\s@]+@")
 
 
 def _redact(text: str) -> str:
@@ -48,7 +48,7 @@ def _redact(text: str) -> str:
 
     Applied before truncation so a sliced-off password cannot survive as a fragment.
     """
-    return _CREDENTIAL_URL_RE.sub("", text)
+    return _CREDENTIAL_URL_RE.sub(r"\1", text)
 
 
 def venv_python() -> Path | None:

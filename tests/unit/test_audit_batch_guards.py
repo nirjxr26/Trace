@@ -67,8 +67,10 @@ def test_concurrency_conflict_reports_its_own_exit_code():
     duplicate record, so it must not share EXIT_ERROR with one."""
     concurrency = _typed_error(ConcurrencyConflictError("Case", "2026-CR-0001", 3, 4), None, None)
     duplicate = _typed_error(ConflictError("Case", "number", "2026-CR-0001"), None, None)
-    assert concurrency is not None and concurrency[3] == EXIT_CONFLICT
-    assert duplicate is not None and duplicate[3] == EXIT_ERROR
+    assert concurrency is not None
+    assert concurrency[3] == EXIT_CONFLICT
+    assert duplicate is not None
+    assert duplicate[3] == EXIT_ERROR
     assert concurrency[3] != duplicate[3]
 
 

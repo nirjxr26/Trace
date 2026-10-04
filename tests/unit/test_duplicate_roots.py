@@ -68,17 +68,18 @@ def test_lock_path_is_derived_from_the_same_helper():
 
 def test_duplicate_migration_version_is_refused_at_registration():
     existing_version, existing_name = mig.MIGRATIONS[2][0], mig.MIGRATIONS[2][1]
+
+    def _dup_version(bind):  # type: ignore[no-untyped-def]
+        pass
+
+    def _dup_name(bind):  # type: ignore[no-untyped-def]
+        pass
+
     with pytest.raises(RuntimeError, match="duplicate migration"):
-
-        @mig.register_migration(existing_version, "a_completely_new_name", operations=("probe",))
-        def _dup_version(bind):  # type: ignore[no-untyped-def]
-            pass
+        mig.register_migration(existing_version, "a_completely_new_name", operations=("probe",))(_dup_version)
 
     with pytest.raises(RuntimeError, match="duplicate migration"):
-
-        @mig.register_migration(999, existing_name, operations=("probe",))
-        def _dup_name(bind):  # type: ignore[no-untyped-def]
-            pass
+        mig.register_migration(999, existing_name, operations=("probe",))(_dup_name)
 
 
 def test_a_fresh_version_and_name_are_accepted_and_leave_no_residue():

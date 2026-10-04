@@ -59,7 +59,8 @@ async def test_tui_pilot_flow(seeded_manager: DatabaseSessionManager) -> None:
         await pilot.pause()
         shot = app.export_screenshot()
         assert "2026-CR-" in shot
-        assert "Case" in shot and "Status" in shot
+        assert "Case" in shot
+        assert "Status" in shot
         assert "─" in shot
 
         await pilot.press("down")

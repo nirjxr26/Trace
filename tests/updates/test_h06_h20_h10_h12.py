@@ -11,7 +11,7 @@ import urllib.request
 import pytest
 
 from trace_core.updates import sources
-from trace_core.updates.errors import UpdateNetworkError
+from trace_core.updates.errors import UpdateError, UpdateNetworkError
 
 
 def _response(body: bytes = b"") -> object:
@@ -305,5 +305,5 @@ def test_h10_urllib_error_still_propagates(tmp_path, monkeypatch) -> None:  # ty
 
     monkeypatch.setattr(sources.urllib.request, "build_opener", lambda *_a, **_k: _Opener())
     monkeypatch.setattr(sources, "_validate_manifest_url", lambda _u: None)
-    with pytest.raises(Exception):
+    with pytest.raises(UpdateError, match="boom"):
         sources.stream_artifact_to_file("https://example.test/base", "a.whl", dest, max_bytes=1 << 20)

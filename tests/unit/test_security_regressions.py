@@ -307,7 +307,9 @@ def test_key_pointer_written_last_and_durably(temp_storage_root: DatabaseSession
     pub = signing._keystore_dir() / f"{key_id.removeprefix(signing.ED25519_PREFIX)}.pub"
     pointer = signing._active_pointer()
 
-    assert priv.exists() and pub.exists() and pointer.exists()
+    assert priv.exists()
+    assert pub.exists()
+    assert pointer.exists()
     # Every artefact is durable before the pointer that names it.
     assert signing.active_key_id() == key_id
 

@@ -28,6 +28,8 @@ esac
 
 trap '[ -n "$TRACE_BG_PID" ] && kill "$TRACE_BG_PID" 2>/dev/null; true' EXIT HUP INT TERM
 TRACE_CURRENT_LABEL=""
+PHASE_SOURCE="source"
+PHASE_DEPENDENCIES="dependencies"
 TRACE_HOME="${HOME}/.trace"
 TRACE_INSTALL_LOG="${TRACE_HOME}/install.log"
 TRACE_DISPLAY_VERSION=""
@@ -103,7 +105,8 @@ trace_bar_for() {
 }
 
 trace_draw() {
-  trace_bar_for "$1"
+  local pct="$1"
+  trace_bar_for "$pct"
   TRACE_VER="${TRACE_DISPLAY_VERSION:-install}"
   if [ "$VERBOSE" = "1" ]; then
     return 0
@@ -114,16 +117,16 @@ trace_draw() {
       printf '\033[1;32m%s\033[0m\n' "Downloading Trace $TRACE_VER..."
       printf '\n'
     fi
-    printf '\r\033[1;32m[%s] %s%%   \033[0m' "$TRACE_BAR" "$1"
+    printf '\r\033[1;32m[%s] %s%%   \033[0m' "$TRACE_BAR" "$pct"
   else
-    if [ "$1" = "100" ]; then
+    if [ "$pct" = "100" ]; then
       if [ "$TRACE_DOWNLOAD_SHOWN" = "1" ]; then
         return 0
       fi
       TRACE_DOWNLOAD_SHOWN=1
       printf '%s\n' "Downloading Trace $TRACE_VER..."
       printf '\n'
-      printf '[%s] %s%%\n' "$TRACE_BAR" "$1"
+      printf '[%s] %s%%\n' "$TRACE_BAR" "$pct"
       printf '\n'
     fi
   fi
@@ -312,14 +315,12 @@ trace_do_uninstall() {
   if [ -n "${REPO_ROOT:-}" ] && [ -f "${REPO_ROOT}/.env" ]; then
     TRACE_ENV_FILE="${REPO_ROOT}/.env"
   fi
-  if [ "$TRACE_PURGE_DATA" = "1" ]; then
-    if [ -t 0 ]; then
-      printf "Remove storage and config? Database server is kept. Confirm y/N: "
-      read TRACE_CONFIRM
-      if [ "$TRACE_CONFIRM" != "y" ] && [ "$TRACE_CONFIRM" != "Y" ]; then
-        printf "Cancelled.\n"
-        exit 0
-      fi
+  if [ "$TRACE_PURGE_DATA" = "1" ] && [ -t 0 ]; then
+    printf "Remove storage and config? Database server is kept. Confirm y/N: "
+    read TRACE_CONFIRM
+    if [ "$TRACE_CONFIRM" != "y" ] && [ "$TRACE_CONFIRM" != "Y" ]; then
+      printf "Cancelled.\n"
+      exit 0
     fi
   fi
   rm -f "$TRACE_SHIM" 2>/dev/null || true
@@ -446,11 +447,11 @@ else
                 { echo '#!/usr/bin/env sh'; echo 'exec printf "%s" "$TRACE_GIT_TOKEN"'; } > "$ASKPASS_FILE"
                 chmod 700 "$ASKPASS_FILE"
                 TRACE_GIT_TOKEN="$TOKEN" GIT_ASKPASS="$ASKPASS_FILE" GIT_TERMINAL_PROMPT=0 \
-                    git clone --depth 1 --branch "$TRACE_REF" https://github.com/nirjxr26/Trace.git "$REPO_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "source"
+                    git clone --depth 1 --branch "$TRACE_REF" https://github.com/nirjxr26/Trace.git "$REPO_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
                 rm -f "$ASKPASS_FILE"
                 unset TRACE_GIT_TOKEN
             else
-                git clone --depth 1 --branch "$TRACE_REF" https://github.com/nirjxr26/Trace.git "$REPO_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "source"
+                git clone --depth 1 --branch "$TRACE_REF" https://github.com/nirjxr26/Trace.git "$REPO_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
             fi
         else
             trace_say "Downloading repository archive..."
@@ -463,9 +464,9 @@ else
                 fi
                 ARCHIVE_FILE="$(mktemp)"
                 if [ -n "$AUTH_HEADER" ]; then
-                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -H "$AUTH_HEADER" -o "$ARCHIVE_FILE" "$ARCHIVE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "source"
+                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -H "$AUTH_HEADER" -o "$ARCHIVE_FILE" "$ARCHIVE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
                 else
-                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$ARCHIVE_FILE" "$ARCHIVE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "source"
+                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$ARCHIVE_FILE" "$ARCHIVE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
                 fi
                 ACTUAL_SHA="$(sha256sum "$ARCHIVE_FILE" | cut -d' ' -f1)"
                 if [ "$ACTUAL_SHA" != "$TRACE_RELEASE_SHA256" ]; then
@@ -474,21 +475,21 @@ else
                     exit 1
                 fi
                 if [ -n "${TRACE_COSIGN_BUNDLE_URL:-}" ] && command -v cosign >/dev/null 2>&1; then
-                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "${ARCHIVE_FILE}.sigstore.json" "$TRACE_COSIGN_BUNDLE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "source"
+                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "${ARCHIVE_FILE}.sigstore.json" "$TRACE_COSIGN_BUNDLE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
                     cosign verify-blob --bundle "${ARCHIVE_FILE}.sigstore.json" \
                         --certificate-identity "${TRACE_COSIGN_IDENTITY:?set TRACE_COSIGN_IDENTITY}" \
                         --certificate-oidc-issuer "${TRACE_COSIGN_OIDC_ISSUER:-https://token.actions.githubusercontent.com}" \
-                        "$ARCHIVE_FILE" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "source"
+                        "$ARCHIVE_FILE" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
                     rm -f "${ARCHIVE_FILE}.sigstore.json"
                 fi
-                tar -xz --strip-components=1 -C "$REPO_ROOT" -f "$ARCHIVE_FILE" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "source"
+                tar -xz --strip-components=1 -C "$REPO_ROOT" -f "$ARCHIVE_FILE" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
                 rm -f "$ARCHIVE_FILE"
             else
                 trace_say "  [!] No TRACE_RELEASE_SHA256 pinned: installing unverified $TRACE_REF."
                 if [ -n "$AUTH_HEADER" ]; then
-                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -H "$AUTH_HEADER" "$ARCHIVE_URL" 2>>"$TRACE_INSTALL_LOG" | tar -xz --strip-components=1 -C "$REPO_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "source"
+                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -H "$AUTH_HEADER" "$ARCHIVE_URL" 2>>"$TRACE_INSTALL_LOG" | tar -xz --strip-components=1 -C "$REPO_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
                 else
-                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL "$ARCHIVE_URL" 2>>"$TRACE_INSTALL_LOG" | tar -xz --strip-components=1 -C "$REPO_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "source"
+                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL "$ARCHIVE_URL" 2>>"$TRACE_INSTALL_LOG" | tar -xz --strip-components=1 -C "$REPO_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
                 fi
             fi
         fi
@@ -502,14 +503,14 @@ fi
 if [ "$TRACE_REINSTALL" = "1" ]; then
   case "$REPO_ROOT" in
     "${HOME}/.trace/app")
-      rm -rf "$REPO_ROOT" 2>>"$TRACE_INSTALL_LOG" || trace_fail "source"
+      rm -rf "$REPO_ROOT" 2>>"$TRACE_INSTALL_LOG" || trace_fail "$PHASE_SOURCE"
       ;;
     *)
       if [ -d "$REPO_ROOT/.venv" ]; then
         rm -rf "$REPO_ROOT/.venv" 2>>"$TRACE_INSTALL_LOG" || trace_fail "venv"
       fi
       if [ -d "${HOME}/.trace/app" ]; then
-        rm -rf "${HOME}/.trace/app" 2>>"$TRACE_INSTALL_LOG" || trace_fail "source"
+        rm -rf "${HOME}/.trace/app" 2>>"$TRACE_INSTALL_LOG" || trace_fail "$PHASE_SOURCE"
       fi
       ;;
   esac
@@ -569,7 +570,7 @@ if [ -z "$FOUND_PYTHON" ]; then
     trace_fail "python"
 fi
 
-trace_phase "source"
+trace_phase "$PHASE_SOURCE"
 trace_say "Source ready at $REPO_ROOT"
 
 VENV_DIR="$SCRIPT_DIR/.venv"
@@ -588,14 +589,14 @@ else
     trace_say "  [OK] Existing virtual environment detected."
 fi
 
-trace_phase "dependencies"
+trace_phase "$PHASE_DEPENDENCIES"
 if [ "$VERBOSE" = "1" ]; then
   printf "[4/6] Installing locked dependencies...\n"
   printf "  Using pip with cryptographic hash verification...\n"
 fi
-trace_run_live 66 "$VENV_PYTHON" -m pip install --quiet "pip==26.2.1" || trace_fail "dependencies"
-trace_run_live 66 "$VENV_PYTHON" -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt || trace_fail "dependencies"
-trace_run_live 66 "$VENV_PYTHON" -m pip install --quiet --no-deps -e . || trace_fail "dependencies"
+trace_run_live 66 "$VENV_PYTHON" -m pip install --quiet "pip==26.2.1" || trace_fail "$PHASE_DEPENDENCIES"
+trace_run_live 66 "$VENV_PYTHON" -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt || trace_fail "$PHASE_DEPENDENCIES"
+trace_run_live 66 "$VENV_PYTHON" -m pip install --quiet --no-deps -e . || trace_fail "$PHASE_DEPENDENCIES"
 trace_say "  [OK] Dependencies installed successfully."
 
 trace_phase "config"

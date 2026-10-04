@@ -49,23 +49,20 @@ if ($env:TRACE_VERBOSE -eq "1") {
 
 function Write-TraceLog {
     param([string]$Text)
-    try {
-        Add-Content -Path $InstallLog -Value $Text -ErrorAction SilentlyContinue
-    } catch {
-    }
+    Add-Content -Path $InstallLog -Value $Text -ErrorAction SilentlyContinue
 }
 
 function Show-TraceUsage {
-    Write-Host "Usage: install.ps1 [--version <tag>] [--list-versions] [--reinstall] [--uninstall [--purge-data]] [--verbose] [--help]"
-    Write-Host ""
-    Write-Host "  (none)              Quiet install of main (or TRACE_REF when set)"
-    Write-Host "  --version <tag>     Install that release instead"
-    Write-Host "  --list-versions     List releases; TTY offers pick-and-install"
-    Write-Host "  --reinstall         Wipe app code first, then install"
-    Write-Host "  --uninstall         Remove launcher + app + config; keeps storage and database"
-    Write-Host "  --uninstall --purge-data  Also remove storage; confirms first"
-    Write-Host "  --verbose           Full step-by-step output"
-    Write-Host "  --help              Usage; exit 0"
+    Write-Output "Usage: install.ps1 [--version <tag>] [--list-versions] [--reinstall] [--uninstall [--purge-data]] [--verbose] [--help]"
+    Write-Output ""
+    Write-Output "  (none)              Quiet install of main (or TRACE_REF when set)"
+    Write-Output "  --version <tag>     Install that release instead"
+    Write-Output "  --list-versions     List releases; TTY offers pick-and-install"
+    Write-Output "  --reinstall         Wipe app code first, then install"
+    Write-Output "  --uninstall         Remove launcher + app + config; keeps storage and database"
+    Write-Output "  --uninstall --purge-data  Also remove storage; confirms first"
+    Write-Output "  --verbose           Full step-by-step output"
+    Write-Output "  --help              Usage; exit 0"
 }
 
 function Get-TraceBar {
@@ -90,21 +87,21 @@ function Show-Bar {
             return
         }
         $script:DownloadShown = 1
-        Write-Host ("Downloading Trace {0}..." -f $ver)
-        Write-Host ""
-        Write-Host (("[{0}] 100%" -f $bar))
-        Write-Host ""
+        Write-Output ("Downloading Trace {0}..." -f $ver)
+        Write-Output ""
+        Write-Output (("[{0}] 100%" -f $bar))
+        Write-Output ""
         return
     }
     if ($script:DownloadShown -eq 0) {
         $script:DownloadShown = 1
         Write-Host ("Downloading Trace {0}..." -f $ver) -ForegroundColor Green
-        Write-Host ""
+        Write-Output ""
     }
     Write-Host -NoNewline ("`r[{0}] {1}%   " -f $bar, $Pct) -ForegroundColor Green
     if ($Pct -eq 100) {
-        Write-Host ""
-        Write-Host ""
+        Write-Output ""
+        Write-Output ""
     }
 }
 
@@ -151,7 +148,7 @@ function Step-TracePhase {
 function Write-Trace {
     param([string]$Text)
     if ($VerboseMode) {
-        Write-Host $Text
+        Write-Output $Text
     }
     Write-TraceLog $Text
 }
@@ -160,7 +157,7 @@ function Write-TempLog {
     param([string]$Tmp)
     Get-Content -Path $Tmp -ErrorAction SilentlyContinue | ForEach-Object { Write-TraceLog $_ }
     if ($VerboseMode) {
-        Get-Content -Path $Tmp -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+        Get-Content -Path $Tmp -ErrorAction SilentlyContinue | ForEach-Object { Write-Output $_ }
     }
 }
 
@@ -215,8 +212,8 @@ function Invoke-LiveCommand {
             throw "exit code 1"
         }
     } finally {
-        try { Stop-Job $job -ErrorAction SilentlyContinue } catch { }
-        try { Remove-Job $job -Force -ErrorAction SilentlyContinue } catch { }
+        Stop-Job $job -ErrorAction SilentlyContinue
+        Remove-Job $job -Force -ErrorAction SilentlyContinue
         Remove-Item -Force $tmp -ErrorAction SilentlyContinue
     }
     Step-To $Target
@@ -225,17 +222,11 @@ function Invoke-LiveCommand {
 function Stop-TraceInstall {
     param([string]$Step)
     if ((-not [Console]::IsOutputRedirected) -and (-not $VerboseMode)) {
-        Write-Host ""
+        Write-Output ""
     }
-    try {
-        Write-Progress -Activity "Installing Trace" -Completed -ErrorAction SilentlyContinue
-    } catch {
-    }
+    Write-Progress -Activity "Installing Trace" -Completed -ErrorAction SilentlyContinue
     Write-Host "Install failed at '$Step' - see $InstallLog" -ForegroundColor Red
-    try {
-        Get-Content -Path $InstallLog -Tail 12 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
-    } catch {
-    }
+    Get-Content -Path $InstallLog -Tail 12 -ErrorAction SilentlyContinue | ForEach-Object { Write-Output $_ }
     exit 1
 }
 
@@ -244,14 +235,14 @@ function Show-Success {
     $tick = [string]([char]0x2713)
     $isTty = -not [Console]::IsOutputRedirected
     if ($isTty -and -not $VerboseMode) {
-        Write-Host ""
+        Write-Output ""
     }
     if ($isTty) {
         Write-Host ("{0} Installation complete" -f $tick) -ForegroundColor Green
         Write-Host ("Trace {0} installed successfully." -f $Ver) -ForegroundColor Green
     } else {
-        Write-Host "Installation complete"
-        Write-Host ("Trace {0} installed successfully." -f $Ver)
+        Write-Output "Installation complete"
+        Write-Output ("Trace {0} installed successfully." -f $Ver)
     }
 }
 
@@ -278,22 +269,22 @@ function Show-ReleaseList {
     try {
         $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/nirjxr26/Trace/releases?per_page=20" -ErrorAction Stop
     } catch {
-        Write-Host "Could not list releases (offline?). Try --version vX.Y.Z explicitly."
+        Write-Output "Could not list releases (offline?). Try --version vX.Y.Z explicitly."
         exit 1
     }
     $tags = @($releases | ForEach-Object { $_.tag_name } | Where-Object { $_ })
     if ($tags.Count -eq 0) {
-        Write-Host "No releases found. Try --version vX.Y.Z explicitly."
+        Write-Output "No releases found. Try --version vX.Y.Z explicitly."
         exit 0
     }
     $isTty = -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
     if (-not $isTty) {
-        $tags | ForEach-Object { Write-Host $_ }
+        $tags | ForEach-Object { Write-Output $_ }
         exit 0
     }
-    Write-Host "Available releases:"
+    Write-Output "Available releases:"
     for ($i = 0; $i -lt $tags.Count; $i++) {
-        Write-Host ("  [{0}] {1}" -f ($i + 1), $tags[$i])
+        Write-Output ("  [{0}] {1}" -f ($i + 1), $tags[$i])
     }
     $pick = Read-Host "Enter number to install (empty to exit)"
     if ([string]::IsNullOrWhiteSpace($pick)) {
@@ -328,7 +319,7 @@ function Uninstall-TraceApp {
     if ([bool]$PurgeData) {
         $confirm = Read-Host "Remove storage and config? Database server is kept. Confirm y/N"
         if ($confirm -ne "y" -and $confirm -ne "Y") {
-            Write-Host "Cancelled."
+            Write-Output "Cancelled."
             exit 0
         }
     }
@@ -346,11 +337,11 @@ function Uninstall-TraceApp {
     if ([bool]$PurgeData) {
         Remove-Item -Recurse -Force (Join-Path $Home ".trace\trust") -ErrorAction SilentlyContinue
         Remove-Item -Recurse -Force (Join-Path $Home ".trace\storage") -ErrorAction SilentlyContinue
-        Write-Host "Removed launcher, app, config, trust, storage."
-        Write-Host "Kept: PostgreSQL server. To drop data run: DROP DATABASE trace;"
+        Write-Output "Removed launcher, app, config, trust, storage."
+        Write-Output "Kept: PostgreSQL server. To drop data run: DROP DATABASE trace;"
     } else {
-        Write-Host "Removed launcher, app, config."
-        Write-Host "Kept: storage (~/.trace/storage), trust keys, PostgreSQL database."
+        Write-Output "Removed launcher, app, config."
+        Write-Output "Kept: storage (~/.trace/storage), trust keys, PostgreSQL database."
     }
     exit 0
 }
@@ -360,11 +351,8 @@ if ([bool]$Help) {
     exit 0
 }
 
-try {
-    New-Item -ItemType Directory -Force -Path $TraceHomeDir | Out-Null
-    "" | Add-Content -Path $InstallLog -ErrorAction SilentlyContinue
-} catch {
-}
+New-Item -ItemType Directory -Force -Path $TraceHomeDir -ErrorAction SilentlyContinue | Out-Null
+"" | Add-Content -Path $InstallLog -ErrorAction SilentlyContinue
 
 Write-TraceLog ("install started verbose={0} reinstall={1} uninstall={2}" -f $VerboseMode, [bool]$Reinstall, [bool]$Uninstall)
 

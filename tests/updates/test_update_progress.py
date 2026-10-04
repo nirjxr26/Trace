@@ -83,7 +83,8 @@ def test_on_bytes_reports_cumulative(serve, tmp_path):
     seen = []
     stream_artifact_to_file(base, "pkg.bin", dest, len(body) + 1, timeout=10.0, on_bytes=seen.append)
     assert dest.read_bytes() == body
-    assert seen and seen[-1] == len(body)
+    assert seen
+    assert seen[-1] == len(body)
     assert all(b >= a for a, b in zip(seen, seen[1:]))
 
 

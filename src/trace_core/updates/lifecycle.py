@@ -223,9 +223,6 @@ class UpdateLifecycle:
         staging_dir: Path,
         staged: Path,
         manifest: ReleaseManifest,
-        channel: str,
-        current: str,
-        started_at: datetime,
     ) -> None:
         from trace_core.core.fs import sha256_file
         from trace_core.updates import staging as staging_mod
@@ -346,7 +343,7 @@ class UpdateLifecycle:
             self.transition(UpdateState.DOWNLOADING)
             staged = self._download_stage(manifest, artifact_path, staging_dir)
             progress.on_stage(Stage.VERIFY, StageStatus.ACTIVE)
-            self._assert_verified_stage(staging_dir, staged, manifest, channel, current, started_at)
+            self._assert_verified_stage(staging_dir, staged, manifest)
             progress.on_stage(Stage.VERIFY, StageStatus.DONE)
             self.transition(UpdateState.STAGED)
             self.transition(UpdateState.INSTALLING)

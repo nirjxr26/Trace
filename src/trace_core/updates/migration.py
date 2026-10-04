@@ -17,6 +17,7 @@ from trace_core.updates.errors import (
 _PG_RESTORE_TIMEOUT_SECONDS = 600
 _PG_BACKUP_TIMEOUT_SECONDS = 300
 _BACKUP_FAILED = "database backup failed"
+BACKUP_PATH_REFUSED = "backup path refused; cannot restore"
 
 
 def migration_marker_path() -> Path:
@@ -117,9 +118,9 @@ def _confine_backup_path(backup_path: str | Path) -> Path:
         roots = [Path(settings.storage_root).resolve(), Path(settings.storage_root).parent.resolve()]
         resolved = Path(backup_path).resolve()
     except OSError:
-        raise RecoveryError("backup path refused; cannot restore") from None
+        raise RecoveryError(BACKUP_PATH_REFUSED) from None
     if not any(resolved == root or root in resolved.parents for root in roots):
-        raise RecoveryError("backup path refused; cannot restore")
+        raise RecoveryError(BACKUP_PATH_REFUSED)
     return resolved
 
 
@@ -168,7 +169,7 @@ def restore_backup(backup_path: str | Path, manager: DatabaseSessionManager) -> 
         fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         os.close(fd)
     except OSError as e:
-        raise RecoveryError("backup path refused; cannot restore") from e
+        raise RecoveryError(BACKUP_PATH_REFUSED) from e
     live = sqlite_file_path(url)
     if live is not None:
         if manager._engine is not None:

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -38,10 +39,6 @@ def test_no_fallback_to_database_url_in_code() -> None:
     assert "TRACE_DATABASE_URL" not in code, "the fallback must not come back"
 
 
-def test_unset_environment_skips_rather_than_fails() -> None:
-    saved = os.environ.pop("TRACE_TEST_POSTGRES_URL", None)
-    try:
-        assert pg.get_postgres_url() is None
-    finally:
-        if saved is not None:
-            os.environ["TRACE_TEST_POSTGRES_URL"] = saved
+def test_unset_environment_skips_rather_than_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TRACE_TEST_POSTGRES_URL", raising=False)
+    assert pg.get_postgres_url() is None

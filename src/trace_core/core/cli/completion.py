@@ -64,6 +64,28 @@ def _distinct_terms(values: Iterable[Any], label: str, limit: int) -> list[tuple
     return [(t, f"{label} · {t}") for t in terms][:limit]
 
 
+def _fuzzy_in_order(s: str, q: str) -> bool:
+    it = iter(s.lower())
+    return all(ch in it for ch in q)
+
+
+def _swapped_variants(q: str) -> list[str]:
+    chars = list(q)
+    variants = {"".join(chars[:i] + [chars[i + 1], chars[i]] + chars[i + 2 :]) for i in range(len(chars) - 1)}
+    return sorted(variants)
+
+
+def _extend_with_transpositions(
+    candidates: list[tuple[str, str]], q: str, merged: list[tuple[str, str]], limit: int
+) -> None:
+    for variant in _swapped_variants(q):
+        for c in candidates:
+            if c not in merged and (c[0].lower().startswith(variant) or variant in c[0].lower()):
+                merged.append(c)
+                if len(merged) >= limit:
+                    return
+
+
 def filter_completions(candidates: list[tuple[str, str]], query: str, limit: int = 8) -> list[tuple[str, str]]:
     """Prefix → substring → fuzzy (contains) ranking, capped to 8. Pure, no DB."""
     if not query:
@@ -78,25 +100,10 @@ def filter_completions(candidates: list[tuple[str, str]], query: str, limit: int
         return merged[:limit]
 
     # fuzzy: all chars of query appear in order in candidate
-    def _fuzzy(s: str) -> bool:
-        it = iter(s.lower())
-        return all(ch in it for ch in q)
-
-    fuzzy = [c for c in candidates if _fuzzy(c[0]) and c not in merged]
+    fuzzy = [c for c in candidates if _fuzzy_in_order(c[0], q) and c not in merged]
     merged = (merged + fuzzy)[:limit]
     if len(merged) < limit and len(q) > 3:
-        swapped = set()
-        chars = list(q)
-        for i in range(len(chars) - 1):
-            swapped.add("".join(chars[:i] + [chars[i + 1], chars[i]] + chars[i + 2 :]))
-        for variant in sorted(swapped):
-            for c in candidates:
-                if c not in merged and (c[0].lower().startswith(variant) or variant in c[0].lower()):
-                    merged.append(c)
-                    if len(merged) >= limit:
-                        break
-            if len(merged) >= limit:
-                break
+        _extend_with_transpositions(candidates, q, merged, limit)
     return merged[:limit]
 
 

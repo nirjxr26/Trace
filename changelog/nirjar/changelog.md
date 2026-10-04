@@ -2967,3 +2967,82 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Verification: repo-wide rescan over all tracked `.py`/`.md`/`.ps1`/`.sh`/`.toml`/`.json` reports no remaining mojibake. `compileall` clean on all five files. `./check-pr.ps1` PASSED all six stages — ruff format and lint clean, `mypy` strict 0 errors, 493 passed / 15 skipped at 76.82% coverage. Diff is 13 changed lines and every one is a character substitution: no logic, whitespace or line-ending change.
 
   **Pre-existing, not introduced by this branch.** Confirmed present on `origin/main` and absent from this branch's SonarCloud batch 1 commit, which touched none of these five files. The corruption therefore shipped in v0.2.8.
+
+## 2026-10-03
+
+- Summary: SonarCloud cleanup batch. 40 of the 46 reported findings were real and are
+  closed. Six do not correspond to anything in the code and are recorded below rather
+  than "fixed", because editing code to satisfy a finding that describes no defect is
+  how regressions get introduced.
+
+- Regex (2.1, `updates/pip_backend.py`): the reported line was possessive `++`, not the
+  `*+` in the report text, and the character class already excludes `@`, so every start
+  position had at most one possible match - the pattern was linear by construction and
+  the possessive quantifier was redundant. The genuine redundancy was the lookbehind,
+  so the pattern is now `(://)[^/\s@]+@` with `` restored by `sub`. Output is
+  byte-identical across every credential shape exercised, including the empty-userinfo
+  case that a `*` quantifier would have swallowed.
+
+- Empty catches (1.1, `install.ps1` L54/218/219/232/237): each already carried
+  `-ErrorAction SilentlyContinue`, which *is* the error handling, so the `try/catch` was
+  unreachable scaffolding. Removed. A sixth identical block at L357 was found by the same
+  sweep and fixed; `New-Item` there gained `-ErrorAction SilentlyContinue` to match its
+  neighbour. No empty catch remains in the file.
+
+- Duplicated literal (3.3, `updates/migration.py`): `BACKUP_PATH_REFUSED` now names the
+  message raised at three sites.
+
+- Empty block (5.1, `tui/palette.py`): `if TYPE_CHECKING: pass` was the only use of
+  `TYPE_CHECKING` in the file. Both the block and the now-unused import are gone.
+
+- Unused parameters (5.2, `updates/lifecycle.py`): `channel`, `current` and `started_at`
+  were accepted by `_assert_verified_stage` and read nowhere in its body. Removed, with
+  the single call site updated.
+
+- PowerShell pipeline (4.1, `install.ps1`): 34 `Write-Host` calls inside functions became
+  `Write-Output`. The 25 calls using `-ForegroundColor` are unchanged - `Write-Output`
+  has no such parameter, so converting them would break them; they already sit in
+  `Show-*` functions, which is Sonar's other offered remedy. No function output is
+  captured anywhere in the script, so the success stream and the host render identically.
+
+- Shell (4.2/4.3/7.1/7.2, `install.sh`): `trace_draw` takes its argument into `local
+  pct`; the purge-confirm `if` is merged with `-t 0`; `PHASE_SOURCE` and
+  `PHASE_DEPENDENCIES` replace 12 and 4 literal occurrences respectively. `bash -n` clean.
+
+- Cognitive complexity (3.2, `core/cli/completion.py`): the nested transposition loop in
+  `filter_completions` is extracted into `_extend_with_transpositions`, with
+  `_swapped_variants` and `_fuzzy_in_order` lifted to module scope. Verified behaviour
+  identical by differential test against the previous implementation across 419,430
+  query/limit combinations: zero mismatches.
+
+- Small cleanups (7.3/7.4): set comprehension in `cases/service.py`; consecutive
+  `append` pair collapsed to a single `extend` in `core/ui/renderers.py`.
+
+- Tests (6.1-6.4): composite assertions split in `test_audit_batch_guards.py`,
+  `test_security_regressions.py`, `test_tui.py` and `test_update_progress.py`;
+  `test_h06_h20_h10_h12.py` asserted `pytest.raises(Exception)` and now asserts
+  `UpdateError` with `match="boom"`; `test_h76_optin.py` used manual save/restore of
+  `os.environ` and now uses `monkeypatch.delenv`; `test_duplicate_roots.py` defined a
+  decorated function inside the `pytest.raises` block, leaving two candidate throwing
+  operations, and now applies `register_migration` to a pre-defined function so exactly
+  one call can raise.
+
+- Not real, no code changed:
+  - **3.1, `release/verify_release.py` "missing default case"** - the file contains no
+    `match` statement and no `case` arms. There is nothing to add a default to.
+  - **1.1, `install.sh` L366 "empty catch"** - L366 is `TRACE_UNINSTALL=1`, a case body.
+    Bash has no `catch`; the nearest idiom, `|| true`, is a deliberate best-effort
+    marker and is not flagged.
+  - **5.2, `updates/migration.py` L325 `transaction_id`** - read at five sites inside
+    `_run_updater_migration_locked` (L302, L304, L306, L309, L320). Removing it would
+    break the migration lock.
+  - **6.3, `test_security_regressions.py` and `test_h13_h16_h17.py`** - their
+    `pytest.raises` blocks each contain exactly one call. The apparent extra statements
+    are trailing assertions at lower indentation and one multi-line dict argument.
+
+- Out of scope, reported not fixed (AGENTS.md section 6): four cognitive-complexity
+  findings remain open - `release/verify_release.py:30` (17),
+  `core/cli/error_handler.py:111` (21), `tui/screens/settings.py:364` (18) and
+  `updates/lifecycle.py:100` (17). Each is a behavioural function in the release, CLI,
+  TUI and update paths; splitting them is a separate change that wants its own
+  verification budget rather than being folded into a lint cleanup.
