@@ -17,6 +17,8 @@ param (
 
 $ErrorActionPreference = "Stop"
 
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
 foreach ($rawArg in $args) {
     if ($rawArg -match '^--version=(.+)$') {
         $Version = $Matches[1]

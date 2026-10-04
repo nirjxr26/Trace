@@ -1395,6 +1395,13 @@ def test_installer_never_trusts_a_channel_supplied_key_id(installer: str) -> Non
         assert derived in line, f"{installer} writes a .pub without the content-derived id: {line.strip()}"
 
 
+def test_install_ps1_enforces_tls12_before_first_webrequest() -> None:
+    lines = (_REPO / "install.ps1").read_text(encoding="utf-8").splitlines()
+    tls = next(i for i, line in enumerate(lines) if "SecurityProtocol" in line and "Tls12" in line)
+    first_net = next(i for i, line in enumerate(lines) if "Invoke-WebRequest" in line)
+    assert tls < first_net, "install.ps1 downloads before enforcing TLS 1.2"
+
+
 def test_channel_cannot_introduce_a_new_trust_root() -> None:
     """An attacker-chosen key in the bundle is refused because it is not a bootstrap anchor."""
     from trace_core.updates.signing import key_id_for_pubkey
