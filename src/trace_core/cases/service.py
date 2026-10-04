@@ -1,6 +1,7 @@
 """Case application service managing Case lifecycle, numbering, and transactions."""
 
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -102,6 +103,19 @@ def _record_audit(  # type: ignore[no-untyped-def]
     return AuditService().record(session, action, subject, actor, details, ctx)
 
 
+def _audit_hook(
+    build: Callable[[], tuple[Any, Any, dict[str, Any], Any]],
+    actor: str,
+    claimed: str | None = None,
+) -> Callable[[Any], None]:
+    """before_commit hook recording one builder payload. Single source for the case mutations."""
+
+    def _hook(session: Any) -> None:
+        _record_audit(session, build(), actor, claimed=claimed)
+
+    return _hook
+
+
 class CaseService(BaseService):
     """Application service for managing Case lifecycle and queries."""
 
@@ -140,12 +154,11 @@ class CaseService(BaseService):
                 if dto.number:
                     repo.note_manual_number(case_number)
 
-                def _audit(s: Any) -> None:
-                    from trace_core.audit.builder import for_case_created
+                from trace_core.audit.builder import for_case_created
 
-                    _record_audit(
-                        s,
-                        for_case_created(
+                uow.before_commit(
+                    _audit_hook(
+                        lambda: for_case_created(
                             created.number,
                             created.id,
                             created.title,
@@ -155,8 +168,7 @@ class CaseService(BaseService):
                         resolved_actor,
                         claimed=actor,
                     )
-
-                uow.before_commit(_audit)
+                )
                 return CaseResponseDto.from_domain(created)
             except IntegrityError as e:
                 err_msg = str(e).lower()
@@ -244,17 +256,15 @@ class CaseService(BaseService):
             after = tracked_snapshot(case)
             updated = repo.update(case)
 
-            def _audit(s: Any) -> None:
-                from trace_core.audit.builder import for_case_updated
+            from trace_core.audit.builder import for_case_updated
 
-                _record_audit(
-                    s,
-                    for_case_updated(updated.number, updated.id, changed, before, after, reason=reason),
+            uow.before_commit(
+                _audit_hook(
+                    lambda: for_case_updated(updated.number, updated.id, changed, before, after, reason=reason),
                     resolved_actor,
                     claimed=actor,
                 )
-
-            uow.before_commit(_audit)
+            )
             return CaseResponseDto.from_domain(updated)
 
     def close_case(
@@ -284,9 +294,9 @@ class CaseService(BaseService):
 
             pinned: dict[str, Any] = {}
 
-            def _audit(s: Any) -> None:
-                from trace_core.audit.builder import for_case_closed
+            from trace_core.audit.builder import for_case_closed
 
+            def _audit(s: Any) -> None:
                 dto = _record_audit(
                     s,
                     for_case_closed(updated.number, updated.id, updated.closure_reason or "", examiner),
@@ -345,21 +355,27 @@ class CaseService(BaseService):
                 purged_id = case.id
                 result = repo.purge(case.id, expected_version=case.version)
 
-                def _audit(s: Any) -> None:
-                    from trace_core.audit.builder import for_case_purged
+                from trace_core.audit.builder import for_case_purged
 
-                    _record_audit(s, for_case_purged(purged_number, purged_id), resolved_actor, claimed=actor)
-
-                uow.before_commit(_audit)
+                uow.before_commit(
+                    _audit_hook(
+                        lambda: for_case_purged(purged_number, purged_id),
+                        resolved_actor,
+                        claimed=actor,
+                    )
+                )
                 return result
             result = repo.soft_delete(case.id, expected_version=case.version, archived_by=resolved_actor)
 
-            def _audit2(s: Any) -> None:
-                from trace_core.audit.builder import for_case_archived
+            from trace_core.audit.builder import for_case_archived
 
-                _record_audit(s, for_case_archived(case.number, case.id), resolved_actor, claimed=actor)
-
-            uow.before_commit(_audit2)
+            uow.before_commit(
+                _audit_hook(
+                    lambda: for_case_archived(case.number, case.id),
+                    resolved_actor,
+                    claimed=actor,
+                )
+            )
             return result
 
     def restore_case(self, identifier: str, actor: str | None = None) -> CaseResponseDto:
@@ -378,10 +394,13 @@ class CaseService(BaseService):
             if not restored:
                 raise CaseNotFoundError(identifier)
 
-            def _audit(s: Any) -> None:
-                from trace_core.audit.builder import for_case_restored
+            from trace_core.audit.builder import for_case_restored
 
-                _record_audit(s, for_case_restored(restored.number, restored.id), resolved_actor, claimed=actor)
-
-            uow.before_commit(_audit)
+            uow.before_commit(
+                _audit_hook(
+                    lambda: for_case_restored(restored.number, restored.id),
+                    resolved_actor,
+                    claimed=actor,
+                )
+            )
             return CaseResponseDto.from_domain(restored)

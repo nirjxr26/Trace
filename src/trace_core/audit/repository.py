@@ -18,21 +18,33 @@ from trace_core.core.database.repository import ilike_literal, paginate
 _APPEND_ATTEMPTS = 3
 
 
-def _base_fields(m: AuditEventModel) -> dict[str, Any]:
+def _common_fields(m: AuditEventModel, *, ts: Any, action: Any, subject_case_id: Any) -> dict[str, Any]:
+    """Single source for the 12 ledger keys the DTO and the export bundle share."""
     return {
         "seq": m.seq,
-        "ts": coerce_utc(m.ts),  # type: ignore[arg-type]
-        "action": AuditAction(m.action),
+        "ts": ts,
+        "action": action,
         "actor": m.actor,
-        "subject_type": m.subject_type,
         "subject_case_number": m.subject_case_number,
-        "subject_case_id": m.subject_case_id,
+        "subject_case_id": subject_case_id,
         "payload_json": m.payload_json,
         "payload_hash": m.payload_hash,
         "prev_chain": m.prev_chain,
         "chain_hash": m.chain_hash,
         "key_id": m.key_id,
         "signature": m.signature,
+    }
+
+
+def _base_fields(m: AuditEventModel) -> dict[str, Any]:
+    return {
+        **_common_fields(
+            m,
+            ts=coerce_utc(m.ts),  # type: ignore[arg-type]
+            action=AuditAction(m.action),
+            subject_case_id=m.subject_case_id,
+        ),
+        "subject_type": m.subject_type,
     }
 
 

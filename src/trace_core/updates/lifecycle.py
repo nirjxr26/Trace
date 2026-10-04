@@ -28,6 +28,43 @@ class UpdateLifecycle:
         self.service = service or UpdateService()
         self.state = state
 
+    def _record(
+        self,
+        current: str,
+        manifest: ReleaseManifest,
+        channel: str,
+        started_at: datetime,
+        *,
+        result: str,
+        failure_stage: str | None = None,
+        failure_reason: str | None = None,
+        override_reason: str | None = None,
+        migration_range: str | None = None,
+        health_check_result: str | None = None,
+        backup_path: str | None = None,
+        rollback: bool = False,
+        restart_required: bool = False,
+    ) -> UpdateHistoryCreateDto:
+        dto = UpdateHistoryCreateDto(
+            from_version=current,
+            to_version=manifest.version,
+            channel=channel,
+            result=result,
+            failure_stage=failure_stage,
+            failure_reason=failure_reason,
+            override_reason=override_reason,
+            migration_range=migration_range,
+            health_check_result=health_check_result,
+            backup_path=backup_path,
+            rollback=rollback,
+            restart_required=restart_required,
+            transaction_id=self.transaction_id,
+            release_id=manifest.release_id,
+            started_at=started_at,
+        )
+        self.service.record_history(dto)
+        return dto
+
     def transition(self, to: UpdateState) -> None:
         from trace_core.updates.marker import write_marker
 
@@ -148,19 +185,15 @@ class UpdateLifecycle:
                 if can_transition(self.state, UpdateState.FAILED):
                     self.transition(UpdateState.FAILED)
                 try:
-                    self.service.record_history(
-                        UpdateHistoryCreateDto(
-                            from_version=current,
-                            to_version=manifest.version,
-                            channel=channel,
-                            result=UpdateResult.FAILED,
-                            failure_stage=failure_stage,
-                            failure_reason=str(e),
-                            override_reason=self._override_note(current, manifest, allow_minimum_bypass),
-                            transaction_id=self.transaction_id,
-                            release_id=manifest.release_id,
-                            started_at=started_at,
-                        )
+                    self._record(
+                        current,
+                        manifest,
+                        channel,
+                        started_at,
+                        result=UpdateResult.FAILED,
+                        failure_stage=failure_stage,
+                        failure_reason=str(e),
+                        override_reason=self._override_note(current, manifest, allow_minimum_bypass),
                     )
                 except Exception as record_exc:
                     structlog.get_logger().warning("failure history recording failed", error=str(record_exc))
@@ -175,18 +208,14 @@ class UpdateLifecycle:
                     except Exception:
                         pass
                 try:
-                    self.service.record_history(
-                        UpdateHistoryCreateDto(
-                            from_version=current,
-                            to_version=manifest.version,
-                            channel=channel,
-                            result=UpdateResult.FAILED,
-                            failure_stage=failure_stage,
-                            failure_reason=f"interrupted: {type(e).__name__}",
-                            transaction_id=self.transaction_id,
-                            release_id=manifest.release_id,
-                            started_at=started_at,
-                        )
+                    self._record(
+                        current,
+                        manifest,
+                        channel,
+                        started_at,
+                        result=UpdateResult.FAILED,
+                        failure_stage=failure_stage,
+                        failure_reason=f"interrupted: {type(e).__name__}",
                     )
                 except Exception as record_exc:
                     structlog.get_logger().warning("failure history recording failed", error=str(record_exc))
@@ -314,18 +343,15 @@ class UpdateLifecycle:
                 from trace_core.updates.errors import UpdatePolicyBlockedError
 
                 self.transition(UpdateState.FAILED)
-                dto = UpdateHistoryCreateDto(
-                    from_version=current,
-                    to_version=manifest.version,
-                    channel=channel,
+                self._record(
+                    current,
+                    manifest,
+                    channel,
+                    started_at,
                     result=UpdateResult.FAILED,
                     failure_stage=UpdateFailureStage.POLICY,
                     failure_reason=reason,
-                    transaction_id=self.transaction_id,
-                    started_at=started_at,
-                    release_id=manifest.release_id,
                 )
-                self.service.record_history(dto)
                 raise UpdatePolicyBlockedError(reason or "update blocked by policy")
             self.transition(UpdateState.AVAILABLE)
             self.transition(UpdateState.READY_TO_INSTALL)
@@ -380,10 +406,11 @@ class UpdateLifecycle:
                     )
                 except (OSError, UpdateError) as e:
                     self.transition(UpdateState.RECOVERY_REQUIRED)
-                    dto = UpdateHistoryCreateDto(
-                        from_version=current,
-                        to_version=manifest.version,
-                        channel=channel,
+                    return self._record(
+                        current,
+                        manifest,
+                        channel,
+                        started_at,
                         result=UpdateResult.FAILED,
                         failure_stage=UpdateFailureStage.HEALTH,
                         failure_reason=f"rollback failed: {e}",
@@ -391,17 +418,13 @@ class UpdateLifecycle:
                         health_check_result=health,
                         backup_path=migration["backup"],
                         override_reason=override_note,
-                        transaction_id=self.transaction_id,
-                        started_at=started_at,
-                        release_id=manifest.release_id,
                     )
-                    self.service.record_history(dto)
-                    return dto
                 self.transition(UpdateState.ROLLED_BACK)
-                dto = UpdateHistoryCreateDto(
-                    from_version=current,
-                    to_version=manifest.version,
-                    channel=channel,
+                return self._record(
+                    current,
+                    manifest,
+                    channel,
+                    started_at,
                     result=UpdateResult.ROLLED_BACK,
                     failure_stage=UpdateFailureStage.HEALTH,
                     migration_range=f"{migration['schema']}",
@@ -409,12 +432,7 @@ class UpdateLifecycle:
                     backup_path=migration["backup"],
                     override_reason=override_note,
                     rollback=True,
-                    transaction_id=self.transaction_id,
-                    started_at=started_at,
-                    release_id=manifest.release_id,
                 )
-                self.service.record_history(dto)
-                return dto
             updater_mod.activate(base, manifest.version)
             try:
                 self._verify_activation(base, manifest)
@@ -430,10 +448,11 @@ class UpdateLifecycle:
                     rollback_release(base, self.service.session_manager, migration["backup"])
                 except (OSError, UpdateError):
                     self.transition(UpdateState.RECOVERY_REQUIRED)
-                    dto = UpdateHistoryCreateDto(
-                        from_version=current,
-                        to_version=manifest.version,
-                        channel=channel,
+                    return self._record(
+                        current,
+                        manifest,
+                        channel,
+                        started_at,
                         result=UpdateResult.FAILED,
                         failure_stage=UpdateFailureStage.ACTIVATION,
                         failure_reason=f"post-activation verification failed ({e}); rollback failed",
@@ -441,17 +460,13 @@ class UpdateLifecycle:
                         health_check_result=health,
                         backup_path=migration["backup"],
                         override_reason=override_note,
-                        transaction_id=self.transaction_id,
-                        started_at=started_at,
-                        release_id=manifest.release_id,
                     )
-                    self.service.record_history(dto)
-                    return dto
                 self.transition(UpdateState.ROLLED_BACK)
-                dto = UpdateHistoryCreateDto(
-                    from_version=current,
-                    to_version=manifest.version,
-                    channel=channel,
+                return self._record(
+                    current,
+                    manifest,
+                    channel,
+                    started_at,
                     result=UpdateResult.ROLLED_BACK,
                     failure_stage=UpdateFailureStage.ACTIVATION,
                     failure_reason=f"post-activation verification failed: {e}",
@@ -460,30 +475,22 @@ class UpdateLifecycle:
                     backup_path=migration["backup"],
                     override_reason=override_note,
                     rollback=True,
-                    transaction_id=self.transaction_id,
-                    started_at=started_at,
-                    release_id=manifest.release_id,
                 )
-                self.service.record_history(dto)
-                return dto
             # ponytail: keep_backups restates updater.RETENTION_BACKUPS; parameter stays for callers
             updater_mod.prune_retention(base)
             self.transition(UpdateState.COMPLETED)
-            dto = UpdateHistoryCreateDto(
-                from_version=current,
-                to_version=manifest.version,
-                channel=channel,
+            dto = self._record(
+                current,
+                manifest,
+                channel,
+                started_at,
                 result=UpdateResult.SUCCESS,
                 migration_range=f"{migration['schema']}",
                 health_check_result=health,
                 backup_path=migration["backup"],
                 override_reason=override_note,
                 restart_required=manifest.restart_required,
-                transaction_id=self.transaction_id,
-                release_id=manifest.release_id,
-                started_at=started_at,
             )
-            self.service.record_history(dto)
             from trace_core.updates.marker import write_marker
 
             write_marker(

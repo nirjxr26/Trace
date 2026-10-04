@@ -4,13 +4,14 @@ from typing import Any
 
 from trace_core.core.clock import now_utc
 from trace_core.core.fs import atomic_write_lines
-from trace_core.core.settings import settings
 
 TTL_SECONDS = 3600
 
 
 def cache_path() -> Path:
-    return Path(settings.storage_root) / "state" / "update-check.json"
+    from trace_core.updates.marker import storage_state_path
+
+    return storage_state_path("update-check.json")
 
 
 def _now() -> float:

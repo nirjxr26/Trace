@@ -9,7 +9,7 @@ from trace_core.core.cli.exit_codes import EXIT_ERROR
 from trace_core.core.cli.output import OUTPUT_HELP
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.errors import AuditTamperError
-from trace_core.core.ui.renderers import console, render_error_card, render_output, render_success
+from trace_core.core.ui.renderers import render_error_card, render_output, render_success
 
 audit_app = typer.Typer(name="audit", help="Inspect, verify, and export tamper-evident audit ledger.")
 
@@ -104,15 +104,19 @@ def audit_export(
             render_error_card("Invalid Format", f"Unknown format '{fmt}'.", "Expected: jsonl.")
             raise typer.Exit(EXIT_ERROR)
         svc = _get_service()
-        from trace_core.audit.helpers import check_export_dest, do_export_encrypted, prompt_passphrase
+        from trace_core.audit.helpers import (
+            check_export_dest,
+            do_export_encrypted,
+            prompt_passphrase,
+            report_written,
+        )
 
         check_export_dest(out, force)
         if encrypt:
             path = do_export_encrypted(svc, out, prompt_passphrase(confirm=True))
         else:
             path = svc.export(out)
-        render_success("Audit bundle exported.")
-        console.print(f"[dim]{path}[/dim]")
+        report_written(path, "Audit bundle exported.")
 
 
 @audit_app.command("decrypt")
@@ -122,12 +126,11 @@ def audit_decrypt(
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite an existing file"),
 ) -> None:
     with capture_cli_errors("Audit Decrypt"):
-        from trace_core.audit.helpers import check_export_dest, do_decrypt, prompt_passphrase
+        from trace_core.audit.helpers import check_export_dest, do_decrypt, prompt_passphrase, report_written
 
         check_export_dest(out, force)
         path = do_decrypt(inp, out, prompt_passphrase())
-        render_success("Bundle decrypted.")
-        console.print(f"[dim]{path}[/dim]")
+        report_written(path, "Bundle decrypted.")
 
 
 @audit_app.command("keys-init")

@@ -41,36 +41,33 @@ def load_release_pubkey(key_id: str) -> bytes:
         raise UpdateVerificationError(f"unreadable release key {key_id!r}") from e
 
 
-def verify_manifest_signature(manifest: ReleaseManifest) -> None:
-    if not manifest.signing_key_id:
-        raise UpdateVerificationError("missing manifest signing key")
-    if not manifest.manifest_signature:
-        raise UpdateVerificationError("missing manifest signature")
-    raw_pub = load_release_pubkey(manifest.signing_key_id)
-    from cryptography.exceptions import InvalidSignature
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-
-    try:
-        sig = bytes.fromhex(manifest.manifest_signature)
-        Ed25519PublicKey.from_public_bytes(raw_pub).verify(sig, canonical_manifest_bytes(manifest))
-    except (ValueError, InvalidSignature) as e:
-        raise UpdateVerificationError("invalid manifest signature") from e
-
-
-def verify_artifact_signature(data: bytes, signature: str | None, key_id: str | None) -> None:
+def _verify_signature(key_id: str | None, signature: str | None, data: bytes, subject: str) -> None:
+    """Guarded Ed25519 check for one signed message. Single source for manifest + artifact."""
     if not key_id:
-        raise UpdateVerificationError("missing artifact signing key")
+        raise UpdateVerificationError(f"missing {subject} signing key")
     if not signature:
-        raise UpdateVerificationError("missing artifact signature")
+        raise UpdateVerificationError(f"missing {subject} signature")
     raw_pub = load_release_pubkey(key_id)
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
     try:
-        sig = bytes.fromhex(signature)
-        Ed25519PublicKey.from_public_bytes(raw_pub).verify(sig, data)
+        Ed25519PublicKey.from_public_bytes(raw_pub).verify(bytes.fromhex(signature), data)
     except (ValueError, InvalidSignature) as e:
-        raise UpdateVerificationError("invalid artifact signature") from e
+        raise UpdateVerificationError(f"invalid {subject} signature") from e
+
+
+def verify_manifest_signature(manifest: ReleaseManifest) -> None:
+    _verify_signature(
+        manifest.signing_key_id,
+        manifest.manifest_signature,
+        canonical_manifest_bytes(manifest),
+        "manifest",
+    )
+
+
+def verify_artifact_signature(data: bytes, signature: str | None, key_id: str | None) -> None:
+    _verify_signature(key_id, signature, data, "artifact")
 
 
 def verify_artifact_signature_file(path: Path, signature: str | None, key_id: str | None) -> None:

@@ -21,6 +21,14 @@ from trace_core.core.domain import (
 CASE_NUMBER_RE = re.compile(r"^\d{4}-[A-Z]{2,8}-\d{4}$", re.ASCII)
 
 
+def _required_text(value: str, message: str) -> str:
+    """Strip controls and reject an empty result. Single source for the required case fields."""
+    cleaned = strip_controls(value).strip()
+    if not cleaned:
+        raise InvariantViolationError(message)
+    return cleaned
+
+
 def normalize_number(value: str) -> str:
     """Canonical form (NFKC, stripped, upper) without grammar rejection.
 
@@ -182,18 +190,12 @@ class Case(BaseEntity):
     @field_validator("title")
     @classmethod
     def validate_title(cls, v: str) -> str:
-        stripped = strip_controls(v).strip()
-        if not stripped:
-            raise InvariantViolationError("Case title cannot be empty.")
-        return stripped
+        return _required_text(v, "Case title cannot be empty.")
 
     @field_validator("lead_examiner")
     @classmethod
     def validate_examiner(cls, v: str) -> str:
-        stripped = strip_controls(v).strip()
-        if not stripped:
-            raise InvariantViolationError("Lead examiner cannot be empty.")
-        return stripped
+        return _required_text(v, "Lead examiner cannot be empty.")
 
     @field_validator("tags")
     @classmethod

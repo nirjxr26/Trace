@@ -7,15 +7,13 @@ from trace_core.core.ui.renderers import console, get_success_icon, safe_text
 from trace_core.updates.dto import UpdateHistoryCreateDto
 from trace_core.updates.manifest import ReleaseManifest
 from trace_core.updates.stages import (
-    STAGE_ACTIVE_LABEL,
-    STAGE_DONE_LABEL,
-    STAGE_FAILED_LABEL,
     STAGE_ORDER,
     ProgressCallback,
     Stage,
     StageStatus,
     format_mb,
     format_speed,
+    stage_label,
 )
 
 BAR_WIDTH = 28
@@ -172,11 +170,7 @@ class UpdateProgressDisplay(ProgressCallback):
         console.print("Run `trace update history` for details.")
 
     def _stage_line(self, stage: Stage, status: StageStatus) -> str:
-        if status == StageStatus.DONE:
-            return f"{_STAGE_GLYPH[status]} {STAGE_DONE_LABEL[stage]}"
-        if status == StageStatus.ACTIVE:
-            return f"{_STAGE_GLYPH[status]} {STAGE_ACTIVE_LABEL[stage]}"
-        return f"{_STAGE_GLYPH[status]} {STAGE_FAILED_LABEL[stage]}"
+        return f"{_STAGE_GLYPH[status]} {stage_label(stage, status)}"
 
     def _frame(self) -> Text:
         body = Text()

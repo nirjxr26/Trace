@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     """Trace runtime settings."""
 
     app_name: str = "Trace"
-    version: str = "0.2.9"
+    version: str = "0.2.10"
     # Alias-only binding: the documented TRACE_DEBUG name wins, and a stray
     # bare DEBUG in the environment can no longer crash startup with a bool error.
     debug: bool = Field(default=False, alias="TRACE_DEBUG")
@@ -85,7 +85,7 @@ class Settings(BaseSettings):
                 path=str(self.storage_root),
                 error=str(exc),
             )
-        if self.database_url == DEV_DATABASE_URL:
+        if self.database_url == DEV_DATABASE_URL and self.debug:
             logger.warning(
                 "Using shipped default database credentials; set TRACE_DATABASE_URL "
                 "with a strong password before production use."

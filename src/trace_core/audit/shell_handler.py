@@ -233,16 +233,19 @@ class AuditShellCommandHandler(BaseShellHandler):
             render_error_card("Missing Output", "Pass --out FILE for the export bundle.")
             return
         with capture_cli_errors("Audit Export", exit_on_error=False):
-            from trace_core.audit.helpers import check_export_dest, do_export_encrypted, prompt_passphrase
-            from trace_core.core.ui.renderers import render_success
+            from trace_core.audit.helpers import (
+                check_export_dest,
+                do_export_encrypted,
+                prompt_passphrase,
+                report_written,
+            )
 
             check_export_dest(out, has_flag(args, "--force", "-f"))
             if has_flag(args, "--encrypt"):
                 path = do_export_encrypted(svc, out, prompt_passphrase())
             else:
                 path = svc.export(out)
-            render_success("Audit bundle exported.")
-            console.print(f"[dim]{path}[/dim]")
+            report_written(path, "Audit bundle exported.")
 
     def _decrypt(self, svc: AuditService, args: list[str]) -> None:
         # svc unused today; kept in the handler signature so every audit action routes
@@ -254,10 +257,8 @@ class AuditShellCommandHandler(BaseShellHandler):
             render_error_card("Missing Input", "Pass --in FILE --out FILE to open a sealed bundle.")
             return
         with capture_cli_errors("Audit Decrypt", exit_on_error=False):
-            from trace_core.audit.helpers import check_export_dest, do_decrypt, prompt_passphrase
-            from trace_core.core.ui.renderers import render_success
+            from trace_core.audit.helpers import check_export_dest, do_decrypt, prompt_passphrase, report_written
 
             check_export_dest(out, has_flag(args, "--force", "-f"))
             path = do_decrypt(inp, out, prompt_passphrase())
-            render_success("Bundle decrypted.")
-            console.print(f"[dim]{path}[/dim]")
+            report_written(path, "Bundle decrypted.")

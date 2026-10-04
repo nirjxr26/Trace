@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from trace_core.audit.domain import CANONICAL_VERSION, HASH_ALGO, SPEC_VERSION
 from trace_core.audit.models import AuditEventModel
+from trace_core.audit.repository import _common_fields
 from trace_core.core.canonical import _coerce_utc_required, canonical_ts
 from trace_core.core.fs import atomic_write_lines
 
@@ -40,21 +41,12 @@ def _record_dict(m) -> dict:  # type: ignore[no-untyped-def]
     # coerce_utc assumes UTC for naive rows (SQLite storage); the old fallback
     # str(m.ts) wrote a non-canonical timestamp into the forensic bundle. The
     # column is non-nullable, so the ts is always present.
-    ts_str = canonical_ts(_coerce_utc_required(m.ts))
-    return {
-        "seq": m.seq,
-        "ts": ts_str,
-        "action": m.action,
-        "actor": m.actor,
-        "subject_case_number": m.subject_case_number,
-        "subject_case_id": str(m.subject_case_id) if m.subject_case_id else None,
-        "payload_json": m.payload_json,
-        "payload_hash": m.payload_hash,
-        "prev_chain": m.prev_chain,
-        "chain_hash": m.chain_hash,
-        "key_id": m.key_id,
-        "signature": m.signature,
-    }
+    return _common_fields(
+        m,
+        ts=canonical_ts(_coerce_utc_required(m.ts)),
+        action=m.action,
+        subject_case_id=str(m.subject_case_id) if m.subject_case_id else None,
+    )
 
 
 def export_bundle(session, out_path: str | Path) -> Path:  # type: ignore[no-untyped-def]

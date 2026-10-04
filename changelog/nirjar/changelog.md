@@ -3183,3 +3183,292 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
   migration again.
 
 - Verification: gate run recorded with this commit.
+
+
+## 2026-10-04
+
+- Summary: STEP 7 of Subpart 3 completes. `devices/ports.py` defines the three contracts
+  the plan's §4.2 specifies - `DeviceEnumerator`, `DeviceInspector` and
+  `WriteBlockerProbe` - closing the gap left by the D14 merge, which brought in
+  `domain.py` but not the ports.
+
+  The ports speak domain objects and stay DTO-free, and `verify` returns a `GateCheck`
+  rather than a bare enum so stage [3] keeps recorded evidence and the object stays
+  explainable in `--output json` without a second call. They are typing-only Protocols,
+  matching the four that already exist in this codebase; none of them is
+  `runtime_checkable`, so structural conformance is checked by signature rather than
+  `isinstance`.
+
+  **Plan gap closed.** §4.9's two migrations belonged to no STEP. Migration A was
+  already shipped as migration 17 under D14, so only Migration B
+  (`create_device_fingerprints`) was ever outstanding; it is now named in STEP 11,
+  where the repository that writes to it is built. It must land before that repository
+  ships.
+
+  - Tests: `tests/unit/test_devices_ports.py`, 5 tests asserting the exported contract
+    set, each method's parameter names and return type, and that one adapter can satisfy
+    all three signatures at once.
+
+## 2026-10-04
+
+- Summary: code-reusability pass across `src/trace_core`. Every change below removes a
+  duplicate that has a real second call site today; nothing was extracted for a
+  hypothetical future use, per AGENTS.md §4.
+
+  **`updates/lifecycle.py`** built an identical 13-field `UpdateHistoryCreateDto` at seven
+  sites. Only `transaction_id`, `release_id`, `from_version`, `to_version`, `channel`,
+  `started_at` and `result` are invariant across them; the rest vary per outcome. A
+  private `_record()` now owns the construction and the `record_history` call, and the
+  seven call sites pass only what actually differs. Each row is byte-identical to what it
+  was, including the two failure paths that swallow a recording error and log it.
+
+  **`cases/service.py`** had five hand-written `_audit` closures differing only in which
+  builder they called. `_audit_hook(build, actor, claimed)` now produces them. The
+  `close_case` hook is deliberately left alone: it captures the returned ledger position
+  to pin the anchor, which is the one case that cannot be a plain closure (§14.5).
+
+  **`tui/widgets.py`** gains `TablePane`, the base the Cases and Audit tabs were each
+  re-implementing. Header mounting, cursor restore, O(1) selection repaint, cursor-to-item
+  resolution, focus, and the search debounce now live once; each view supplies only
+  `refresh_data`, `row_cells` and `render_detail` plus its five ids. The two views were
+  verified to be byte-identical in the shared parts before the extraction.
+
+  **Smaller single sources.** `updates/cache.py` was rebuilding the state path instead of
+  calling the existing `storage_state_path`; `updates/checker.py` had the HTTP check path
+  rebuilding the cached payload that `_payload_from_check` already owned; and
+  `updates/signing.py` ran the same guard-then-Ed25519 body twice, once per subject. The
+  guard messages still name their subject, so a manifest signature failure and an artifact
+  signature failure remain distinguishable to the operator.
+
+  **`updates/stages.py`** gains `stage_label(stage, status)`, so the CLI progress display
+  and the TUI settings tab stop each re-deriving which label dict a status maps to.
+  **`cases/domain.py`** gains `_required_text`, shared by the `title` and `lead_examiner`
+  validators, which were identical modulo their message and still are. **`audit/helpers.py`**
+  gains `report_written`, shared by the four export/decrypt tails across the Typer CLI and
+  the REPL handler, which each repeated the success line and the dim path print.
+
+- Files: `src/trace_core/updates/lifecycle.py`, `src/trace_core/cases/service.py`,
+  `src/trace_core/tui/widgets.py`, `src/trace_core/tui/screens/cases.py`,
+  `src/trace_core/tui/screens/audit.py`, `src/trace_core/updates/cache.py`,
+  `src/trace_core/updates/checker.py`, `src/trace_core/updates/signing.py`,
+  `src/trace_core/updates/stages.py`, `src/trace_core/updates/renderers.py`,
+  `src/trace_core/tui/screens/settings.py`, `src/trace_core/cases/domain.py`,
+  `src/trace_core/audit/helpers.py`, `src/trace_core/audit/commands.py`,
+  `src/trace_core/audit/shell_handler.py`, `tests/unit/test_shared_helpers.py`,
+  `changelog/nirjar/changelog.md`.
+
+- Verification: `./check-pr.ps1` (venv, lockfile coherence, ruff format, ruff lint, mypy
+  strict over `src` and `tests`, pytest with the 70% coverage gate) run on this tree.
+
+- Out of scope, noted not fixed (AGENTS.md §6): `core/database/migrations.py` contains
+  near-identical per-migration bodies, but those are applied migrations and §7 forbids
+  editing them. `audit/builder.py`'s `_subject_device()` is orphaned and never called.
+## 2026-10-04 (audit serializer duplication)
+
+- Summary: `_record_dict` (`audit/exporter.py`) and `_base_fields`
+  (`audit/repository.py`) each spelled out the same 12 ledger keys from an
+  `AuditEventModel`. A token-level clone scan found them as the only remaining
+  exact (type-1) duplicate in `src/`. A clone scan run earlier for the reusability
+  pass had already cleared everything else; this is the residue.
+
+  Both now build from `_common_fields`, which holds the 12 shared keys in one
+  place. `ts`, `action` and `subject_case_id` are passed in already transformed,
+  because the two serializers genuinely disagree on them and those differences are
+  deliberate:
+
+  | field | `_base_fields` (DTO) | `_record_dict` (bundle) |
+  | --- | --- | --- |
+  | `ts` | `coerce_utc` -> aware `datetime` | `canonical_ts` -> Zulu `str` |
+  | `action` | `AuditAction` enum | plain `str` |
+  | `subject_case_id` | raw `UUID` | `str(...)` or `None` |
+
+  `_base_fields` additionally emits `subject_type`; `_record_dict` does not. That
+  is intentional and is now pinned by a test rather than left to inference:
+  `trace-audit-v1`'s record schema does not carry `subject_type`, and the exporter
+  was deliberately left untouched when migration 017 added the column
+  (`docs/history/subpart-2.md`, `docs/roadmap/subpart-3-devices.md`: "verifier/exporter
+  untouched"). Adding the field to the bundle is a format change, not a refactor,
+  and is out of scope here.
+
+  Key order is preserved by construction rather than by relying on Python's
+  overwrite-preserves-position behaviour. `_base_fields` appends `subject_type`
+  last, which is safe because `AuditEventDto` is a Pydantic model and orders its
+  own fields; only `_record_dict`'s order reaches serialized bytes.
+
+- Investigation first, per the AGENTS.md §2 preflight: confirmed no signature,
+  checksum, hash, manifest or verification routine depends on the exported row or
+  its ordering. `payload_hash` covers `canonical_json(payload)`,
+  `chain_hash` covers `(prev_chain, payload_hash, seq)`, the HMAC/Ed25519 envelope
+  covers `payload_json` bytes only, `canonical_json` sorts keys, and the encrypted
+  bundle uses a fresh random salt and nonce per export. Order is a compatibility
+  contract, not an integrity one.
+
+- Byte compatibility: the pre-change and post-change serializers were run over the
+  same fixed rows and compared as serialized bytes, not parsed dicts - full row,
+  all-nullable legacy unsigned row, and a non-ASCII actor (the `ensure_ascii=False`
+  path). Byte-identical in all three cases.
+
+- Tests: five new in `tests/unit/test_audit_ledger.py` pinning the export key
+  order, the byte-level record line, all-nullable field handling, the intentional
+  `subject_type` exclusion, and the three documented divergences. Verified they
+  fail on real regressions: swapping `ts`/`action` order fails 3, dropping
+  `key_id` from the shared builder fails 9.
+
+- Files: `audit/repository.py`, `audit/exporter.py`, `tests/unit/test_audit_ledger.py`,
+  `changelog/nirjar/changelog.md`.
+
+- Verification: `./check-pr.ps1` passed - ruff format, ruff lint, mypy strict over
+  `src tests` (168 files, 0 errors), pytest 582 passed / 19 skipped, coverage
+  77.43%. Baseline was 577 passed; +5 new, zero regressions.
+
+- Out of scope, noted not fixed (AGENTS.md §6): the export-format rationale above
+  lives only in `docs/`, which is gitignored, so the `subject_type` exclusion is
+  still invisible to anyone working from a fresh clone. The new test names the
+  difference, but the durable fix is a tracked document, which needs its own
+  decision. Migrations untouched (§7). No changes to `SilentProgress`/
+  `_TuiProgress` inheritance or to a cross-module column abstraction.
+## 2026-10-04 (TablePane row type parameter)
+
+- Summary: `TablePane._selected()` was annotated `-> object | None`, so both
+  subclass tabs received `object` and every field access on the selected row was a
+  type error - 21 of them across `tui/screens/audit.py` and `tui/screens/cases.py`
+  (`payload_json`, `payload_hash`, `prev_chain`, `chain_hash`, `seq`, `signature`,
+  `key_id`, `action`, `actor`, `ts`, `subject_case_number`, `status`,
+  `is_deleted`, `number`). Surfaced by Pylance and, once checked without a warm
+  cache, by mypy too.
+
+  `TablePane` is now generic over its row type and `_selected()` returns `T | None`.
+  `CasesView` binds `TablePane[CaseResponseDto]` and `AuditView` binds
+  `TablePane[AuditEventDto]`, so the selection carries its real type into the
+  subclass instead of erasing to `object`. `fill_table` and `row_cells` take the
+  same parameter. The already-generic `selected_item` needed no change; PEP 695
+  syntax is already the convention in this module.
+
+  Behaviour is unchanged - the runtime never inspected the old annotation.
+
+- Files: `tui/widgets.py`, `tui/screens/audit.py`, `tui/screens/cases.py`,
+  `pyrightconfig.json` (new), `changelog/nirjar/changelog.md`.
+
+- Verification: `./check-pr.ps1` passed with `.mypy_cache` deleted first, so the
+  mypy stage ran cold rather than replaying a stale cache - ruff format, ruff lint,
+  mypy `Success: no issues found in 168 source files`, pytest 582 passed /
+  19 skipped, coverage 77.43%. `tests/unit/test_tui.py` 4 passed. Runtime checked:
+  `CasesView.__mro__` still `CasesView -> TablePane -> Vertical -> Widget` and the
+  bound parameter resolves.
+
+-  Known remaining: Pylance also reports `No parameter named "search"` /
+  `"limit"` / `"case_number"` on `AuditFilterDto(...)` and `CaseFilterDto(...)` in
+  the same two files. Those kwargs are valid - both DTOs accept them at runtime
+  (verified by constructing each) and mypy reports no error. Pydantic synthesises
+  `__init__(self, **data)`, so `search` and `limit` are not literal parameters
+  (`inspect.signature` confirms `['self', 'data']`); Pylance needs its Pydantic
+  support to expand them and was falling back to `object`'s signature. Not a code
+  defect.
+
+  A `pyrightconfig.json` was added pointing Pylance at `.venv` with
+  `pythonVersion 3.12`, which is the editor-side half of that fix. It is inert to
+  the gate (ruff, mypy and pytest scope only Python files) and is listed here for
+  completeness; it was not part of the task preflight, so it is flagged for review
+  rather than assumed wanted.
+## 2026-10-04 (bandit B110 suppression)
+
+- Summary: Trunk's `bandit@1.9.4` flagged B110 (try/except/pass) across the TUI
+  and CLI. An AST sweep found 41 such handlers in `src/`. They are deliberate
+  best-effort no-ops, not oversights, so the fix belongs in the linter config
+  rather than in the code: `pyproject.toml` gains a `[tool.bandit]` section with
+  `skips = ["B110"]`.
+
+  The alternative - replacing each `pass` with a `return` - was rejected on
+  evidence. Only 5 of the 41 handlers sit in a function that returns a list; the
+  other 36 return `None`, `int`, `str`, `Path`, `Case | None`,
+  `DatabaseSessionManager`, `tuple[str, str]` or `UpdateHistoryCreateDto`, so a
+  blanket `return []` would be a type error and, in the non-None cases, a lie about
+  the signature. Representative cases: `fs.fsync_dir` (Windows cannot open a
+  directory handle at all), `migrations.py` idempotent DDL guarded by a separate
+  verifier, `session.get_db` falling through to the default manager, and Textual
+  widgets queried before mount. Handlers that must not swallow still re-raise,
+  which B110 does not flag.
+
+- Verified by execution, not assumption: installed bandit 1.9.4 (the version
+  Trunk pins) into the venv and ran it both ways. Without the config: 45 issues,
+  of which 29 B110. With `-c pyproject.toml`: 16 issues, **0 B110**. The other
+  16 (B105, B404, B603, B605, B607, B608) are untouched by design - they are not
+  in scope and remain visible for review. The `bandit[toml]` extra is required to
+  read a pyproject config; Trunk provisions its own bandit, so no dependency was
+  added to `requirements.txt`.
+
+- **Correction from the first attempt.** The initial fix put `skips = ["B110"]` in a
+  `[tool.bandit]` section of `pyproject.toml` and verified it with
+  `bandit -c pyproject.toml -r .`. That works, but the linter actually in use ran
+  `bandit --exit-zero --ini .bandit ...` (its definition was
+  `linters/bandit/plugin.yaml`, plugins v1.11.0), so it read `.bandit` and ignored
+  pyproject.toml entirely - a pyproject bandit section requires an explicit `-c`, which
+  was not passed. The findings therefore persisted.
+
+  The suppression now lives in `.bandit`, which that invocation reads, and the dead
+  `[tool.bandit]` section was removed from `pyproject.toml` rather than left as a second
+  source that could drift.
+
+- Verified against that exact command line, not a convenient one. `settings.py`, the
+  file from the original report, goes from reported to **0 issues**; across `src` the
+  count is 45 total / 29 B110 without `.bandit`, and 16 total / **0 B110** with it. The
+  16 non-B110 findings stay visible by design.
+
+- **Trunk removed from the repo afterwards**, at the owner's request. `.trunk/` held no
+  tracked file (it self-ignored via `.trunk/.gitignore`) and no tracked file referenced
+  it: `ci.yml` runs ruff and mypy only, with no bandit and no Trunk step, so removing it
+  changes no CI behaviour. `.bandit` was kept and is now tool-agnostic - bandit reads it
+  on its own with `bandit -r .`.
+
+- Files: `.bandit` (new), `pyproject.toml`, `changelog/nirjar/changelog.md`.
+
+- Verification: `./check-pr.ps1` passed with `.mypy_cache` cleared first - ruff
+  format, ruff lint, mypy `Success: no issues found in 168 source files`, pytest
+  582 passed / 19 skipped, coverage 77.43%. No source file changed.
+
+- Out of scope, noted not fixed (AGENTS.md §6): the 16 remaining bandit findings
+  (`B603`/`B607` subprocess without shell=True-equivalent, `B605`/`B608` shell
+  invocation, `B105` hardcoded password string, `B404` import subprocess) each
+  need an individual security review rather than a blanket suppression, and
+  `tui/screens/settings.py` alone holds 10 of the 41 no-op handlers.
+## 2026-10-04 (silent default-credentials notice; shorter seeded case titles)
+
+- Summary: two changes at the owner's request. The shipped-default-credentials
+  notice no longer prints during normal CLI use, and the seeded demo cases carry
+  shorter titles for UI and mockup screenshots.
+
+  **The notice is gated, not removed.** `Settings.model_post_init` still detects the
+  shipped default database URL and still logs it - the call is simply conditioned on
+  `self.debug`, so `TRACE_DEBUG=1` brings it back. The production refusal immediately
+  below it is untouched: `TRACE_ENV=production` on a default URL or the default secret
+  key still raises. Verified both paths, because an earlier attempt to silence it by
+  dropping the log level to `debug` did NOT work (structlog has no level filtering
+  configured here, so `debug` printed anyway) and was replaced with the `self.debug`
+  gate.
+
+  **Seeded titles were shortened through the service layer, not by direct SQL.** The
+  audit ledger is append-only and hash-chained, and the original titles live inside
+  `CASE_CREATED` payloads, so a raw `UPDATE` would have broken chain verification. Each
+  change went through `CaseService.update_case`, producing a properly witnessed
+  `CASE_UPDATED` event with a 5W1H before/after diff. Post-change
+  `AuditService.verify()` returns `is_valid=True` over 19 events.
+
+  Six cases were shortened (47-59 chars down to 24-35). Two could not be changed:
+  `2026-CR-0001` and `2026-CR-0005` are CLOSED, and `InvalidCaseStateError` correctly
+  refuses - a sealed case is permanently sealed (AGENTS.md 14.3). Bypassing that would
+  have meant editing sealed forensic evidence, so those two keep their original titles.
+  Recreating them as new open cases is a data decision for the owner, not a code change.
+
+- Files: `core/settings.py`, `changelog/nirjar/changelog.md`. The seeded titles are
+  live database rows, not source.
+
+- Verification: `./check-pr.ps1` passed - ruff format, ruff lint, mypy `Success: no
+  issues found in 168 source files`, pytest 582 passed / 19 skipped, coverage 77.43%.
+  Live checks against the running PostgreSQL: notice absent by default, present under
+  `TRACE_DEBUG=1`, production refusal intact, ledger `is_valid=True`, and both closed
+  cases confirmed to reject edits.
+
+## 2026-10-04
+- Summary: Triple version bump 0.2.9 → 0.2.10, following the `ed2839a` convention (pyproject, package `__version__`, settings default).
+- Files: `pyproject.toml`, `src/trace_core/__init__.py`, `src/trace_core/core/settings.py`, `changelog/nirjar/changelog.md`.
+- Verification: `trace --version` reports `Trace v0.2.10`; all three sources agree.
