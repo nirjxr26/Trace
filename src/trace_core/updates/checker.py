@@ -160,17 +160,13 @@ def _cached_check_http(key: str, channel: str, cached: dict[str, Any] | None) ->
     current = get_installed_version()
     available = is_update_available(current, manifest)
     installable, reason = is_installable(current, manifest, channel, False)
-    payload = {
-        "current": current,
-        "available": available,
-        "target": manifest.version if available else None,
-        "installable": installable if available else False,
-        "block_reason": reason if available and not installable else None,
-        "security_update": manifest.security_update,
-        "minimum_supported_version": manifest.minimum_supported_version,
-        "restart_required": manifest.restart_required,
-        "notes": manifest.notes,
-    }
+    payload = _check_payload(
+        current,
+        manifest,
+        available=available,
+        installable=installable,
+        block_reason=reason,
+    )
     check_cache.write_check_cache(
         {
             "manifest_path": norm_key,
@@ -183,20 +179,36 @@ def _cached_check_http(key: str, channel: str, cached: dict[str, Any] | None) ->
     return payload
 
 
-def _payload_from_check(res: dict[str, Any]) -> dict[str, Any]:
-    """Single source for cached payload shape. Shared by file and HTTP paths."""
-    m = res["manifest"]
+def _check_payload(
+    current: str,
+    manifest: ReleaseManifest,
+    *,
+    available: bool,
+    installable: bool,
+    block_reason: str | None,
+) -> dict[str, Any]:
+    """Single source for the cached payload shape. Shared by file and HTTP paths."""
     return {
-        "current": res["current"],
-        "available": res["available"],
-        "target": m.version if res["available"] else None,
-        "installable": res["installable"],
-        "block_reason": res["block_reason"],
-        "security_update": m.security_update,
-        "minimum_supported_version": m.minimum_supported_version,
-        "restart_required": m.restart_required,
-        "notes": m.notes,
+        "current": current,
+        "available": available,
+        "target": manifest.version if available else None,
+        "installable": installable if available else False,
+        "block_reason": block_reason if available and not installable else None,
+        "security_update": manifest.security_update,
+        "minimum_supported_version": manifest.minimum_supported_version,
+        "restart_required": manifest.restart_required,
+        "notes": manifest.notes,
     }
+
+
+def _payload_from_check(res: dict[str, Any]) -> dict[str, Any]:
+    return _check_payload(
+        res["current"],
+        res["manifest"],
+        available=res["available"],
+        installable=res["installable"],
+        block_reason=res["block_reason"],
+    )
 
 
 def cached_check(target: str | Path, channel: str = "stable") -> dict[str, Any]:

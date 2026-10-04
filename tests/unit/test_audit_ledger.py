@@ -2,14 +2,17 @@
 
 import hashlib
 import json
+from datetime import datetime
+from uuid import UUID
 
 import pytest
 import sqlalchemy
 import sqlalchemy.exc
 
-from trace_core.audit.domain import GENESIS_CHAIN, chain_hash
+from trace_core.audit.domain import GENESIS_CHAIN, AuditAction, chain_hash
+from trace_core.audit.dto import AuditFilterDto
 from trace_core.audit.models import AuditEventModel
-from trace_core.audit.repository import SqlAlchemyAuditRepository
+from trace_core.audit.repository import SqlAlchemyAuditRepository, _model_to_dto
 from trace_core.audit.service import AuditService
 from trace_core.cases.dto import CaseCreateDto
 from trace_core.cases.service import CaseService
@@ -328,3 +331,93 @@ def test_export_header_carries_tip(tmp_path, session_manager: DatabaseSessionMan
     header, last = json.loads(lines[0]), json.loads(lines[-1])
     assert header["last_seq"] == 1
     assert header["last_chain"] == last["chain_hash"]
+
+
+_EXPORT_RECORD_KEYS = [
+    "seq",
+    "ts",
+    "action",
+    "actor",
+    "subject_case_number",
+    "subject_case_id",
+    "payload_json",
+    "payload_hash",
+    "prev_chain",
+    "chain_hash",
+    "key_id",
+    "signature",
+]
+
+
+def _exported_records(out) -> list[dict]:  # type: ignore[no-untyped-def]
+    lines = out.read_text(encoding="utf-8").strip().splitlines()
+    return [json.loads(line) for line in lines[1:]]
+
+
+def test_export_record_key_order_is_pinned(tmp_path, session_manager: DatabaseSessionManager) -> None:
+    CaseService(session_manager).create_case(CaseCreateDto(title="Order", lead_examiner="Ex"))
+    out = tmp_path / "order.jsonl"
+    AuditService(session_manager).export(out)
+    assert list(_exported_records(out)[0].keys()) == _EXPORT_RECORD_KEYS
+
+
+def test_export_omits_subject_type_by_design(tmp_path, session_manager: DatabaseSessionManager) -> None:
+    CaseService(session_manager).create_case(CaseCreateDto(title="NoSubj", lead_examiner="Ex"))
+    with session_manager.session() as s:
+        SqlAlchemyAuditRepository(s).append(
+            AuditAction.DEVICE_INSPECTED, "Ex", None, None, {"device": "USB-1"}, subject_type="device"
+        )
+    out = tmp_path / "nosubj.jsonl"
+    AuditService(session_manager).export(out)
+    records = _exported_records(out)
+    assert all("subject_type" not in r for r in records)
+    with session_manager.session() as s:
+        dto = SqlAlchemyAuditRepository(s).list_events(AuditFilterDto(limit=10))
+    assert all(e.subject_type in {"case", "device"} for e in dto)
+
+
+def test_export_record_line_is_byte_for_byte_stable(tmp_path, session_manager: DatabaseSessionManager) -> None:
+    CaseService(session_manager).create_case(CaseCreateDto(title="Bytes", lead_examiner="Ex"))
+    out = tmp_path / "bytes.jsonl"
+    AuditService(session_manager).export(out)
+    raw = out.read_bytes()
+    line = raw.split(b"\n")[1]
+    assert line.startswith(b'{"seq": 1, "ts": "')
+    assert b'", "action": "CASE_CREATED", "actor": "Ex", "subject_case_number": "2026-CR-0001"' in line
+    assert b'", "payload_json": "{\\"action\\":\\"CASE_CREATED\\"' in line
+    assert line.endswith(b"}")
+    assert b'"key_id": "hmac-v1", "signature": "' in line
+    assert raw.endswith(b"\n")
+
+
+def test_export_handles_all_nullable_fields_null(tmp_path, session_manager: DatabaseSessionManager) -> None:
+    with session_manager.session() as s:
+        SqlAlchemyAuditRepository(s).append(
+            AuditAction.DEVICE_INSPECTED, "Ex", None, None, {"device": "USB-2"}, subject_type="device"
+        )
+    out = tmp_path / "nulls.jsonl"
+    AuditService(session_manager).export(out)
+    record = _exported_records(out)[0]
+    assert record["subject_case_number"] is None
+    assert record["subject_case_id"] is None
+    assert list(record.keys()) == _EXPORT_RECORD_KEYS
+
+
+def test_dto_and_export_disagree_only_on_the_three_documented_fields(
+    tmp_path, session_manager: DatabaseSessionManager
+) -> None:
+    CaseService(session_manager).create_case(CaseCreateDto(title="Diverge", lead_examiner="Ex"))
+    out = tmp_path / "diverge.jsonl"
+    AuditService(session_manager).export(out)
+    exported = _exported_records(out)[0]
+    with session_manager.session() as s:
+        model = s.get(AuditEventModel, 1)
+        assert model is not None
+        dto = _model_to_dto(model)
+    assert isinstance(dto.ts, datetime) and dto.ts.tzinfo is not None
+    assert isinstance(exported["ts"], str) and exported["ts"].endswith("Z")
+    assert dto.action is AuditAction.CASE_CREATED
+    assert exported["action"] == "CASE_CREATED"
+    assert isinstance(dto.subject_case_id, UUID)
+    assert exported["subject_case_id"] == str(dto.subject_case_id)
+    assert set(dto.model_dump()) - set(exported) == {"subject_type"}

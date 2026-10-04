@@ -1,11 +1,9 @@
 """Audit tab: live ledger stream + detail + scope + raw drawer."""
 
 from rich.text import Text
-from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.timer import Timer
 from textual.widgets import DataTable, Input, Rule, Static
 
 from trace_core.audit.dto import AuditEventDto, AuditFilterDto
@@ -17,7 +15,7 @@ from trace_core.core.ui.renderers import format_india_datetime, sanitize_termina
 from trace_core.core.ui.theme import THEME_TOKENS
 from trace_core.tui.actions import confirm_overwrite, run_guarded
 from trace_core.tui.forms import RawModal, TextInputModal
-from trace_core.tui.widgets import DossierScroll
+from trace_core.tui.widgets import DossierScroll, TablePane
 
 TABLE_ID = "audit-table"
 AUDIT_HEADER_ID = "audit-header"
@@ -25,7 +23,7 @@ AUDIT_DETAIL_ID = "audit-detail"
 TABLE_COLUMNS = (("Seq", 7), ("Event", 12))
 
 
-class AuditView(Vertical):
+class AuditView(TablePane[AuditEventDto]):
     """Top: stream table. Bottom: selected event detail. Filters on top."""
 
     BINDINGS = [
@@ -35,13 +33,17 @@ class AuditView(Vertical):
         Binding("e", "export", "Export"),
     ]
 
+    TABLE_ID = TABLE_ID
+    HEADER_ID = AUDIT_HEADER_ID
+    DETAIL_ID = "audit-right"
+    SEARCH_ID = "audit-search"
+    COLUMNS = TABLE_COLUMNS
+
     def __init__(self, session_manager: DatabaseSessionManager | None = None) -> None:
         super().__init__()
         self._manager = session_manager
         self._scope: str | None = None
         self._events: list[AuditEventDto] = []
-        self._search_timer: Timer | None = None
-        self._last_cursor: int | None = None
 
     @property
     def _svc(self) -> AuditService:
@@ -61,16 +63,6 @@ class AuditView(Vertical):
             with DossierScroll(id="audit-right"):
                 yield Static("Select an event…", id=AUDIT_DETAIL_ID)
 
-    def on_mount(self) -> None:
-        from trace_core.tui.widgets import mount_header_table
-
-        mount_header_table(self, TABLE_ID, AUDIT_HEADER_ID, TABLE_COLUMNS)
-        self.refresh_data()
-
-    def focus_default(self) -> None:
-        """Focus the table. Called by the shell when this tab activates."""
-        self.query_one(f"#{TABLE_ID}", DataTable).focus()
-
     def refresh_data(self) -> None:
         """Reload stream + detail. Called on mount, tab switch, and scope change."""
         query = self.query_one("#audit-search", Input).value.strip() or None
@@ -83,45 +75,16 @@ class AuditView(Vertical):
         except Exception as exc:  # boundary: every service failure becomes a toast, never a crash
             self.app.notify(str(exc), severity="error")
             return
-        table = self.query_one(f"#{TABLE_ID}", DataTable)
-        table.clear()
-        cursor = table.cursor_row if table.cursor_row is not None else 0
-        for idx, e in enumerate(self._events):
-            table.add_row(*self._row_cells(e, idx == cursor), key=str(e.seq))
-        try:
-            if self._events:
-                table.move_cursor(row=min(cursor, len(self._events) - 1))
-        except Exception:
-            pass
-        self._last_cursor = table.cursor_row if table.cursor_row is not None else 0
-        from trace_core.tui.theme import header_with_count
+        self.fill_table(self._events, [str(e.seq) for e in self._events])
 
-        self.query_one("#audit-header", Static).update(header_with_count(TABLE_COLUMNS, len(self._events)))
-        self._render_detail()
-
-    def _row_cells(self, event: AuditEventDto, selected: bool) -> list:  # type: ignore[no-untyped-def]
+    def row_cells(self, event: AuditEventDto, selected: bool) -> list:  # type: ignore[no-untyped-def]
         from trace_core.audit.renderers import short_action_label
         from trace_core.tui.theme import SELECT_PREFIX
 
         prefix = SELECT_PREFIX if selected else "  "
         return [f"{prefix}{event.seq}", short_action_label(event.action)]
 
-    def _repaint_selection(self) -> None:
-        from trace_core.tui.widgets import repaint_selection
-
-        table = self.query_one(f"#{TABLE_ID}", DataTable)
-        if not self._events:
-            return
-        cursor = table.cursor_row if table.cursor_row is not None else 0
-        repaint_selection(table, self._last_cursor, cursor, lambda idx, sel: self._row_cells(self._events[idx], sel))
-        self._last_cursor = cursor
-
-    def _selected(self) -> AuditEventDto | None:
-        from trace_core.tui.widgets import selected_item
-
-        return selected_item(self.query_one(f"#{TABLE_ID}", DataTable), self._events)
-
-    def _render_detail(self) -> None:
+    def render_detail(self) -> None:
         from trace_core.audit.verifier import verify_event
         from trace_core.tui.theme import DOT_BAD, DOT_OK, integrity_line
 
@@ -188,28 +151,6 @@ class AuditView(Vertical):
             self.app.notify("Open the Integrity tab to check an anchor file.")
         else:
             self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")
-
-    @on(DataTable.RowHighlighted)
-    def _highlighted(self, event: DataTable.RowHighlighted) -> None:
-        if event.data_table.id == TABLE_ID:
-            self._repaint_selection()
-            self._render_detail()
-
-    @on(DataTable.RowSelected)
-    def _opened(self, event: DataTable.RowSelected) -> None:
-        if event.data_table.id == TABLE_ID:
-            self.query_one("#audit-right").focus()
-
-    @on(Input.Changed)
-    def _searched(self, event: Input.Changed) -> None:
-        if event.input.id == "audit-search":
-            # Debounce keystrokes into one refresh; timers only delay, never drop.
-            if self._search_timer is not None:
-                self._search_timer.stop()
-            self._search_timer = self.set_timer(0.25, self.refresh_data)
-
-    def action_search(self) -> None:
-        self.query_one("#audit-search", Input).focus()
 
     def action_scope(self) -> None:
         self.app.push_screen(TextInputModal("Scope to case (blank clears)", "2026-CR-0001"), self._scoped)

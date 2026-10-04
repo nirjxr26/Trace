@@ -41,6 +41,17 @@ STAGE_FAILED_LABEL = {
     Stage.HEALTH: "Health check failed",
 }
 
+_STAGE_LABEL_BY_STATUS = {
+    StageStatus.ACTIVE: STAGE_ACTIVE_LABEL,
+    StageStatus.DONE: STAGE_DONE_LABEL,
+    StageStatus.FAILED: STAGE_FAILED_LABEL,
+}
+
+
+def stage_label(stage: Stage, status: StageStatus) -> str:
+    """Label for one stage/status pair. Single source for the CLI and TUI stage lines."""
+    return _STAGE_LABEL_BY_STATUS.get(status, STAGE_FAILED_LABEL)[stage]
+
 
 def stage_from_state(state: UpdateState) -> Stage | None:
     if state == UpdateState.DOWNLOADING:

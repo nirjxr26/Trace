@@ -252,7 +252,7 @@ class SettingsView(Vertical):
 
     def _install_lines(self, body: Text) -> None:
         from trace_core.tui.theme import stage_line
-        from trace_core.updates.stages import STAGE_ACTIVE_LABEL, STAGE_DONE_LABEL, STAGE_FAILED_LABEL, StageStatus
+        from trace_core.updates.stages import StageStatus, stage_label
 
         prev = self._prev or "?"
         current = self._current or "?"
@@ -262,13 +262,7 @@ class SettingsView(Vertical):
             status = self._install_state.get(stage, StageStatus.PENDING)
             if status == StageStatus.PENDING:
                 continue
-            if status == StageStatus.DONE:
-                label = STAGE_DONE_LABEL[stage]
-            elif status == StageStatus.FAILED:
-                label = STAGE_FAILED_LABEL[stage]
-            else:
-                label = STAGE_ACTIVE_LABEL[stage]
-            body.append_text(stage_line(status, label))
+            body.append_text(stage_line(status, stage_label(stage, status)))
             body.append("\n")
 
     def _integrity_body(self, body: Text, _width: int) -> None:

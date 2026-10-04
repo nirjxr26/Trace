@@ -41,6 +41,14 @@ def prompt_passphrase(confirm: bool = False) -> str:
     return value
 
 
+def report_written(path: Path, message: str) -> None:
+    """Success line plus the written path. Single source for the export/decrypt tails."""
+    from trace_core.core.ui.renderers import console, render_success
+
+    render_success(message)
+    console.print(f"[dim]{path}[/dim]")
+
+
 def do_export_encrypted(svc: AuditService, out: str, passphrase: str) -> Path:  # type: ignore[no-untyped-def]
     """Export, seal with the passphrase, and atomically replace the target. Temp never survives."""
     from trace_core.audit.vault import encrypt_bytes
