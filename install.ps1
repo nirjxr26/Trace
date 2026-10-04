@@ -192,6 +192,7 @@ function Invoke-LiveCommand {
     $here = (Get-Location).Path
     $job = Start-Job -ScriptBlock {
         param($inner, $inArgs, $tmpPath, $workDir)
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         Set-Location $workDir
         $live = [scriptblock]::Create($inner.ToString())
         & $live @inArgs > $tmpPath 2>&1

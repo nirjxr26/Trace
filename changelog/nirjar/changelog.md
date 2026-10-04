@@ -3477,3 +3477,8 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Summary: `install.ps1` enforces TLS 1.2 before any download. Root cause of the empty-trust-store incidents on Windows PowerShell 5.1: the shell negotiates TLS 1.0 by default, GitHub refuses it, the trust-bundle fetch threw inside the provisioner's try/catch, and the install completed with zero keys while reporting success everywhere else. The update then fail-closed on `unknown release key`. The floor is additive (`-bor`), so OS defaults are kept. `install.sh` needs no change: curl negotiates modern TLS itself under `--proto =https`.
 - Files: `install.ps1`, `tests/unit/test_security_regressions.py`, `changelog/nirjar/changelog.md`.
 - Verification: PowerShell Parser reports 0 syntax errors; new `test_install_ps1_enforces_tls12_before_first_webrequest` plus the 7 existing installer/trust tests pass (8 passed); ruff check and format clean.
+
+## 2026-10-04
+- Summary: TLS floor follow-up — the first attempt did not reach the failing call. The trust-bundle fetch runs inside `Invoke-LiveCommand`'s `Start-Job` background job, whose runspace does not inherit the session's `SecurityProtocol`, so the top-level floor never applied there while the direct archive download right above it succeeded. The floor now also lives inside the job scriptblock, covering every background download present and future. Regression test extended to assert a TLS floor inside `Invoke-LiveCommand`.
+- Files: `install.ps1`, `tests/unit/test_security_regressions.py`, `changelog/nirjar/changelog.md`.
+- Verification: PowerShell Parser 0 errors; 8 passed; ruff check and format clean.

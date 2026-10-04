@@ -1400,6 +1400,8 @@ def test_install_ps1_enforces_tls12_before_first_webrequest() -> None:
     tls = next(i for i, line in enumerate(lines) if "SecurityProtocol" in line and "Tls12" in line)
     first_net = next(i for i, line in enumerate(lines) if "Invoke-WebRequest" in line)
     assert tls < first_net, "install.ps1 downloads before enforcing TLS 1.2"
+    job = next(i for i, line in enumerate(lines) if line.startswith("function Invoke-LiveCommand"))
+    assert any("Tls12" in line for line in lines[job:]), "background downloads run without a TLS floor"
 
 
 def test_channel_cannot_introduce_a_new_trust_root() -> None:
