@@ -5,32 +5,16 @@ import typer
 
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.output import SKIP_CONFIRM_HELP
-from trace_core.core.ui.renderers import console, get_success_icon, render_minimalist_table, render_output
-from trace_core.updates.dto import UpdateHistoryDto
+from trace_core.core.ui.renderers import console, render_output
 from trace_core.updates.manifest import ManifestArtifact, ReleaseManifest
-from trace_core.updates.service import UpdateService
 
-update_app = typer.Typer(name="update", help="Check, stage, and record updates.")
+update_app = typer.Typer(name="update", help="Check and install updates.")
 MANIFEST_PATH_HELP = "Manifest URL or path (default: configured TRACE_UPDATE_MANIFEST)"
 ARTIFACT_PATH_HELP = "Artifact file (default: auto-download from manifest)"
-HISTORY_COLUMNS: list[tuple[str, dict[str, object]]] = [
-    ("From", {}),
-    ("To", {}),
-    ("Channel", {}),
-    ("Result", {}),
-    ("Rollback", {}),
-]
-
-
-def history_table_rows(rows: list[UpdateHistoryDto]) -> list[list[str]]:
-    """Single source for history table rows. Shared by CLI and REPL shell."""
-    yes = get_success_icon()
-    return [[r.from_version, r.to_version, r.channel, r.result, yes if r.rollback else "—"] for r in rows]
 
 
 def load_update(manifest: str | None, artifact: str | None) -> tuple[ReleaseManifest, str, str, ManifestArtifact]:
     from trace_core.updates.checker import get_installed_version, load_manifest_auto, resolve_channel
-    from trace_core.updates.errors import UpdateNotAvailableError
     from trace_core.updates.policy import is_update_available, select_artifact
     from trace_core.updates.verifier import resolve_artifact
 
@@ -38,7 +22,11 @@ def load_update(manifest: str | None, artifact: str | None) -> tuple[ReleaseMani
     m, target = load_manifest_auto(manifest, channel)
     current = get_installed_version()
     if not is_update_available(current, m):
-        raise UpdateNotAvailableError(f"no update available (current {current})")
+        # Same wording as the check card: "install" with nothing new is not a failure.
+        from trace_core.updates.renderers import render_up_to_date
+
+        render_up_to_date(current, channel)
+        raise typer.Exit(0)
     if artifact:
         entry = resolve_artifact(m, Path(artifact))
     else:
@@ -71,33 +59,6 @@ def update_check(
         target = resolve_manifest_target(None)
         payload = cached_check(target, channel)
         render_output(output, payload, lambda: render_check_card(payload, channel))
-
-
-def _render_history_table(rows: list[UpdateHistoryDto]) -> None:
-    """Table view plus its follow-up hint. The hint is table furniture; it must
-    never reach `--output json`, which has to stay machine-parseable."""
-    render_minimalist_table(
-        "Update History",
-        HISTORY_COLUMNS,
-        history_table_rows(rows),
-        empty_message="No updates recorded.",
-    )
-    console.print("[dim]Run `trace update check` for the latest state.[/dim]")
-
-
-@update_app.command("history")
-def update_history(
-    output: str = typer.Option("table", "--output", "-o", help="table|json"),
-    limit: int = typer.Option(50, "--limit", min=1, max=500, help="Max rows"),
-) -> None:
-    with capture_cli_errors("Update History"):
-        svc = UpdateService()
-        rows = svc.list_history(limit=limit, offset=0)
-        render_output(
-            output,
-            [r.model_dump(mode="json") for r in rows],
-            lambda: _render_history_table(rows),
-        )
 
 
 @update_app.command("install")

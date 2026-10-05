@@ -3,8 +3,8 @@ import time
 from rich.live import Live
 from rich.text import Text
 
-from trace_core.core.ui.renderers import console, get_success_icon, safe_text
-from trace_core.updates.dto import UpdateHistoryCreateDto
+from trace_core.core.ui.renderers import console, safe_text
+from trace_core.updates.dto import UpdateResultDto
 from trace_core.updates.manifest import ReleaseManifest
 from trace_core.updates.stages import (
     STAGE_ORDER,
@@ -13,24 +13,14 @@ from trace_core.updates.stages import (
     StageStatus,
     format_mb,
     format_speed,
+    stage_glyph,
     stage_label,
+    stage_token,
 )
 
 BAR_WIDTH = 28
 DRAW_INTERVAL = 0.25
 RESTART_REQUIRED_MESSAGE = "Trace will restart to complete this update."
-
-_STAGE_GLYPH = {
-    StageStatus.DONE: get_success_icon(),
-    StageStatus.ACTIVE: "◌",
-    StageStatus.FAILED: "✕",
-}
-
-_STAGE_STYLE = {
-    StageStatus.DONE: "green",
-    StageStatus.ACTIVE: "yellow",
-    StageStatus.FAILED: "red",
-}
 
 _FAILED_STAGE = {
     "staging": Stage.VERIFY,
@@ -51,9 +41,14 @@ def render_check_blocked(payload: dict) -> None:
     console.print("[dim]See `trace update history` for past attempts.[/dim]")
 
 
+def render_up_to_date(current: str, channel: str) -> None:
+    """Single source for the 'nothing newer' line. Shared by check, install and the REPL."""
+    console.print(f"[green]✓ You're up to date[/green] — Trace v{safe_text(current)} ({safe_text(channel)})")
+
+
 def render_check_card(payload: dict, channel: str) -> None:
     if not payload["available"]:
-        console.print(f"[dim]Up to date ({safe_text(payload['current'])}, {channel}).[/dim]")
+        render_up_to_date(str(payload["current"]), channel)
         return
     if payload["security_update"]:
         console.print("[bold]Security update[/bold]")
@@ -67,7 +62,9 @@ def render_check_card(payload: dict, channel: str) -> None:
     console.print(
         f"[green]Update {safe_text(payload['target'])} available[/green] — current {safe_text(payload['current'])} ({channel})"
     )
-    console.print("[dim]Run `trace update install` to update.[/dim]")
+    console.print(
+        "[dim]Run `trace update install` to download, verify the signature, install, and run a health check.[/dim]"
+    )
 
 
 def render_install_summary(manifest: ReleaseManifest, current: str, bypass_note: str) -> None:
@@ -80,6 +77,7 @@ def render_install_summary(manifest: ReleaseManifest, current: str, bypass_note:
         console.print("Restart: Required")
     if bypass_note:
         console.print(f"[yellow]Override: {safe_text(bypass_note)}[/yellow]")
+    console.print("[dim]Steps: download → verify signature + hash → install → health check → done[/dim]")
 
 
 class UpdateProgressDisplay(ProgressCallback):
@@ -129,7 +127,7 @@ class UpdateProgressDisplay(ProgressCallback):
             console.print(self._stage_line(stage, status))
         self._draw(force=True)
 
-    def finish(self, dto: UpdateHistoryCreateDto, current: str) -> None:
+    def finish(self, dto: UpdateResultDto, current: str) -> None:
         if dto.result == "SUCCESS":
             for stage in STAGE_ORDER:
                 self.statuses[stage] = StageStatus.DONE
@@ -170,7 +168,7 @@ class UpdateProgressDisplay(ProgressCallback):
         console.print("Run `trace update history` for details.")
 
     def _stage_line(self, stage: Stage, status: StageStatus) -> str:
-        return f"{_STAGE_GLYPH[status]} {stage_label(stage, status)}"
+        return f"│ {stage_glyph(status)} {stage_label(stage, status)}"
 
     def _frame(self) -> Text:
         body = Text()
@@ -186,7 +184,7 @@ class UpdateProgressDisplay(ProgressCallback):
             status = self.statuses[stage]
             if status == StageStatus.PENDING:
                 continue
-            body.append(self._stage_line(stage, status) + "\n", style=_STAGE_STYLE[status])
+            body.append(self._stage_line(stage, status) + "\n", style=stage_token(status))
         return body
 
     def _draw(self, force: bool = False) -> None:

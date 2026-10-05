@@ -4,7 +4,7 @@ from typer.testing import CliRunner
 
 from trace_core.cli.main import app
 from trace_core.updates.domain import UpdateState
-from trace_core.updates.dto import UpdateHistoryCreateDto
+from trace_core.updates.dto import UpdateResultDto
 from trace_core.updates.stages import (
     STAGE_ORDER,
     Stage,
@@ -114,7 +114,9 @@ def test_check_card_up_to_date(capsys):
     from trace_core.updates.renderers import render_check_card
 
     render_check_card(_payload(available=False, target=None), "stable")
-    assert "Up to date" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "up to date" in out
+    assert "0.2.3" in out
 
 
 def test_install_summary_hides_trust_details(capsys, signed_release):
@@ -134,7 +136,7 @@ def test_install_summary_hides_trust_details(capsys, signed_release):
 def test_finish_success_frame(capsys):
     from trace_core.updates.renderers import UpdateProgressDisplay
 
-    dto = UpdateHistoryCreateDto(from_version="0.2.3", to_version="0.2.4", result="SUCCESS")
+    dto = UpdateResultDto(from_version="0.2.3", to_version="0.2.4", result="SUCCESS")
     display = UpdateProgressDisplay(current="0.2.3", target="0.2.4")
     display.finish(dto, "0.2.3")
     out = capsys.readouterr().out
@@ -145,7 +147,7 @@ def test_finish_success_frame(capsys):
 def test_finish_rolled_back_frame(capsys):
     from trace_core.updates.renderers import UpdateProgressDisplay
 
-    dto = UpdateHistoryCreateDto(from_version="0.2.3", to_version="0.2.4", result="ROLLED_BACK", rollback=True)
+    dto = UpdateResultDto(from_version="0.2.3", to_version="0.2.4", result="ROLLED_BACK", rollback=True)
     display = UpdateProgressDisplay(current="0.2.3", target="0.2.4")
     display.finish(dto, "0.2.3")
     out = capsys.readouterr().out
@@ -156,7 +158,7 @@ def test_finish_rolled_back_frame(capsys):
 def test_finish_failed_frame(capsys):
     from trace_core.updates.renderers import UpdateProgressDisplay
 
-    dto = UpdateHistoryCreateDto(
+    dto = UpdateResultDto(
         from_version="0.2.3",
         to_version="0.2.4",
         result="FAILED",
@@ -178,8 +180,8 @@ def test_frame_checklist_states():
     display.on_stage(Stage.VERIFY, StageStatus.ACTIVE)
     frame = display._frame()
     text = frame.plain
-    assert "✓ Downloaded" in text
-    assert "◌ Verifying" in text
+    assert "│ ● Downloaded" in text
+    assert "│ ● Verifying" in text
     assert "Installing" not in text
 
 
@@ -195,7 +197,7 @@ def test_check_cli_variants(signed_release, temp_storage_root, monkeypatch):
     monkeypatch.setattr(settings, "update_manifest", str(old_path))
     res = CliRunner().invoke(app, ["update", "check"])
     assert res.exit_code == 0
-    assert "Up to date" in res.output
+    assert "up to date" in res.output
 
 
 def test_shell_help_lists_three_update_actions(capsys):

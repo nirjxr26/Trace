@@ -2,6 +2,7 @@ from typer.testing import CliRunner
 
 from trace_core.cli.main import app
 from trace_core.core.cli.exit_codes import EXIT_RECOVERY_FAILED
+from trace_core.updates.marker import write_marker
 
 
 def test_recovery_no_marker_reports_state(temp_storage_root):
@@ -11,10 +12,7 @@ def test_recovery_no_marker_reports_state(temp_storage_root):
 
 
 def test_recovery_missing_previous_fails(temp_storage_root, session_manager):
-    from trace_core.updates.service import UpdateService
-
-    svc = UpdateService(session_manager)
-    svc.write_result_marker(
+    write_marker(
         {
             "transaction_id": "tx-rec-1",
             "state": "FAILED",
@@ -31,7 +29,6 @@ def test_recovery_restores_previous(temp_storage_root, session_manager, tmp_path
     import shutil
 
     from trace_core.core.settings import settings
-    from trace_core.updates.service import UpdateService
     from trace_updater import updater as updater_mod
 
     monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
@@ -48,8 +45,7 @@ def test_recovery_restores_previous(temp_storage_root, session_manager, tmp_path
             release_meta={"version": version, "schema_min": 0, "schema_target": 99},
         )
         updater_mod.activate(base, version)
-    svc = UpdateService(session_manager)
-    svc.write_result_marker(
+    write_marker(
         {
             "transaction_id": "tx-rec-2",
             "state": "FAILED",

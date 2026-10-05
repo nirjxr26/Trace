@@ -51,7 +51,6 @@ def test_h12_rejects_sibling_domain_ending_in_cdn_suffix() -> None:
 
 
 def test_h12_cross_host_redirect_guard_blocks_impostor(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from trace_core.updates.errors import UpdateError
 
     guard = sources._HttpsRedirectGuard()
     req = urllib.request.Request("https://github.com/x/manifest.json")
@@ -305,5 +304,7 @@ def test_h10_urllib_error_still_propagates(tmp_path, monkeypatch) -> None:  # ty
 
     monkeypatch.setattr(sources.urllib.request, "build_opener", lambda *_a, **_k: _Opener())
     monkeypatch.setattr(sources, "_validate_manifest_url", lambda _u: None)
-    with pytest.raises(UpdateError, match="boom"):
+    from trace_core.updates.errors import UpdateNetworkError
+
+    with pytest.raises(UpdateNetworkError, match="boom"):
         sources.stream_artifact_to_file("https://example.test/base", "a.whl", dest, max_bytes=1 << 20)

@@ -40,20 +40,6 @@ def test_policy_deferred_exit_zero(signed_release, temp_storage_root, monkeypatc
     assert "reinstall required" in res.output
 
 
-def test_history_json_shape(session_manager, temp_storage_root, monkeypatch):
-    from trace_core.updates.dto import UpdateHistoryCreateDto
-    from trace_core.updates.service import UpdateService
-
-    monkeypatch.setattr("trace_core.updates.commands.UpdateService", lambda: UpdateService(session_manager))
-    svc = UpdateService(session_manager)
-    svc.record_history(UpdateHistoryCreateDto(from_version="0.1.0", to_version="1.5.0", result="SUCCESS"))
-    res = CliRunner().invoke(app, ["update", "history", "--output", "json"])
-    assert res.exit_code == 0
-    rows = json.loads(res.output)
-    assert rows
-    assert rows[0]["from_version"] == "0.1.0"
-
-
 def test_unrelated_json_uncontaminated():
     res = CliRunner().invoke(app, ["case", "list", "--output", "json"])
     assert res.exit_code == 0

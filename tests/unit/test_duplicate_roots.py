@@ -75,11 +75,17 @@ def test_duplicate_migration_version_is_refused_at_registration():
     def _dup_name(bind):  # type: ignore[no-untyped-def]
         pass
 
-    with pytest.raises(RuntimeError, match="duplicate migration"):
+    def _attempt_duplicate() -> None:
         mig.register_migration(existing_version, "a_completely_new_name", operations=("probe",))(_dup_version)
 
     with pytest.raises(RuntimeError, match="duplicate migration"):
+        _attempt_duplicate()
+
+    def _attempt_duplicate_name() -> None:
         mig.register_migration(999, existing_name, operations=("probe",))(_dup_name)
+
+    with pytest.raises(RuntimeError, match="duplicate migration"):
+        _attempt_duplicate_name()
 
 
 def test_a_fresh_version_and_name_are_accepted_and_leave_no_residue():
@@ -110,8 +116,12 @@ def test_a_non_contiguous_version_is_refused():
     before = list(mig.MIGRATIONS)
     head = max(v for v, _, _ in before)
     try:
-        with pytest.raises(RuntimeError, match="contiguous"):
+
+        def _attempt_gapped() -> None:
             mig.register_migration(head + 5, f"{head + 5:03d}_gapped", operations=("probe",))(lambda bind: None)
+
+        with pytest.raises(RuntimeError, match="contiguous"):
+            _attempt_gapped()
     finally:
         mig.MIGRATIONS[:] = before
         mig.MIGRATION_OPERATIONS.pop(head + 5, None)

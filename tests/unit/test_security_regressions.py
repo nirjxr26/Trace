@@ -424,11 +424,12 @@ def test_denied_admin_attempt_leaves_operator_record_intact(session_manager: Dat
     from trace_core.core.errors import AuthorizationError
     from trace_core.core.operators import OperatorModel
 
-    existing = CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+    svc = CaseService(session_manager)
+    existing = svc.create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
 
     as_user("blocked-intruder")
     with pytest.raises(AuthorizationError):
-        CaseService(session_manager).delete_case(existing.number, purge=True)
+        svc.delete_case(existing.number, purge=True)
 
     assert CaseService(session_manager).get_case(existing.number).is_deleted is False
     with session_manager.session() as session:
@@ -797,8 +798,9 @@ def test_anchor_mismatch_pure(session_manager: DatabaseSessionManager) -> None:
     seq, chain = svc.head()
     good = {"last_seq": seq, "last_chain": chain}
     check_anchor_match(res, _signed_anchor(good), chain)
+    forged = _signed_anchor({**good, "last_seq": seq + 100})
     with pytest.raises(AuditTamperError, match="tail mismatch"):
-        check_anchor_match(res, _signed_anchor({**good, "last_seq": seq + 100}), chain)
+        check_anchor_match(res, forged, chain)
 
 
 def test_anchor_forged_signature_is_rejected(session_manager: DatabaseSessionManager) -> None:
@@ -1036,8 +1038,9 @@ def test_ledger_missing_detects_psycopg3_sqlstate() -> None:
     from trace_core.core.errors import ApplicationError
 
     assert is_missing_relation_error(_pg_error(psycopg.errors.UndefinedTable("missing relation"))) is True
+    bad_err = _pg_error(psycopg.errors.UndefinedTable("missing relation"))
     with pytest.raises(ApplicationError):
-        _check_ledger_error(_pg_error(psycopg.errors.UndefinedTable("missing relation")))
+        _check_ledger_error(bad_err)
 
 
 def test_manifest_rejects_empty_minimum_supported_version() -> None:
@@ -1065,10 +1068,10 @@ def test_history_dto_requires_explicit_result() -> None:
     """H-22: the default persisted SUCCESS for an update that never happened."""
     from pydantic import ValidationError
 
-    from trace_core.updates.dto import UpdateHistoryCreateDto
+    from trace_core.updates.dto import UpdateResultDto
 
     with pytest.raises(ValidationError):
-        UpdateHistoryCreateDto.model_validate({"from_version": "0.2.6", "to_version": "0.2.7"})
+        UpdateResultDto.model_validate({"from_version": "0.2.6", "to_version": "0.2.7"})
 
 
 def test_manifest_rejects_unsafe_artifact_filename() -> None:
@@ -1131,13 +1134,13 @@ def test_history_dto_rejects_overlong_transaction_id() -> None:
     """H-26: String(36) truncates silently on SQLite, colliding two history rows."""
     from pydantic import ValidationError
 
-    from trace_core.updates.dto import UpdateHistoryCreateDto
+    from trace_core.updates.dto import UpdateResultDto
 
     with pytest.raises(ValidationError):
-        UpdateHistoryCreateDto.model_validate(
+        UpdateResultDto.model_validate(
             {"from_version": "0.2.6", "to_version": "0.2.7", "result": "SUCCESS", "transaction_id": "x" * 37}
         )
-    ok = UpdateHistoryCreateDto.model_validate(
+    ok = UpdateResultDto.model_validate(
         {"from_version": "0.2.6", "to_version": "0.2.7", "result": "SUCCESS", "transaction_id": "x" * 36}
     )
     assert ok.transaction_id is not None
@@ -1319,7 +1322,8 @@ def test_verify_release_refuses_a_mismatched_trust_anchor(tmp_path, monkeypatch:
         pytest.skip("no anchor to rename")
 
     spec = importlib.util.spec_from_file_location("verify_release", repo / "release" / "verify_release.py")
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     verify_release = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(verify_release)
 

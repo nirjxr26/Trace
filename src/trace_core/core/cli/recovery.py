@@ -36,7 +36,7 @@ def _recovery_states() -> tuple[frozenset[str], frozenset[str]]:
 _ROLLBACK_WORTHY_STATES, _TERMINAL_STATES = _recovery_states()
 
 
-def _triage_update_marker(svc) -> None:  # type: ignore[no-untyped-def]
+def _triage_update_marker() -> None:
     from trace_core.updates.lock import try_update_lock
     from trace_core.updates.migration import finish_update_migration, marker_state
 
@@ -52,21 +52,6 @@ def _triage_update_marker(svc) -> None:  # type: ignore[no-untyped-def]
     else:
         tx = _corrupt_marker_id()
         _clear_corrupt_marker()
-    from trace_core.core.clock import now_utc
-    from trace_core.updates.domain import UpdateFailureStage
-    from trace_core.updates.dto import UpdateHistoryCreateDto
-
-    svc.record_history(
-        UpdateHistoryCreateDto(
-            from_version="unknown",
-            to_version="unknown",
-            result="FAILED",
-            failure_stage=UpdateFailureStage.RECOVERY,
-            failure_reason=f"stale {state} update marker cleared for transaction {tx}",
-            transaction_id=tx,
-            started_at=now_utc(),
-        )
-    )
     console.print(f"[yellow]Cleared stale {state} update marker (transaction {tx}).[/yellow]")
 
 
@@ -91,7 +76,6 @@ def _clear_corrupt_marker() -> None:
 def _recover() -> None:
     from trace_core.core.database.health import fetch_db_snapshot
     from trace_core.core.database.session import get_db
-    from trace_core.updates.service import UpdateService
     from trace_updater import updater as updater_mod
 
     base = updater_mod.install_root()
@@ -106,8 +90,7 @@ def _recover() -> None:
         raise RecoveryError(f"database unreachable ({exc})") from exc
     if not snap.healthy:
         raise RecoveryError(f"database unreachable ({snap.message})")
-    svc = UpdateService(mgr)
-    _triage_update_marker(svc)
+    _triage_update_marker()
     from trace_core.updates.marker import marker_path, read_marker
 
     result_marker_path = marker_path()

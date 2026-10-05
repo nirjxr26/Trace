@@ -35,34 +35,43 @@ def _sync_trusted_keys() -> None:
     renamed file would ship a key that no install can ever match. Derive the id
     from the key bytes and refuse on mismatch.
     """
-    from trace_core.updates.signing import key_id_for_pubkey
-    from trace_core.updates.trust import trust_root
 
+    sources = _collect_trust_sources()
+    if not sources:
+        raise SystemExit("no trust anchors found in release/trusted-keys or trusted-keys.bundle")
+    for stem, hexpub in sources:
+        _import_trust_source(stem, hexpub)
+
+
+def _collect_trust_sources() -> list[tuple[str, str]]:
     sources: list[tuple[str, str]] = []
     for pub in Path("release/trusted-keys").glob("*.pub"):
         sources.append((pub.stem, pub.read_text(encoding="utf-8").strip()))
     bundle = Path("trusted-keys.bundle")
     if bundle.exists():
         for line in bundle.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                parts = line.split()
-                if len(parts) == 2:
-                    sources.append((parts[0], parts[1]))
-    if not sources:
-        raise SystemExit("no trust anchors found in release/trusted-keys or trusted-keys.bundle")
+            parts = line.split()
+            if len(parts) == 2:
+                sources.append((parts[0], parts[1]))
+    return sources
 
-    for stem, hexpub in sources:
-        raw = bytes.fromhex(hexpub)
-        derived = key_id_for_pubkey(raw)
-        if derived.removeprefix(KEY_PREFIX) != stem:
-            raise SystemExit(f"trust anchor {stem!r} does not match its own key content: key derives {derived!r}")
-        # revoked/ is runtime-only; source-of-truth keys that were revoked must not be re-trusted.
-        if not (trust_root() / "revoked" / stem).exists():
-            dest = trust_root() / f"{stem}.pub"
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            from trace_core.core.fs import atomic_write_lines
 
-            atomic_write_lines(dest, [hexpub], mode=0o600)
+def _import_trust_source(stem: str, hexpub: str) -> None:
+    from trace_core.updates.signing import key_id_for_pubkey
+    from trace_core.updates.trust import trust_root
+
+    raw = bytes.fromhex(hexpub)
+    derived = key_id_for_pubkey(raw)
+    if derived.removeprefix(KEY_PREFIX) != stem:
+        raise SystemExit(f"trust anchor {stem!r} does not match its own key content: key derives {derived!r}")
+    # revoked/ is runtime-only; source-of-truth keys that were revoked must not be re-trusted.
+    if (trust_root() / "revoked" / stem).exists():
+        return
+    dest = trust_root() / f"{stem}.pub"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    from trace_core.core.fs import atomic_write_lines
+
+    atomic_write_lines(dest, [hexpub], mode=0o600)
 
 
 def _verify_trust_bundle(manifest: object, cwd: Path) -> None:

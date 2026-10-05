@@ -636,8 +636,9 @@ def _migration_013_anchor_intents(bind: Engine | Connection) -> None:
 
 @register_migration(14, "014_create_update_history", operations=(_create_all(("update_history",)),))
 def _migration_014_update_history(bind: Engine | Connection) -> None:
-    import trace_core.updates.models  # noqa: F401
-
+    # The update_history model is gone; the table is only kept for databases that already
+    # applied 014–016. A fresh install never creates it, and the migration stays in place
+    # because the registry enforces contiguity.
     if "update_history" in Base.metadata.tables:
         Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables["update_history"]])
 

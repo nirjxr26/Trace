@@ -5,7 +5,6 @@ from trace_core.updates.domain import UpdateResult
 from trace_core.updates.errors import UpdateError, UpdatePolicyBlockedError
 from trace_core.updates.gate import GateDecision
 from trace_core.updates.lifecycle import UpdateLifecycle
-from trace_core.updates.service import UpdateService
 
 
 @pytest.fixture
@@ -61,14 +60,12 @@ def test_full_lifecycle_success(
     monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
     signing.import_release_pubkey(release_keys["pub_hex"])
     manifest, _, art_path, _ = signed_release()
-    svc = UpdateService(session_manager)
-    dto = UpdateLifecycle("tx-life-1", svc).run(manifest, art_path)
+    dto = UpdateLifecycle("tx-life-1", session_manager).run(manifest, art_path)
     assert dto.result == UpdateResult.SUCCESS
     assert dto.transaction_id == "tx-life-1"
-    rows = svc.list_history()
-    assert any(r.transaction_id == "tx-life-1" and r.result == "SUCCESS" for r in rows)
-    marker = svc.read_result_marker()
-    assert marker is not None
+    from trace_core.updates.marker import read_marker
+
+    marker = read_marker()
     assert marker["transaction_id"] == "tx-life-1"
     assert marker["result"] == "completed"
     assert marker["rollback_performed"] is False
@@ -76,12 +73,9 @@ def test_full_lifecycle_success(
 
 def test_policy_blocked_records_and_raises(session_manager, temp_storage_root, signed_release):
     manifest, _, art_path, _ = signed_release(minimum_supported_version="9.9.9")
-    svc = UpdateService(session_manager)
-    life = UpdateLifecycle("tx-life-2", svc)
+    life = UpdateLifecycle("tx-life-2", session_manager)
     with pytest.raises(UpdatePolicyBlockedError):
         life.run(manifest, art_path)
-    rows = svc.list_history()
-    assert any(r.transaction_id == "tx-life-2" and r.result == "FAILED" for r in rows)
 
 
 def test_unknown_gate_fails_closed(session_manager, temp_storage_root, signed_release):
@@ -92,8 +86,7 @@ def test_unknown_gate_fails_closed(session_manager, temp_storage_root, signed_re
             return GateDecision.UNKNOWN
 
     manifest, _, art_path, _ = signed_release()
-    svc = UpdateService(session_manager)
-    life = UpdateLifecycle("tx-life-3", svc)
+    life = UpdateLifecycle("tx-life-3", session_manager)
     gate = UnknownGate()
     with pytest.raises(UpdateError):
         life.run(manifest, art_path, gate=gate)
@@ -101,8 +94,7 @@ def test_unknown_gate_fails_closed(session_manager, temp_storage_root, signed_re
 
 def test_health_failure_rolls_back(session_manager, signed_release, seeded_install, failing_health_check):
     manifest, _, art_path, _ = signed_release()
-    svc = UpdateService(session_manager)
-    dto = UpdateLifecycle("tx-life-4", svc).run(manifest, art_path)
+    dto = UpdateLifecycle("tx-life-4", session_manager).run(manifest, art_path)
     assert dto.result == UpdateResult.ROLLED_BACK
     assert dto.rollback is True
 
@@ -112,7 +104,6 @@ def test_rollback_onto_pending_migrations_is_not_passed(session_manager, signed_
     from trace_core.core.database import health as health_mod
 
     manifest, _, art_path, _ = signed_release()
-    svc = UpdateService(session_manager)
     real_snapshot = health_mod.fetch_db_snapshot
     calls = {"health_checks": 0}
 
@@ -126,15 +117,14 @@ def test_rollback_onto_pending_migrations_is_not_passed(session_manager, signed_
         return snap
 
     monkeypatch.setattr(health_mod, "fetch_db_snapshot", _pending_after_rollback)
-    dto = UpdateLifecycle("tx-life-4b", svc).run(manifest, art_path)
+    dto = UpdateLifecycle("tx-life-4b", session_manager).run(manifest, art_path)
     assert dto.result == UpdateResult.ROLLED_BACK
     assert dto.health_check_result.endswith("health failed")
 
 
 def test_rollback_failure_enters_recovery(session_manager, signed_release, install_root, failing_health_check):
     manifest, _, art_path, _ = signed_release()
-    svc = UpdateService(session_manager)
-    dto = UpdateLifecycle("tx-life-5", svc).run(manifest, art_path)
+    dto = UpdateLifecycle("tx-life-5", session_manager).run(manifest, art_path)
     assert dto.result == UpdateResult.FAILED
     assert dto.failure_stage == "health"
     # The durable marker is the recovery surface; UpdateLifecycle.load() was deleted

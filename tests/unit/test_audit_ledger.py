@@ -414,8 +414,10 @@ def test_dto_and_export_disagree_only_on_the_three_documented_fields(
         model = s.get(AuditEventModel, 1)
         assert model is not None
         dto = _model_to_dto(model)
-    assert isinstance(dto.ts, datetime) and dto.ts.tzinfo is not None
-    assert isinstance(exported["ts"], str) and exported["ts"].endswith("Z")
+    assert isinstance(dto.ts, datetime)
+    assert dto.ts.tzinfo is not None
+    assert isinstance(exported["ts"], str)
+    assert exported["ts"].endswith("Z")
     assert dto.action is AuditAction.CASE_CREATED
     assert exported["action"] == "CASE_CREATED"
     assert isinstance(dto.subject_case_id, UUID)

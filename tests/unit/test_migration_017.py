@@ -142,12 +142,20 @@ def test_migration_017_restores_the_append_only_trigger(pre_017_engine) -> None:
     with pre_017_engine.begin() as conn:
         _run_migration_017(conn)
         assert _verify_008_audit_protection(conn) is True
-    with pytest.raises(Exception):
+    from sqlalchemy.exc import DBAPIError
+
+    def _tamper_update() -> None:
         with pre_017_engine.begin() as conn:
             conn.execute(text("UPDATE audit_events SET actor = 'tampered' WHERE seq = 1"))
-    with pytest.raises(Exception):
+
+    def _tamper_delete() -> None:
         with pre_017_engine.begin() as conn:
             conn.execute(text("DELETE FROM audit_events WHERE seq = 1"))
+
+    with pytest.raises(DBAPIError):
+        _tamper_update()
+    with pytest.raises(DBAPIError):
+        _tamper_delete()
 
 
 def test_migration_017_preserves_every_pre_existing_index(pre_017_engine) -> None:

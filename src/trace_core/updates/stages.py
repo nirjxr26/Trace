@@ -53,6 +53,30 @@ def stage_label(stage: Stage, status: StageStatus) -> str:
     return _STAGE_LABEL_BY_STATUS.get(status, STAGE_FAILED_LABEL)[stage]
 
 
+STAGE_GLYPH: dict[StageStatus, str] = {
+    StageStatus.DONE: "●",
+    StageStatus.ACTIVE: "●",
+    StageStatus.FAILED: "▲",
+    StageStatus.PENDING: "◌",
+}
+
+STAGE_TOKEN: dict[StageStatus, str] = {
+    StageStatus.DONE: "green",
+    StageStatus.ACTIVE: "blue",
+    StageStatus.FAILED: "amber",
+    StageStatus.PENDING: "muted",
+}
+
+
+def stage_glyph(status: StageStatus) -> str:
+    """One glyph per status, never colour alone. CLI and TUI share this."""
+    return STAGE_GLYPH[status]
+
+
+def stage_token(status: StageStatus) -> str:
+    return STAGE_TOKEN[status]
+
+
 def stage_from_state(state: UpdateState) -> Stage | None:
     if state == UpdateState.DOWNLOADING:
         return Stage.DOWNLOAD

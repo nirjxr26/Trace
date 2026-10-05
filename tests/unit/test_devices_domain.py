@@ -32,8 +32,9 @@ def _serial(value: str = "SERIAL-1") -> ObservedSerial:
 
 def test_observed_serial_is_not_a_bare_string() -> None:
     assert ObservedSerial(value="SERIAL-1").value == "SERIAL-1"
+    bad_raw = cast(str, 1)
     with pytest.raises(ValidationError):
-        ObservedSerial(value=cast(str, 1))
+        ObservedSerial(value=bad_raw)
 
 
 def _fingerprint(
@@ -129,10 +130,18 @@ def test_device_kind_is_separate_from_the_opt_in_property() -> None:
 
 def test_naive_timestamps_are_rejected() -> None:
     naive = datetime(2026, 10, 3, 12, 0)
-    with pytest.raises(ValidationError):
+
+    def _build_inspection() -> None:
         DeviceInspection(device=_info(), fingerprint=_fingerprint(), inspected_at=naive)
+
     with pytest.raises(ValidationError):
+        _build_inspection()
+
+    def _build_gate() -> None:
         _gate(checked_at=naive)
+
+    with pytest.raises(ValidationError):
+        _build_gate()
 
 
 def test_aware_timestamps_are_coerced_to_utc() -> None:

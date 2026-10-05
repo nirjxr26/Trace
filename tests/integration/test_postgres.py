@@ -197,9 +197,13 @@ def test_postgres_migration_017_preserves_append_only_trigger(
 ) -> None:
     with pg_session_manager.engine.connect() as conn:
         assert _verify_008_audit_protection(conn) is True
-    with pytest.raises(DBAPIError):
+
+    def _tamper() -> None:
         with pg_session_manager.engine.begin() as conn:
             conn.execute(text("UPDATE audit_events SET actor = 'tampered' WHERE seq = 1"))
+
+    with pytest.raises(DBAPIError):
+        _tamper()
 
 
 def test_postgres_migration_017_accepts_a_null_case_row(

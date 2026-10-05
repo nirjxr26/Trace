@@ -13,21 +13,22 @@ _CONFIRM_HINT = "y/N confirm"
 
 COMMANDS: list[tuple[str, str, str]] = [
     # (command id, label, hint)
-    ("tab-cases", "Go: Cases", "case table + dossier"),
-    ("tab-audit", "Go: Audit", "ledger stream + detail"),
-    ("tab-settings", "Go: Settings", "sections + detail"),
-    ("case-create", "Case: create", "guided form"),
-    ("case-edit", "Case: edit selected", "diff preview + reason"),
-    ("case-close", "Case: seal selected", "type number to confirm"),
-    ("case-archive", "Case: archive selected", _CONFIRM_HINT),
-    ("case-purge", "Case: purge selected", "type number, irreversible"),
-    ("case-restore", "Case: restore selected", _CONFIRM_HINT),
-    ("case-recent", "Case: recent first", "5 most recently updated"),
-    ("audit-export", "Audit: export bundle", "header + JSONL"),
-    ("audit-anchor", "Audit: verify with anchor", "tail check"),
-    ("database-migrate", "Database: apply migrations", "pending only"),
-    ("updates-check", "Updates: check", "available version"),
-    ("updates-install", "Updates: install", _CONFIRM_HINT),
+    ("tab-cases", "Cases  —  browse & work cases", "case table + dossier"),
+    ("tab-audit", "Audit  —  ledger & verification", "ledger stream + detail"),
+    ("tab-settings", "Settings  —  database, updates, diagnostics", "sections + detail"),
+    ("case-create", "Create a new case", "guided form"),
+    ("case-edit", "Edit the selected case", "diff preview + reason"),
+    ("case-close", "Seal (close) the selected case", "type number to confirm"),
+    ("case-archive", "Archive the selected case", _CONFIRM_HINT),
+    ("case-purge", "Permanently erase the selected case", "type number, irreversible"),
+    ("case-restore", "Restore an archived case", _CONFIRM_HINT),
+    ("case-recent", "Sort cases: recent first", "5 most recently updated"),
+    ("audit-export", "Export the audit bundle", "header + JSONL"),
+    ("audit-anchor", "Verify the ledger against its anchor", "tail check"),
+    ("database-migrate", "Apply pending database migrations", "pending only"),
+    ("updates-check", "Check for a Trace update", "available version"),
+    ("updates-install", "Install the available Trace update", _CONFIRM_HINT),
+    ("uninstall", "Uninstall Trace", "app only, or app + all data"),
 ]
 
 

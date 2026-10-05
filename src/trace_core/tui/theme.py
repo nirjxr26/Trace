@@ -87,6 +87,42 @@ def stage_line(status: StageStatus, label: str):
     return body
 
 
+GUTTER = "│ "
+
+
+def step_line(status: StageStatus, label: str):
+    """Update-screen step line: left gutter, status glyph, label."""
+    from trace_core.core.ui.theme import THEME_HEX
+    from trace_core.updates.stages import stage_glyph, stage_token
+
+    body = Text()
+    body.append(GUTTER, style=THEME_HEX["muted"])
+    body.append(f"{stage_glyph(status)} ", style=THEME_HEX[stage_token(status)])
+    body.append(label)
+    return body
+
+
+def download_bar(read: int, total: int, width: int = 28):
+    from trace_core.core.ui.theme import THEME_HEX
+
+    filled = min(width, read * width // total) if total > 0 else 0
+    body = Text()
+    body.append(GUTTER, style=THEME_HEX["muted"])
+    body.append("[" + "█" * filled + "░" * (width - filled) + "]", style=THEME_HEX["green"])
+    if total > 0:
+        body.append(f" {read * 100 // total}%  {read / (1 << 20):.1f} / {total / (1 << 20):.1f} MB")
+    return body
+
+
+def done_line():
+    from trace_core.core.ui.theme import THEME_HEX
+
+    body = Text()
+    body.append(GUTTER, style=THEME_HEX["muted"])
+    body.append("Done", style="dim")
+    return body
+
+
 def integrity_line(verified: bool):  # type: ignore[no-untyped-def]
     """Single source for Cases/Audit integrity summary. Hashes live in Integrity tab only."""
     return dot_line(verified, "Verified" if verified else "Mismatch")

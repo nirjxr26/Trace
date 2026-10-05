@@ -37,6 +37,10 @@ class TraceAutoSuggest(AutoSuggest):
             "clear",
             "help",
             "exit",
+            "update check",
+            "update history",
+            "update install",
+            "uninstall",
         ]
 
     def _suggest_from_history(self, buffer: Any, document: Any) -> Suggestion | None:
@@ -123,6 +127,8 @@ class TraceShellCompleter(Completer):
         ("ed", "Edit case (short)"),
         ("recent", "Recent cases"),
         ("back", "Back to general"),
+        ("update", "Update: check / history / install"),
+        ("uninstall", "Uninstall Trace (app and data)"),
     ]
 
     def _root_completions(self, text: str, word: str) -> Any:

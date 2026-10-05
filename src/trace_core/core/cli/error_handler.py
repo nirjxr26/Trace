@@ -108,6 +108,26 @@ def _update_error(e: Exception, operation_title: str | None, default_remediation
     return None
 
 
+def _match_typed(
+    e: Exception,
+    err_cls: type,
+    title: str,
+    remediation: str,
+    code: int,
+    operation_title: str | None,
+    default_remediation: str | None,
+    message: str | None = None,
+):  # type: ignore[no-untyped-def]
+    if isinstance(e, err_cls):
+        return (
+            operation_title or title,
+            message if message is not None else str(e),
+            default_remediation or remediation,
+            code,
+        )
+    return None
+
+
 def _typed_error(e: Exception, operation_title: str | None, default_remediation: str | None):  # type: ignore[no-untyped-def]
     if isinstance(e, NotFoundError):
         return (
@@ -116,50 +136,40 @@ def _typed_error(e: Exception, operation_title: str | None, default_remediation:
             default_remediation or f"Run 'list' to inspect available {e.resource_type.lower()} records.",
             EXIT_NOT_FOUND,
         )
-    # Checked before ConflictError: it is a subclass, and a version conflict is a
-    # retry-after-reload condition, not a duplicate record. Both used to report
-    # EXIT_ERROR, which left EXIT_CONFLICT declared but unreachable.
-    if isinstance(e, ConcurrencyConflictError):
-        return (
-            operation_title or "Concurrency Conflict",
-            str(e),
-            default_remediation or "Another process modified this record. Reload the latest state before modifying.",
+    specs = (
+        (
+            ConcurrencyConflictError,
+            "Concurrency Conflict",
+            "Another process modified this record. Reload the latest state before modifying.",
             EXIT_CONFLICT,
-        )
-    if isinstance(e, ConflictError):
-        return (
-            operation_title or "Duplicate Record",
-            str(e),
-            default_remediation or "Ensure the record number or unique field is unique.",
+        ),
+        (ConflictError, "Duplicate Record", "Ensure the record number or unique field is unique.", EXIT_ERROR),
+        (
+            StateTransitionError,
+            "Invalid State Transition",
+            "Check the record's current state; retry from a state that allows this change.",
             EXIT_ERROR,
-        )
-    if isinstance(e, StateTransitionError):
-        return (
-            operation_title or "Invalid State Transition",
-            str(e),
-            default_remediation or "Check the record's current state; retry from a state that allows this change.",
-            EXIT_ERROR,
-        )
-    if isinstance(e, DomainError):
-        return (
-            operation_title or "Invalid Input",
-            str(e),
-            default_remediation or "Correct the highlighted field and retry.",
-            EXIT_USAGE,
-        )
+        ),
+        (DomainError, "Invalid Input", "Correct the highlighted field and retry.", EXIT_USAGE),
+        (
+            AuditTamperError,
+            "Audit Verification Failed",
+            "Inspect audit chain for tampered sequence and restore from backup.",
+            EXIT_VERIFY_FAILED,
+        ),
+    )
+    for err_cls, title, remed, code in specs:
+        # Checked before ConflictError: it is a subclass, and a version conflict is a
+        # retry-after-reload condition, not a duplicate record. Both used to report
+        # EXIT_ERROR, which left EXIT_CONFLICT declared but unreachable.
+        if (r := _match_typed(e, err_cls, title, remed, code, operation_title, default_remediation)) is not None:
+            return r
     if isinstance(e, PydanticValidationError):
         return (
             operation_title or "Invalid Input",
             _format_pydantic_error(e),
             default_remediation or "Correct the highlighted field and retry.",
             EXIT_USAGE,
-        )
-    if isinstance(e, AuditTamperError):
-        return (
-            operation_title or "Audit Verification Failed",
-            str(e),
-            default_remediation or "Inspect audit chain for tampered sequence and restore from backup.",
-            EXIT_VERIFY_FAILED,
         )
     if (r := _update_error(e, operation_title, default_remediation)) is not None:
         return r

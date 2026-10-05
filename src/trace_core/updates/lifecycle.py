@@ -1,17 +1,19 @@
 from datetime import datetime
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import structlog
 
 from trace_core.updates.domain import UpdateFailureStage, UpdateResult, UpdateState, assert_transition
-from trace_core.updates.dto import UpdateHistoryCreateDto
+from trace_core.updates.dto import UpdateResultDto
 from trace_core.updates.errors import UpdateError
 from trace_core.updates.gate import ForensicOperationGate, GateDecision, UpdateGateContext
 from trace_core.updates.lock import update_lock
 from trace_core.updates.manifest import ReleaseManifest
-from trace_core.updates.service import UpdateService
 from trace_core.updates.stages import SILENT, ProgressCallback, Stage, StageStatus
+
+if TYPE_CHECKING:
+    from trace_core.core.database.session import DatabaseSessionManager
 
 HEALTH_PASSED: Final[str] = "passed"
 HEALTH_FAILED: Final[str] = "failed"
@@ -21,11 +23,13 @@ class UpdateLifecycle:
     def __init__(
         self,
         transaction_id: str,
-        service: UpdateService | None = None,
+        session_manager: "DatabaseSessionManager | None" = None,
         state: UpdateState = UpdateState.IDLE,
     ):
+        from trace_core.core.database.session import DatabaseSessionManager, db_manager
+
         self.transaction_id = transaction_id
-        self.service = service or UpdateService()
+        self.session_manager: DatabaseSessionManager = session_manager or db_manager
         self.state = state
 
     def _record(
@@ -44,8 +48,8 @@ class UpdateLifecycle:
         backup_path: str | None = None,
         rollback: bool = False,
         restart_required: bool = False,
-    ) -> UpdateHistoryCreateDto:
-        dto = UpdateHistoryCreateDto(
+    ) -> UpdateResultDto:
+        dto = UpdateResultDto(
             from_version=current,
             to_version=manifest.version,
             channel=channel,
@@ -62,7 +66,6 @@ class UpdateLifecycle:
             release_id=manifest.release_id,
             started_at=started_at,
         )
-        self.service.record_history(dto)
         return dto
 
     def transition(self, to: UpdateState) -> None:
@@ -88,7 +91,7 @@ class UpdateLifecycle:
                 parts.append(note)
         if manifest.backup_waiver and manifest.schema_target is not None:
             try:
-                if manifest.schema_target > current_schema_version(self.service.session_manager):
+                if manifest.schema_target > current_schema_version(self.session_manager):
                     parts.append(f"backup waived: {manifest.backup_waiver}")
             except Exception as exc:
                 structlog.get_logger().warning("override-note schema check failed", error=str(exc))
@@ -118,7 +121,7 @@ class UpdateLifecycle:
         if manifest.schema_target is not None:
             after = schema_after
             if after is None:
-                after = current_schema_version(self.service.session_manager)
+                after = current_schema_version(self.session_manager)
             if after != manifest.schema_target:
                 return HEALTH_FAILED
         # Pip layouts must prove the venv actually imports the target version;
@@ -144,7 +147,7 @@ class UpdateLifecycle:
         backup_dir: str | Path | None = None,
         allow_minimum_bypass: bool = False,
         progress: ProgressCallback | None = None,
-    ) -> UpdateHistoryCreateDto:
+    ) -> UpdateResultDto:
         from trace_core.core.clock import now_utc
         from trace_core.updates.checker import get_installed_version
         from trace_core.updates.errors import UpdateNotAvailableError, UpdatePolicyBlockedError
@@ -317,7 +320,7 @@ class UpdateLifecycle:
         started_at: datetime,
         allow_minimum_bypass: bool = False,
         progress: ProgressCallback = SILENT,
-    ) -> UpdateHistoryCreateDto:
+    ) -> UpdateResultDto:
         from trace_core.core.database.health import fetch_db_snapshot
         from trace_core.updates.migration import current_schema_version, run_updater_migration
         from trace_core.updates.policy import is_installable
@@ -364,7 +367,7 @@ class UpdateLifecycle:
             # back a perfectly healthy update. A verdict computed from a substituted value
             # is not a verdict, so call it for its DB-failure side effect and discard the
             # number — the post-migration `schema_after` is the one the health check reads.
-            current_schema_version(self.service.session_manager)
+            current_schema_version(self.session_manager)
             staging_dir = base / "staging" / self.transaction_id
             self.transition(UpdateState.DOWNLOADING)
             staged = self._download_stage(manifest, artifact_path, staging_dir)
@@ -378,7 +381,7 @@ class UpdateLifecycle:
             self._pip_install_stage(staged)
             self.transition(UpdateState.MIGRATING)
             migration = run_updater_migration(
-                self.service.session_manager,
+                self.session_manager,
                 self.transaction_id,
                 schema_min=manifest.schema_min,
                 schema_target=manifest.schema_target,
@@ -389,18 +392,18 @@ class UpdateLifecycle:
             self.transition(UpdateState.HEALTH_CHECK)
             progress.on_stage(Stage.INSTALL, StageStatus.DONE)
             progress.on_stage(Stage.HEALTH, StageStatus.ACTIVE)
-            snap = fetch_db_snapshot(self.service.session_manager)
+            snap = fetch_db_snapshot(self.session_manager)
             # H-19: same defect as schema_before — a substituted schema_after silently passed the
             # post-migration check, so a migration that did not reach its target looked healthy.
-            schema_after = current_schema_version(self.service.session_manager)
+            schema_after = current_schema_version(self.session_manager)
             health = self._check_release_health(base, manifest, snap, schema_after, staged=staged)
             if health != HEALTH_PASSED:
                 from trace_core.updates.migration import rollback_release
 
                 self.transition(UpdateState.ROLLING_BACK)
                 try:
-                    restored = rollback_release(base, self.service.session_manager, migration["backup"])
-                    restored_snap = fetch_db_snapshot(self.service.session_manager)
+                    restored = rollback_release(base, self.session_manager, migration["backup"])
+                    restored_snap = fetch_db_snapshot(self.session_manager)
                     restored_health = (
                         HEALTH_PASSED if restored_snap.healthy and not restored_snap.pending else HEALTH_FAILED
                     )
@@ -445,7 +448,7 @@ class UpdateLifecycle:
 
                 self.transition(UpdateState.ROLLING_BACK)
                 try:
-                    rollback_release(base, self.service.session_manager, migration["backup"])
+                    rollback_release(base, self.session_manager, migration["backup"])
                 except (OSError, UpdateError):
                     self.transition(UpdateState.RECOVERY_REQUIRED)
                     return self._record(
