@@ -12,6 +12,19 @@ def _text(widget) -> str:  # type: ignore[no-untyped-def]
     return renderable.plain if isinstance(renderable, Text) else str(renderable)
 
 
+async def _press_until(pilot, app, key: str, needle: str) -> None:
+    """Check runs in a worker now, so wait for the worker to land."""
+    from textual.widgets import Static
+
+    for _ in range(30):
+        await pilot.press(key)
+        for _ in range(10):
+            await pilot.pause()
+            if needle in _text(app.query_one("#settings-detail", Static)):
+                return
+    assert needle in _text(app.query_one("#settings-detail", Static))
+
+
 async def _goto_settings_updates(pilot, app) -> None:  # type: ignore[no-untyped-def]
     """Single source for tab switching. Retries key press; pilot focus timing flakes under load."""
     from textual.widgets import Static, TabbedContent
@@ -45,37 +58,30 @@ async def test_updates_tab_check_and_hint(session_manager: DatabaseSessionManage
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         await _goto_settings_updates(pilot, app)
-        await pilot.press("c")
-        await pilot.pause()
+        await _press_until(pilot, app, "c", "1.5.0")
         detail = _text(app.query_one("#settings-detail", Static))
-        assert "1.5.0" in detail
         assert "restart" in detail.lower()
         assert "Update 1.5.0 available" in _text(app.query_one("#hint", Static))
 
 
-async def test_updates_card_and_recent_activity(
+async def test_updates_card_shows_version_block(
     session_manager: DatabaseSessionManager, signed_release, monkeypatch
 ) -> None:
     from textual.widgets import Button, Static
 
     from trace_core.core.settings import settings
     from trace_core.tui.app import TraceApp
-    from trace_core.updates.dto import UpdateHistoryCreateDto
-    from trace_core.updates.service import UpdateService
 
     _, manifest_path, _, _ = signed_release()
     monkeypatch.setattr(settings, "update_manifest", str(manifest_path))
-    UpdateService(session_manager).record_history(
-        UpdateHistoryCreateDto(from_version="0.2.2", to_version="0.2.3", result="SUCCESS")
-    )
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         await _goto_settings_updates(pilot, app)
         detail = _text(app.query_one("#settings-detail", Static))
         assert "Current version" in detail
+        await _press_until(pilot, app, "c", "Press u")
+        detail = _text(app.query_one("#settings-detail", Static))
         assert "Press u or pick Update below to install." in detail
-        assert "Recent activity" in detail
-        assert "0.2.2" in detail
         assert app.query_one("#update-apply", Button) is not None
 
 
@@ -92,7 +98,6 @@ async def test_updates_install_guarded_without_update(session_manager: DatabaseS
 
 
 async def test_updates_tab_no_manifest_configured(session_manager: DatabaseSessionManager, monkeypatch) -> None:
-    from textual.widgets import Static
 
     from trace_core.core.settings import settings
 
@@ -100,6 +105,4 @@ async def test_updates_tab_no_manifest_configured(session_manager: DatabaseSessi
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         await _goto_settings_updates(pilot, app)
-        await pilot.press("c")
-        await pilot.pause()
-        assert "TRACE_UPDATE_MANIFEST" in _text(app.query_one("#settings-detail", Static))
+        await _press_until(pilot, app, "c", "TRACE_UPDATE_MANIFEST")

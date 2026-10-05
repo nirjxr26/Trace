@@ -24,8 +24,6 @@ class UpdateShellCommandHandler(BaseShellHandler):
             return True
         if act == "check":
             return self._shell_check(args)
-        if act == "history":
-            return self._shell_history(args)
         if act == "install":
             from trace_core.core.ui.renderers import console
 
@@ -48,43 +46,35 @@ class UpdateShellCommandHandler(BaseShellHandler):
             render_check_card(cached_check(target, channel), channel)
         return True
 
-    def _shell_history(self, args: list[str]) -> bool:
-        from trace_core.core.cli.args import extract_int_flag
-        from trace_core.core.cli.error_handler import capture_cli_errors
-        from trace_core.core.ui.renderers import render_minimalist_table
-        from trace_core.updates.commands import HISTORY_COLUMNS, history_table_rows
-        from trace_core.updates.service import UpdateService
-
-        with capture_cli_errors("Update History", exit_on_error=False):
-            svc = UpdateService()
-            rows = svc.list_history(
-                limit=extract_int_flag(args, 50, "--limit"),
-                offset=0,
-            )
-            render_minimalist_table(
-                "Update History",
-                HISTORY_COLUMNS,
-                history_table_rows(rows),
-                empty_message="No updates recorded.",
-            )
-        return True
-
     @property
     def _typer_app(self) -> object:
         return self._app
 
-    def get_completions(self, text: str, ctx: object) -> list[str]:
+    def get_completions(self, text: str, ctx: object) -> list[str]:  # type: ignore[override]
         """Flag completions shared with case handler pattern. No new completer framework."""
         _ = ctx
-        flags = ["--limit"]
-        curr = text.split()[-1] if text.split() else ""
-        return [f for f in flags if f.startswith(curr)]
+        actions = [("check", "Check for updates"), ("install", "Install update")]
+        flags = {
+            "check": ["--output", "-o", "--manifest"],
+            "install": ["--yes", "-y", "--bypass-minimum", "--manifest", "--artifact"],
+        }
+        parts = text.split()
+        curr = parts[-1] if parts and not text.endswith(" ") else ""
+        if len(parts) == 1 and text.endswith(" "):
+            return [a for a, _ in actions]
+        if len(parts) >= 2 and parts[0] == "update":
+            action = parts[1]
+            if len(parts) == 2 and not text.endswith(" "):
+                return [a for a, _ in actions if a.startswith(action)]
+            if action in flags:
+                return [f for f in flags[action] if f.startswith(curr)]
+            return []
+        return []
 
     def get_help_entries(self) -> list[tuple[str, str, str]]:
         # Syntaxes must fit the shared 36-col help grid (see _print_help_row);
         # remaining flags stay discoverable via tab-completion and --help.
         return [
             ("update check", "", "Check for available update"),
-            ("update history", "", "Show update history"),
             ("update install (via CLI only)", "", "Install requires standalone CLI with --yes"),
         ]

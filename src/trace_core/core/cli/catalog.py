@@ -30,4 +30,10 @@ def default_handlers() -> list[Any]:
         handlers.append(UpdateShellCommandHandler())
     except Exception:
         pass
+    try:
+        from trace_core.core.cli.uninstall_handler import UninstallShellCommandHandler
+
+        handlers.append(UninstallShellCommandHandler())
+    except Exception:
+        pass
     return handlers

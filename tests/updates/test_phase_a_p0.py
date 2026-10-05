@@ -8,7 +8,6 @@ pytestmark = pytest.mark.unit
 def test_gate_active_probe_blocks_install(session_manager, temp_storage_root, signed_release):
     from trace_core.updates.gate import ForensicOperationGate, UpdateGateContext
     from trace_core.updates.lifecycle import UpdateLifecycle
-    from trace_core.updates.service import UpdateService
 
     seen = {}
 
@@ -17,9 +16,8 @@ def test_gate_active_probe_blocks_install(session_manager, temp_storage_root, si
         return True
 
     manifest, _, art_path, _ = signed_release()
-    svc = UpdateService(session_manager)
     gate = ForensicOperationGate(active_probe=_probe)
-    lifecycle = UpdateLifecycle("tx-p0-gate", svc)
+    lifecycle = UpdateLifecycle("tx-p0-gate", session_manager)
     with pytest.raises(UpdatePolicyBlockedError, match="forensic operation active"):
         lifecycle.run(manifest, art_path, gate=gate)
     assert isinstance(seen["context"], UpdateGateContext)
@@ -30,15 +28,13 @@ def test_gate_probe_error_fails_closed(session_manager, temp_storage_root, signe
     from trace_core.updates.errors import UpdateError
     from trace_core.updates.gate import ForensicOperationGate
     from trace_core.updates.lifecycle import UpdateLifecycle
-    from trace_core.updates.service import UpdateService
 
     def _boom(context):
         raise RuntimeError("probe down")
 
     manifest, _, art_path, _ = signed_release()
-    svc = UpdateService(session_manager)
     gate = ForensicOperationGate(_boom)
-    lifecycle = UpdateLifecycle("tx-p0-gate-unknown", svc)
+    lifecycle = UpdateLifecycle("tx-p0-gate-unknown", session_manager)
     with pytest.raises(UpdateError, match="failing closed"):
         lifecycle.run(manifest, art_path, gate=gate)
 

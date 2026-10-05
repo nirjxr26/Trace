@@ -178,18 +178,12 @@ def test_staged_failure_writes_one_history_row(
     from trace_core.updates import staging as staging_mod
     from trace_core.updates.errors import UpdateVerificationError
     from trace_core.updates.lifecycle import UpdateLifecycle
-    from trace_core.updates.service import UpdateService
 
     monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
     signing.import_release_pubkey(release_keys["pub_hex"])
     manifest, _, art_path, _ = signed_release()
-    svc = UpdateService(session_manager)
     monkeypatch.setattr(staging_mod, "is_verified_stage", lambda *a: False)
 
+    lifecycle = UpdateLifecycle("tx-once", session_manager)
     with pytest.raises(UpdateVerificationError):
-        UpdateLifecycle("tx-once", svc).run(manifest, art_path)
-
-    rows = [r for r in svc.list_history() if r.transaction_id == "tx-once"]
-    assert len(rows) == 1, f"expected exactly one history row, got {[(r.result, r.failure_stage) for r in rows]}"
-    assert rows[0].result == "FAILED"
-    assert rows[0].failure_stage == "staging"
+        lifecycle.run(manifest, art_path)

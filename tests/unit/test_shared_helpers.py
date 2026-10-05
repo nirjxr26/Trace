@@ -27,7 +27,6 @@ from trace_core.updates.stages import Stage, StageStatus
 
 audit_shell = importlib.import_module("trace_core.audit.shell_handler")
 audit_commands = importlib.import_module("trace_core.audit.commands")
-_update_service = importlib.import_module("trace_core.updates.service")
 
 pytestmark = pytest.mark.unit
 
@@ -57,23 +56,14 @@ def test_update_lifecycle_has_one_history_recorder() -> None:
     from trace_core.updates import lifecycle as lifecycle_mod
 
     src = _source(lifecycle_mod)
-    assert src.count("UpdateHistoryCreateDto(") == 1, "only _record may build the DTO; run()/_run_locked must delegate"
-    assert src.count("self.service.record_history(") == 1, "only _record may write history"
+    assert src.count("UpdateResultDto(") == 1, "only _record may build the DTO; run()/_run_locked must delegate"
     assert src.count("self._record(") == 8, "7 call sites plus the definition"
 
 
-def test_update_lifecycle_record_fills_the_invariant_fields(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_update_lifecycle_record_fills_the_invariant_fields() -> None:
     from trace_core.updates.lifecycle import UpdateLifecycle
 
-    recorded: list[object] = []
-
-    def _record(dto):  # type: ignore[no-untyped-def]
-        recorded.append(dto)
-        return dto
-
-    service = _update_service.UpdateService.__new__(_update_service.UpdateService)
-    monkeypatch.setattr(service, "record_history", _record, raising=False)
-    lifecycle = UpdateLifecycle("tx-1", service)
+    lifecycle = UpdateLifecycle("tx-1")
     manifest = _manifest()
     started = datetime(2026, 1, 1, tzinfo=UTC)
     dto = lifecycle._record("0.2.8", manifest, "stable", started, result="SUCCESS")
@@ -82,7 +72,6 @@ def test_update_lifecycle_record_fills_the_invariant_fields(monkeypatch) -> None
     assert dto.from_version == "0.2.8"
     assert dto.to_version == "0.2.9"
     assert dto.started_at == started
-    assert recorded == [dto]
 
 
 def test_case_service_audit_hooks_are_built_by_one_factory() -> None:

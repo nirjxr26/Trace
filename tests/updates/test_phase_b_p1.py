@@ -121,11 +121,9 @@ def test_recovery_edges_legal():
 
 def test_run_keyword_only(session_manager, signed_release):
     from trace_core.updates.lifecycle import UpdateLifecycle
-    from trace_core.updates.service import UpdateService
 
     manifest, _, art_path, _ = signed_release()
-    svc = UpdateService(session_manager)
-    run_fn = getattr(UpdateLifecycle("tx-kw", svc), "run")
+    run_fn = getattr(UpdateLifecycle("tx-kw", session_manager), "run")
     with pytest.raises(TypeError):
         run_fn(manifest, art_path, "stable")
 

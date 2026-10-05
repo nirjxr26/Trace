@@ -140,8 +140,9 @@ def test_vault_rejects_a_rewritten_algorithm():
     blob = encrypt_bytes(b"evidence", "correct horse")
     envelope = _json.loads(blob.decode("ascii"))
     envelope["alg"] = "AES-128-GCM/AES-1-CTR"
+    tampered = _json.dumps(envelope).encode("ascii")
     with pytest.raises(ValidationError):
-        decrypt_bytes(_json.dumps(envelope).encode("ascii"), "correct horse")
+        decrypt_bytes(tampered, "correct horse")
     assert decrypt_bytes(blob, "correct horse") == b"evidence"
 
 

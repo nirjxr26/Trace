@@ -1,26 +1,22 @@
 import pytest
 
-from trace_core.updates.dto import UpdateHistoryCreateDto
+from trace_core.updates.dto import UpdateResultDto
 from trace_core.updates.errors import UpdateNotAvailableError, UpdateVerificationError
 from trace_core.updates.lifecycle import UpdateLifecycle
-from trace_core.updates.service import UpdateService
 
 pytestmark = pytest.mark.unit
 
 
 def test_run_rejects_downgrade_directly(session_manager, signed_release):
     manifest, _, art_path, _ = signed_release(version="0.0.1")
-    svc = UpdateService(session_manager)
-    life = UpdateLifecycle("tx-gate-1", svc)
+    life = UpdateLifecycle("tx-gate-1", session_manager)
     with pytest.raises(UpdateNotAvailableError):
         life.run(manifest, art_path)
-    assert svc.list_history() == []
 
 
 def test_run_rejects_same_version(session_manager, signed_release):
     manifest, _, art_path, _ = signed_release(version="0.1.0")
-    svc = UpdateService(session_manager)
-    life = UpdateLifecycle("tx-gate-2", svc)
+    life = UpdateLifecycle("tx-gate-2", session_manager)
     with pytest.raises(UpdateNotAvailableError):
         life.run(manifest, art_path)
 
@@ -32,12 +28,9 @@ def test_bypass_override_recorded(session_manager, signed_release, release_keys,
     monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
     signing.import_release_pubkey(release_keys["pub_hex"])
     manifest, _, art_path, _ = signed_release(minimum_supported_version="9.9.9")
-    svc = UpdateService(session_manager)
-    dto = UpdateLifecycle("tx-gate-3", svc).run(manifest, art_path, allow_minimum_bypass=True)
+    dto = UpdateLifecycle("tx-gate-3", session_manager).run(manifest, art_path, allow_minimum_bypass=True)
     assert dto.override_reason is not None
     assert "9.9.9" in dto.override_reason
-    rows = svc.list_history()
-    assert any(r.transaction_id == "tx-gate-3" and (r.override_reason or "") != "" for r in rows)
 
 
 def test_staged_reverify_failure(session_manager, signed_release, release_keys, monkeypatch, tmp_path):
@@ -48,13 +41,10 @@ def test_staged_reverify_failure(session_manager, signed_release, release_keys, 
     monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
     signing.import_release_pubkey(release_keys["pub_hex"])
     manifest, _, art_path, _ = signed_release()
-    svc = UpdateService(session_manager)
     monkeypatch.setattr(staging_mod, "is_verified_stage", lambda *a: False)
-    life = UpdateLifecycle("tx-gate-4", svc)
+    life = UpdateLifecycle("tx-gate-4", session_manager)
     with pytest.raises(UpdateVerificationError):
         life.run(manifest, art_path)
-    rows = svc.list_history()
-    assert any(r.transaction_id == "tx-gate-4" and r.failure_stage == "staging" for r in rows)
 
 
 def test_activation_mismatch_recorded(session_manager, signed_release, release_keys, monkeypatch, tmp_path):
@@ -66,9 +56,8 @@ def test_activation_mismatch_recorded(session_manager, signed_release, release_k
 
     signing.import_release_pubkey(release_keys["pub_hex"])
     manifest, _, art_path, _ = signed_release()
-    svc = UpdateService(session_manager)
     monkeypatch.setattr(updater_mod, "activate", lambda base, version: None)
-    life = UpdateLifecycle("tx-gate-5", svc)
+    life = UpdateLifecycle("tx-gate-5", session_manager)
     # H-15: the pointer is flipped and the DB migrated by this point, so a failed
     # post-activation check must roll back rather than return FAILED with half-applied
     # state. It no longer raises to the caller; it reports ROLLED_BACK.
@@ -78,11 +67,8 @@ def test_activation_mismatch_recorded(session_manager, signed_release, release_k
     # rollback too, so this test asserts the control flow rather than real FS/DB state.
     monkeypatch.setattr(mig_mod, "rollback_release", lambda *a, **k: "restored")
     dto = life.run(manifest, art_path)
-    rows = svc.list_history()
     assert dto.result == "ROLLED_BACK"
-    assert any(
-        r.transaction_id == "tx-gate-5" and r.result == "ROLLED_BACK" and r.failure_stage == "activation" for r in rows
-    ), [(r.transaction_id, r.result, r.failure_stage) for r in rows]
+    assert dto.failure_stage == "activation"
 
 
 def test_waiver_recorded_on_advancing_schema(session_manager, signed_release, release_keys, monkeypatch, tmp_path):
@@ -105,8 +91,7 @@ def test_waiver_recorded_on_advancing_schema(session_manager, signed_release, re
 
     try:
         manifest, _, art_path, _ = signed_release(schema_min=1, schema_target=probe_version, backup_waiver="lab device")
-        svc = UpdateService(session_manager)
-        dto = UpdateLifecycle("tx-gate-7", svc).run(manifest, art_path)
+        dto = UpdateLifecycle("tx-gate-7", session_manager).run(manifest, art_path)
         assert dto.result == "SUCCESS"
         assert dto.override_reason is not None
         assert "lab device" in dto.override_reason
@@ -123,12 +108,7 @@ def test_started_at_captured(session_manager, signed_release, release_keys, monk
     monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
     signing.import_release_pubkey(release_keys["pub_hex"])
     manifest, _, art_path, _ = signed_release()
-    svc = UpdateService(session_manager)
-    dto = UpdateLifecycle("tx-gate-6", svc).run(manifest, art_path)
-    rows = [r for r in svc.list_history() if r.transaction_id == "tx-gate-6"]
-    assert rows
-    assert rows[0].completed_at is not None
-    assert rows[0].started_at <= rows[0].completed_at
+    dto = UpdateLifecycle("tx-gate-6", session_manager).run(manifest, art_path)
     assert dto.transaction_id == "tx-gate-6"
 
 
@@ -143,4 +123,4 @@ def test_history_create_rejects_unknown_kwargs():
         "bogus_field": "x",
     }
     with pytest.raises(ValidationError):
-        UpdateHistoryCreateDto(**kwargs)
+        UpdateResultDto(**kwargs)

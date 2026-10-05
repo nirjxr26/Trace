@@ -213,7 +213,9 @@ def _payload_from_check(res: dict[str, Any]) -> dict[str, Any]:
 
 def cached_check(target: str | Path, channel: str = "stable") -> dict[str, Any]:
     from trace_core.updates import cache as check_cache
+    from trace_core.updates import selfheal
 
+    selfheal._maybe_heal()
     key = str(target)
     cached = check_cache.read_check_cache()
     if cached is not None:

@@ -20,6 +20,16 @@ for _name, _sub in feature_apps():
     app.add_typer(_sub, name=_name)
 
 
+@app.command("uninstall")
+def uninstall(
+    purge_data: bool = typer.Option(False, "--purge-data", help="Also remove storage, trust keys, and all data."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation."),
+) -> None:
+    from trace_core.core.cli.uninstall import uninstall_cmd
+
+    uninstall_cmd(purge_data=purge_data, yes=yes)
+
+
 @app.command("tui")
 def launch_tui() -> None:
     """Launch the fullscreen live console."""

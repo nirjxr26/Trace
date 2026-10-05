@@ -111,7 +111,6 @@ def test_every_timestamp_column_uses_the_decorator():
     import trace_core.audit.models  # noqa: F401
     import trace_core.cases.models  # noqa: F401
     import trace_core.core.operators  # noqa: F401
-    import trace_core.updates.models  # noqa: F401
     from trace_core.core.database.migrations import schema_migrations
 
     checked = 0

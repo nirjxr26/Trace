@@ -1,5 +1,3 @@
-import hashlib
-
 import pytest
 
 from trace_core.core.cli.exit_codes import EXIT_RECOVERY_RETRY
@@ -20,7 +18,6 @@ def test_migration_marker_renamed(temp_storage_root):
 def test_transition_failure_keeps_state(session_manager, temp_storage_root, monkeypatch):
     from trace_core.updates.domain import UpdateState
     from trace_core.updates.lifecycle import UpdateLifecycle
-    from trace_core.updates.service import UpdateService
 
     def _boom(data):
         raise OSError("disk full")
@@ -28,7 +25,7 @@ def test_transition_failure_keeps_state(session_manager, temp_storage_root, monk
     import trace_core.updates.marker as marker_mod
 
     monkeypatch.setattr(marker_mod, "write_marker", _boom)
-    life = UpdateLifecycle("tx-c-state", UpdateService(session_manager))
+    life = UpdateLifecycle("tx-c-state")
     with pytest.raises(OSError):
         life.transition(UpdateState.CHECKING)
     assert life.state == UpdateState.IDLE
@@ -58,35 +55,17 @@ def test_pre_mutation_failure_cleans_backup(temp_storage_root, tmp_path):
     assert marker_state() == ("absent", None)
 
 
-def test_corrupt_marker_tx_deterministic(session_manager, temp_storage_root):
-    from trace_core.updates.migration import migration_marker_path
-    from trace_core.updates.service import UpdateService
+def test_corrupt_marker_is_cleared(session_manager, temp_storage_root):
+    from trace_core.updates.migration import marker_state, migration_marker_path
 
     raw = b"{not-json"
     migration_marker_path().parent.mkdir(parents=True, exist_ok=True)
     migration_marker_path().write_bytes(raw)
     from trace_core.core.cli.recovery import _triage_update_marker
 
-    svc = UpdateService(session_manager)
-    _triage_update_marker(svc)
-    expected = "corrupt-" + hashlib.sha256(raw).hexdigest()[:12]
-    rows = svc.list_history()
-    assert any(r.transaction_id == expected and r.failure_stage == "recovery" for r in rows)
-
-
-def test_service_read_delegates(temp_storage_root, tmp_path, session_manager):
-    from trace_core.updates.marker import write_marker
-    from trace_core.updates.service import UpdateService
-
-    svc = UpdateService(session_manager)
-    assert svc.read_result_marker() is None
-    write_marker({"transaction_id": "t-del", "state": "FAILED"})
-    data = svc.read_result_marker()
-    assert data is not None
-    assert data["transaction_id"] == "t-del"
-    bad = tmp_path / "bad.json"
-    bad.write_text("{nope", encoding="utf-8")
-    assert svc.read_result_marker(bad) is None
+    _triage_update_marker()
+    assert not migration_marker_path().exists(), "corrupt migration marker must be cleared"
+    assert marker_state() == ("absent", None)
 
 
 def test_recovery_blocked_exit_16(temp_storage_root):

@@ -67,10 +67,9 @@ def test_repository_rejects_an_unknown_subject_type(session_manager: DatabaseSes
     from trace_core.audit.repository import SqlAlchemyAuditRepository
 
     with session_manager.session() as session:
+        repo = SqlAlchemyAuditRepository(session)
         with pytest.raises(ValueError, match="Unknown audit subject type"):
-            SqlAlchemyAuditRepository(session).append(
-                AuditAction.DEVICE_INSPECTED, "Ex A", None, None, {}, subject_type="DEVICE"
-            )
+            repo.append(AuditAction.DEVICE_INSPECTED, "Ex A", None, None, {}, subject_type="DEVICE")
 
 
 def _append_device_event(session_manager: DatabaseSessionManager):

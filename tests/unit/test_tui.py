@@ -84,7 +84,7 @@ async def test_tui_pilot_flow(seeded_manager: DatabaseSessionManager) -> None:
         from textual.widgets import ListView
 
         sections = app.query_one("#settings-sections", ListView)
-        assert len(list(sections.children)) == 7
+        assert len(list(sections.children)) == 5
         assert "Database" in _text(app.query_one("#settings-detail", Static))
         assert "Online" in _text(app.query_one("#settings-detail", Static))
 

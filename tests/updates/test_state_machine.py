@@ -58,10 +58,8 @@ def test_lifecycle_persists_state_for_restart(session_manager, temp_storage_root
     """
     from trace_core.updates.lifecycle import UpdateLifecycle
     from trace_core.updates.marker import read_marker
-    from trace_core.updates.service import UpdateService
 
-    svc = UpdateService(session_manager)
-    life = UpdateLifecycle("tx-state-1", svc)
+    life = UpdateLifecycle("tx-state-1", session_manager)
     life.transition(UpdateState.CHECKING)
     life.transition(UpdateState.AVAILABLE)
 
