@@ -172,22 +172,21 @@ class SettingsView(Vertical):
         from trace_core.core.database.health import fetch_db_snapshot
         from trace_core.core.ui.renderers import fit_text, sanitize_terminal
         from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
+        from trace_core.tui.theme import DOT_BAD, DOT_OK
+
+        def _unreachable(message: str) -> None:
+            body.append("× ", style=DOT_BAD)
+            body.append("Database unreachable\n", style="bold")
+            body.append(f"{sanitize_terminal(message)}\n", style="dim")
+            body.append("Next: check TRACE_DATABASE_URL, then run `trace doctor`.\n", style="dim")
 
         try:
             snap = fetch_db_snapshot(self._manager)
         except Exception as exc:
-            body.append("× ", style="red")
-            body.append("Database unreachable\n", style="bold")
-            body.append(f"{sanitize_terminal(str(exc))}\n", style="dim")
-            body.append("Next: check TRACE_DATABASE_URL, then run `trace doctor`.\n", style="dim")
+            _unreachable(str(exc))
             return
-        from trace_core.tui.theme import DOT_BAD, DOT_OK
-
         if not snap.healthy:
-            body.append("× ", style=DOT_BAD)
-            body.append("Database unreachable\n", style="bold")
-            body.append(f"{sanitize_terminal(snap.message)}\n", style="dim")
-            body.append("Next: check TRACE_DATABASE_URL, then run `trace doctor`.\n", style="dim")
+            _unreachable(snap.message)
             return
         body.append("● ", style=DOT_OK)
         body.append("Online\n", style="bold")
@@ -204,11 +203,9 @@ class SettingsView(Vertical):
         from trace_core.core.ui.renderers import sanitize_terminal
         from trace_core.core.ui.theme import THEME_HEX
         from trace_core.tui.theme import step_line
+        from trace_core.updates.stages import StageStatus
 
         if self._checking:
-            from trace_core.tui.theme import step_line
-            from trace_core.updates.stages import StageStatus
-
             body.append_text(step_line(StageStatus.ACTIVE, "Checking for updates…"))
             body.append("\n")
             return
@@ -222,8 +219,6 @@ class SettingsView(Vertical):
             except Exception as exc:
                 prev, current, kind, extra = "", "—", "failed", str(exc)[:MAX_ERROR_DETAIL]
             self._prev, self._current, self._kind, self._extra = prev, current, kind, extra
-        from trace_core.updates.stages import StageStatus
-
         current = sanitize_terminal(self._current or "—")
         body.append("Current version\n\n", style="dim")
         body.append(f"{current}\n\n", style="bold")
@@ -359,17 +354,7 @@ class SettingsView(Vertical):
 
     # --- actions ---
 
-    def _check_text(self) -> tuple[str, str, str, str]:
-        """Cached state only. Painting the tab must never touch the network; a live
-        check runs on the user's action (action_check) in a worker thread."""
-        from trace_core.updates.checker import get_installed_version, peek_cached_update
-
-        prev = str(get_installed_version())
-        payload = peek_cached_update()
-        if payload is None:
-            return prev, prev, "current", ""
-        if not payload["available"]:
-            return prev, prev, "current", ""
+    def _describe_update(self, prev: str, payload: dict) -> tuple[str, str, str, str]:  # type: ignore[no-untyped-def]
         current = str(payload.get("target") or "—")
         parts = []
         if payload.get("security_update"):
@@ -383,6 +368,17 @@ class SettingsView(Vertical):
             if payload.get("notes"):
                 parts.append(str(payload["notes"]))
         return prev, current, "available", " ".join(parts)
+
+    def _check_text(self) -> tuple[str, str, str, str]:
+        """Cached state only. Painting the tab must never touch the network; a live
+        check runs on the user's action (action_check) in a worker thread."""
+        from trace_core.updates.checker import get_installed_version, peek_cached_update
+
+        prev = str(get_installed_version())
+        payload = peek_cached_update()
+        if payload is None or not payload["available"]:
+            return prev, prev, "current", ""
+        return self._describe_update(prev, payload)
 
     def _refresh_hint(self) -> None:
         """Cached only: a paint never touches the network (H-65 shape)."""
@@ -412,23 +408,16 @@ class SettingsView(Vertical):
         prev = str(payload.get("current") or get_installed_version())
         if not payload["available"]:
             return prev, prev, "current", ""
-        current = str(payload.get("target") or "—")
-        parts = []
-        if payload.get("security_update"):
-            parts.append("Security update")
-        if payload.get("minimum_supported_version"):
-            parts.append(f"Minimum supported version: {payload['minimum_supported_version']}")
-        if payload.get("restart_required"):
-            parts.append("Trace will restart to complete this update.")
-        if not payload.get("installable") and payload.get("block_reason"):
-            parts.append(f"Deferred: {payload['block_reason']}")
-            if payload.get("notes"):
-                parts.append(str(payload["notes"]))
-        return prev, current, "available", " ".join(parts)
+        return self._describe_update(prev, payload)
+
+    def _require_section(self, section: str) -> bool:
+        if self._selected_section() != section:
+            self.app.notify(f"Select {section} first.", severity="warning")
+            return False
+        return True
 
     def action_check(self) -> None:
-        if self._selected_section() != "Updates":
-            self.app.notify("Select Updates first.", severity="warning")
+        if not self._require_section("Updates"):
             return
         self._checking = True
         self._render_detail()
@@ -455,8 +444,7 @@ class SettingsView(Vertical):
         self._refresh_hint()
 
     def action_install(self) -> None:
-        if self._selected_section() != "Updates":
-            self.app.notify("Select Updates first.", severity="warning")
+        if not self._require_section("Updates"):
             return
         if self._kind != "available" or not self._current:
             self.app.notify("Nothing to install.", severity="warning")
@@ -520,8 +508,7 @@ class SettingsView(Vertical):
         self.action_install()
 
     def action_migrate(self) -> None:
-        if self._selected_section() != "Database":
-            self.app.notify("Select Database first.", severity="warning")
+        if not self._require_section("Database"):
             return
         from trace_core.core.database.migrations import apply_migrations
         from trace_core.tui.actions import run_guarded
@@ -538,8 +525,7 @@ class SettingsView(Vertical):
         run_guarded(self, _migrate)
 
     def action_verify(self) -> None:
-        if self._selected_section() != "Integrity":
-            self.app.notify("Select Integrity first.", severity="warning")
+        if not self._require_section("Integrity"):
             return
         self._render_detail()
 

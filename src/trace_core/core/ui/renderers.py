@@ -744,14 +744,19 @@ def render_entity_panel(
 
 
 def render_json(data: Any) -> None:
-    """Print clean formatted JSON to console with breathing room."""
+    """Print clean formatted JSON to console with breathing room.
+
+    `soft_wrap` is required, not cosmetic: Rich hard-wraps at the console width, which
+    inserts a newline inside a JSON string and makes `--output json` unparseable for any
+    line longer than the terminal. That mode exists so a record can be machine-verified.
+    """
     console.print("")
     if hasattr(data, "model_dump_json"):
-        console.print(data.model_dump_json(indent=2))
+        console.print(data.model_dump_json(indent=2), soft_wrap=True)
     elif isinstance(data, list) and data and hasattr(data[0], "model_dump"):
-        console.print(json.dumps([item.model_dump(mode="json") for item in data], indent=2))
+        console.print(json.dumps([item.model_dump(mode="json") for item in data], indent=2), soft_wrap=True)
     else:
-        console.print(json.dumps(data, indent=2, default=str))
+        console.print(json.dumps(data, indent=2, default=str), soft_wrap=True)
     console.print("")
 
 

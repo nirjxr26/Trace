@@ -273,3 +273,53 @@ def test_shell_help_shows_pending_update(
     shell.service = service
     shell.execute_line("help")
     assert "Update 9.9.9 available" in capsys.readouterr().out
+
+
+def test_uninstall_rejects_an_unknown_action() -> None:
+    from trace_core.core.cli.uninstall_handler import UninstallShellCommandHandler
+
+    assert UninstallShellCommandHandler().execute("frobnicate", [], None) is False
+
+
+def test_uninstall_redirects_known_flags_to_standalone() -> None:
+    from trace_core.core.cli.uninstall_handler import UninstallShellCommandHandler
+
+    handler = UninstallShellCommandHandler()
+    assert handler.execute("--purge-data", [], None) is True
+    assert handler.execute("", [], None) is True
+
+
+def test_repl_keeps_windows_device_nodes_verbatim() -> None:
+    from trace_core.cli.shell import _split_line
+
+    assert _split_line(r"device inspect \\.\PhysicalDrive0 --allow-real-hardware") == [
+        "device",
+        "inspect",
+        r"\\.\PhysicalDrive0",
+        "--allow-real-hardware",
+    ]
+
+
+def test_repl_split_still_honours_quotes_and_rejects_unbalanced() -> None:
+    from trace_core.cli.shell import _split_line
+
+    assert _split_line('case list --search "hello world"') == ["case", "list", "--search", "hello world"]
+    with pytest.raises(ValueError):
+        _split_line('say "unbalanced')
+
+
+def test_repl_inspect_reaches_a_backslash_node_verbatim(
+    service: CaseService, tmp_path, monkeypatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The transcript that failed: backslashes must survive to the resolver."""
+    from trace_core.devices import synthetic
+    from trace_core.devices.service import ENV_ADAPTER, ENV_DEVICE_ROOT
+
+    root = tmp_path / "box"
+    root.mkdir()
+    synthetic.write_disk(root / "disk-a.dd", size=2048)
+    monkeypatch.setenv(ENV_ADAPTER, "file")
+    monkeypatch.setenv(ENV_DEVICE_ROOT, str(root))
+    shell = InteractiveShell(service=service)
+    shell.execute_line(rf"device inspect {root}\disk-a.dd --allow-real-hardware")
+    assert "not in the current enumeration" not in capsys.readouterr().out

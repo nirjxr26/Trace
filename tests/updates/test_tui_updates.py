@@ -30,7 +30,7 @@ async def _goto_settings_updates(pilot, app) -> None:  # type: ignore[no-untyped
     from textual.widgets import Static, TabbedContent
 
     for _ in range(10):
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         if app.query_one(TabbedContent).active == "settings":
             break

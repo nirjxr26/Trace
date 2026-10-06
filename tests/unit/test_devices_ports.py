@@ -20,13 +20,21 @@ def _param_names(protocol: type, method: str) -> list[str]:  # type: ignore[no-u
     return list(inspect.signature(getattr(protocol, method)).parameters)
 
 
-def test_ports_module_exports_exactly_the_three_contracts() -> None:
+def test_ports_module_exports_the_three_contracts_and_their_union() -> None:
     contracts = {
         name
         for name, obj in vars(ports).items()
         if inspect.isclass(obj) and getattr(obj, "_is_protocol", False) and obj is not typing.Protocol
     }
-    assert contracts == {"DeviceEnumerator", "DeviceInspector", "WriteBlockerProbe"}
+    assert contracts == {"DeviceEnumerator", "DeviceInspector", "WriteBlockerProbe", "DeviceAdapter"}
+
+
+def test_the_adapter_union_is_exactly_the_three_ports() -> None:
+    assert set(inspect.getmro(ports.DeviceAdapter)) >= {
+        ports.DeviceEnumerator,
+        ports.DeviceInspector,
+        ports.WriteBlockerProbe,
+    }
 
 
 def test_enumerator_lists_device_info() -> None:

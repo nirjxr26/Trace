@@ -206,3 +206,11 @@ def test_device_adapter_defaults_to_file_and_cannot_bypass_the_opt_in() -> None:
 
     linux = _info(kind=DeviceKind.OS, requires_real_hardware_opt_in=True)
     assert linux.requires_real_hardware_opt_in is True
+
+
+def test_denied_and_gone_are_distinct_failures() -> None:
+    from trace_core.devices.domain import DeviceAccessDeniedError, DeviceError, DeviceGoneError
+
+    assert issubclass(DeviceAccessDeniedError, DeviceError)
+    assert not issubclass(DeviceAccessDeniedError, DeviceGoneError)
+    assert not issubclass(DeviceGoneError, DeviceAccessDeniedError)

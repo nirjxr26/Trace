@@ -68,6 +68,10 @@ class DeviceGoneError(DeviceError):
     """Raised when a device disconnects mid-read."""
 
 
+class DeviceAccessDeniedError(DeviceError):
+    """Raised when the OS refuses a handle."""
+
+
 class FingerprintMismatchError(DeviceError):
     """Raised when a resume guard sees a different device than the original capture."""
 

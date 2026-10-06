@@ -47,6 +47,70 @@ def _resolve_unexpected_error(
     )
 
 
+def _device_error(e: Exception, operation_title: str | None, default_remediation: str | None):  # type: ignore[no-untyped-def]
+    """Map a device-domain failure to its semantic exit code [D4], [D16].
+
+    §14.10 is the constraint that matters: `EXIT_UNKNOWN` (9) is the device preflight
+    UNKNOWN outcome and nothing else. A malformed config, a database failure or an
+    unexpected exception must never be laundered into it, so the mapping keys on the
+    verdict the error carries, not on the exception class alone.
+    """
+    from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SOURCE_WRITABLE, EXIT_UNKNOWN
+    from trace_core.devices.domain import DeviceAccessDeniedError, DeviceNotFoundError, WriteProtectionError
+
+    if isinstance(e, DeviceNotFoundError):
+        return (
+            operation_title or "Device Not Found",
+            str(e),
+            default_remediation or "Run 'device list' and use a node exactly as reported.",
+            EXIT_NOT_FOUND,
+        )
+    if isinstance(e, DeviceAccessDeniedError):
+        return (
+            operation_title or "Device Access Denied",
+            str(e),
+            default_remediation or "Re-run from an elevated Administrator shell.",
+            EXIT_ERROR,
+        )
+    if not isinstance(e, WriteProtectionError):
+        return None
+    if e.verdict.value == "WRITABLE":
+        return (
+            operation_title or "Source Is Writable",
+            str(e),
+            default_remediation
+            or "Set the hardware write-protect switch or read-only flag, or use a write-protected source.",
+            EXIT_SOURCE_WRITABLE,
+        )
+    return (
+        operation_title or "Write Protection Unknown",
+        str(e),
+        default_remediation or _cause_remediation(e.evidence),
+        EXIT_UNKNOWN,
+    )
+
+
+def _cause_remediation(evidence: object) -> str:
+    from trace_core.devices.domain import ProtectionEvidence, UnknownCause
+
+    if not isinstance(evidence, ProtectionEvidence):
+        return "Re-establish write protection before imaging, or acknowledge the unverified source."
+    cause = evidence.unknown_cause
+    if cause is UnknownCause.EACCES:
+        return "Access was denied. Re-run from an elevated shell."
+    if cause is UnknownCause.SMARTCTL_TIMEOUT:
+        return "The probe tool timed out. Retry, or exclude it and use the OS-native path."
+    if cause in (UnknownCause.SMARTCTL_MALFORMED, UnknownCause.TOOL_TOO_OLD, UnknownCause.TOOL_MISSING):
+        return "The probe tool could not be used. Check its version and availability."
+    if cause is UnknownCause.SYSFS_DISAGREEMENT:
+        return "Two sources disagreed about write protection. Resolve the conflict before imaging."
+    if cause is UnknownCause.IOCTL_FAILURE:
+        return "The kernel refused the write-protection query. Check device state and retry."
+    if cause is UnknownCause.DEVICE_DISAPPEARED:
+        return "The device disconnected during the check. Reconnect it and retry."
+    return "Re-establish write protection before imaging, or acknowledge the unverified source."
+
+
 def _update_error(e: Exception, operation_title: str | None, default_remediation: str | None):  # type: ignore[no-untyped-def]
     try:
         from trace_core.core.cli.exit_codes import (
@@ -171,6 +235,8 @@ def _typed_error(e: Exception, operation_title: str | None, default_remediation:
             default_remediation or "Correct the highlighted field and retry.",
             EXIT_USAGE,
         )
+    if (r := _device_error(e, operation_title, default_remediation)) is not None:
+        return r
     if (r := _update_error(e, operation_title, default_remediation)) is not None:
         return r
     return None

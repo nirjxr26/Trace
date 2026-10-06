@@ -129,6 +129,9 @@ class TraceShellCompleter(Completer):
         ("back", "Back to general"),
         ("update", "Update: check / history / install"),
         ("uninstall", "Uninstall Trace (app and data)"),
+        ("device", "Devices: list / inspect / check write protection"),
+        ("devices", "Devices (alias)"),
+        ("dev", "Devices (short)"),
     ]
 
     def _root_completions(self, text: str, word: str) -> Any:

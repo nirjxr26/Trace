@@ -31,6 +31,27 @@ MigrationVerifier = Callable[[Connection], bool]
 # canonical migration identity and are upgraded once, explicitly, on first run.
 CHECKSUM_SCHEME = "canonical-v2"
 
+DEVICE_FINGERPRINTS_TABLE = "device_fingerprints"
+DEVICE_FINGERPRINTS_INDEX = "ix_device_fingerprints_identity"
+REQUIRED_DEVICE_COLUMNS = frozenset(
+    {
+        "id",
+        "node",
+        "serial",
+        "model",
+        "capacity_bytes",
+        "firmware",
+        "interface",
+        "wwn",
+        "source",
+        "verdict",
+        "unknown_cause",
+        "evidence",
+        "inspected_at",
+        "inspected_by",
+    }
+)
+
 # Migration registry: (version, name, action)
 MIGRATIONS: list[tuple[int, str, MigrationAction]] = []
 
@@ -855,3 +876,35 @@ def _migration_017_audit_subject_type(bind: Engine | Connection) -> None:
     else:
         with bind.begin() as conn:
             _run_migration_017(conn)
+
+
+def _verify_018_device_fingerprints(conn: Connection) -> bool:
+    if DEVICE_FINGERPRINTS_TABLE not in inspect(conn).get_table_names():
+        return False
+    if not REQUIRED_DEVICE_COLUMNS.issubset(_column_names(conn, DEVICE_FINGERPRINTS_TABLE)):
+        return False
+    return _index_exists(conn, DEVICE_FINGERPRINTS_TABLE, DEVICE_FINGERPRINTS_INDEX)
+
+
+@register_migration(
+    18,
+    "018_create_device_fingerprints",
+    operations=(
+        _create_all((DEVICE_FINGERPRINTS_TABLE,)),
+        f"CREATE INDEX {DEVICE_FINGERPRINTS_INDEX} on device_fingerprints (serial, inspected_at)",
+    ),
+    verify=lambda conn: _verify_018_device_fingerprints(conn),
+)
+def _migration_018_device_fingerprints(bind: Engine | Connection) -> None:
+    """Device observation history. Append-only, never purged with a case [D3], [D29].
+
+    The model module is imported here because `Base.metadata` only holds tables whose
+    model has been imported; without it a fresh database would migrate to 18 and then
+    find no table. `create_all` also builds the index, so it is declared for the
+    checksum and re-checked by the verifier rather than created a second time.
+    """
+    import trace_core.devices.models  # noqa: F401
+
+    if DEVICE_FINGERPRINTS_TABLE not in Base.metadata.tables:
+        return
+    Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables[DEVICE_FINGERPRINTS_TABLE]])

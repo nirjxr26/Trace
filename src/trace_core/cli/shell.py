@@ -31,6 +31,17 @@ from trace_core.core.ui.renderers import (
 from trace_core.core.ui.theme import THEME_TOKENS
 
 
+def _split_line(line: str) -> list[str]:
+    """Whitespace split that honours quotes and keeps every backslash literal."""
+    parts = shlex.split(line, posix=False)
+    stripped = []
+    for part in parts:
+        if len(part) >= 2 and part[0] == part[-1] and part[0] in "\"'":
+            part = part[1:-1]
+        stripped.append(part)
+    return stripped
+
+
 def _format_active_case(active_case: Any, empty_hint: str) -> Text:
     """Format active-case label shared by banner and status views."""
     if active_case:
@@ -294,7 +305,7 @@ class InteractiveShell:
             stripped = _re.sub(r"(?i)^\s*trace\s+", "", clean_line).strip()
             if not stripped:
                 return
-            tokens = shlex.split(stripped)
+            tokens = _split_line(stripped)
             clean_line = stripped
         except ValueError:
             render_error_card("Invalid Command", f"Command '{clean_line}' has unbalanced quotes.")

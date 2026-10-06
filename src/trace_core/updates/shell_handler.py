@@ -53,6 +53,8 @@ class UpdateShellCommandHandler(BaseShellHandler):
     def get_completions(self, text: str, ctx: object) -> list[str]:  # type: ignore[override]
         """Flag completions shared with case handler pattern. No new completer framework."""
         _ = ctx
+        if not self.owns_text(text):
+            return []
         actions = [("check", "Check for updates"), ("install", "Install update")]
         flags = {
             "check": ["--output", "-o", "--manifest"],

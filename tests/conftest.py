@@ -36,6 +36,26 @@ def temp_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
+def device_box(tmp_path: Path) -> Path:
+    """Two seeded synthetic disks. Single source for every device-suite file adapter."""
+    from trace_core.devices import synthetic
+
+    synthetic.write_disk(tmp_path / "disk-a.dd", size=2048)
+    synthetic.write_disk(tmp_path / "disk-b.dd", seed=b"other", size=1024)
+    return tmp_path
+
+
+@pytest.fixture
+def device_file_env(device_box: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Select the file adapter rooted at `device_box`. Returns the root."""
+    from trace_core.devices.service import ENV_ADAPTER, ENV_DEVICE_ROOT
+
+    monkeypatch.setenv(ENV_ADAPTER, "file")
+    monkeypatch.setenv(ENV_DEVICE_ROOT, str(device_box))
+    return device_box
+
+
+@pytest.fixture
 def session_manager() -> DatabaseSessionManager:
     """Provide a fresh in-memory SQLite database session manager with schema initialized."""
     mgr = DatabaseSessionManager("sqlite:///:memory:")

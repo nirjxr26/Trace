@@ -14,6 +14,7 @@ _CONFIRM_HINT = "y/N confirm"
 COMMANDS: list[tuple[str, str, str]] = [
     # (command id, label, hint)
     ("tab-cases", "Cases  —  browse & work cases", "case table + dossier"),
+    ("tab-devices", "Devices  —  enumerate + write-protect", "device gate"),
     ("tab-audit", "Audit  —  ledger & verification", "ledger stream + detail"),
     ("tab-settings", "Settings  —  database, updates, diagnostics", "sections + detail"),
     ("case-create", "Create a new case", "guided form"),
@@ -25,6 +26,8 @@ COMMANDS: list[tuple[str, str, str]] = [
     ("case-recent", "Sort cases: recent first", "5 most recently updated"),
     ("audit-export", "Export the audit bundle", "header + JSONL"),
     ("audit-anchor", "Verify the ledger against its anchor", "tail check"),
+    ("device-inspect", "Inspect the selected device", "capture its fingerprint"),
+    ("device-check", "Check the selected device", "write-protection gate"),
     ("database-migrate", "Apply pending database migrations", "pending only"),
     ("updates-check", "Check for a Trace update", "available version"),
     ("updates-install", "Install the available Trace update", _CONFIRM_HINT),
