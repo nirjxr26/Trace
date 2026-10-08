@@ -390,7 +390,7 @@ def _device_ioctl(handle: int, code: int, in_buffer: int, in_size: int, out_size
         ctypes.c_ulong(code),
         ctypes.c_void_p(in_buffer),
         ctypes.c_ulong(in_size),
-        ctypes.byref(buffer),
+        buffer,
         ctypes.c_ulong(out_size),
         ctypes.byref(returned),
         None,

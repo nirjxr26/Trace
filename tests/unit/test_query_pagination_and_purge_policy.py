@@ -90,7 +90,8 @@ def test_the_repository_refuses_to_reopen_a_sealed_case(session_manager, service
     with session_manager.session() as session:
         repo = SqlAlchemyCaseRepository(session)
         stored = repo.get_by_number(created.number)
-        assert stored is not None and stored.status is CaseStatus.CLOSED
+        assert stored is not None
+        assert stored.status is CaseStatus.CLOSED
         reopened = Case(
             id=stored.id,
             number=stored.number,

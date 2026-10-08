@@ -119,13 +119,15 @@ def test_unparseable_node_gates_unknown(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_inspect_of_an_absent_drive_raises_device_gone(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win32.Win32Device, "_drive", lambda self, index: None)
+    target = _info(5)
     with pytest.raises(DeviceGoneError):
-        win32.Win32Device().inspect(_info(5))
+        win32.Win32Device().inspect(target)
 
 
 def test_inspect_of_an_unparseable_node_raises_device_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+    target = DeviceInfo(node="nope", kind=DeviceKind.OS, requires_real_hardware_opt_in=True)
     with pytest.raises(DeviceGoneError):
-        win32.Win32Device().inspect(DeviceInfo(node="nope", kind=DeviceKind.OS, requires_real_hardware_opt_in=True))
+        win32.Win32Device().inspect(target)
 
 
 def test_probe_reports_writable_when_the_ioctl_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -315,8 +317,9 @@ def test_the_probe_closes_its_handle_on_every_path(monkeypatch: pytest.MonkeyPat
 
     closed.clear()
     monkeypatch.setattr(win32, "_is_writable", lambda handle: (_ for _ in ()).throw(RuntimeError("boom")))
+    target = _info()
     with pytest.raises(RuntimeError):
-        win32.Win32Device().verify(_info())
+        win32.Win32Device().verify(target)
     assert closed == [42]
 
 
@@ -570,8 +573,9 @@ def test_inspect_of_a_denied_drive_names_access_not_absence(monkeypatch: pytest.
     from trace_core.devices.domain import DeviceAccessDeniedError
 
     monkeypatch.setattr(win32, "_try_open", lambda node: (None, 5))
+    target = _info(0)
     with pytest.raises(DeviceAccessDeniedError, match="[Ee]levat"):
-        win32.Win32Device().inspect(_info(0))
+        win32.Win32Device().inspect(target)
 
 
 def test_probe_of_a_denied_drive_is_eacces_without_opening(monkeypatch: pytest.MonkeyPatch) -> None:

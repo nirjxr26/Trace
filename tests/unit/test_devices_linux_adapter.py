@@ -499,8 +499,9 @@ def test_inspect_of_a_vanished_device_raises_device_gone(monkeypatch: pytest.Mon
 
     adapter = linux.LinuxDevice()
     monkeypatch.setattr(adapter, "_exists", lambda name: False)
+    target = _device("sda")
     with pytest.raises(DeviceGoneError):
-        adapter.inspect(_device("sda"))
+        adapter.inspect(target)
 
 
 def test_evidence_shape_matches_the_fake_adapter(monkeypatch: pytest.MonkeyPatch) -> None:

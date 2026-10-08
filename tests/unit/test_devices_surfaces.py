@@ -180,20 +180,15 @@ def test_renderers_emit_valid_json_for_both_shapes(
 
 
 def test_renderers_escape_hostile_hardware_strings(
-    session_manager: DatabaseSessionManager, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    session_manager: DatabaseSessionManager, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch
 ) -> None:
     """[D21] a crafted MODEL string must not be interpreted as console markup."""
     root = tmp_path / "root"
     root.mkdir()
     hostile = "[bold red]owned[/]"
     (root / "evil.dd").write_bytes(hostile.encode())
-    import os
 
-    os.environ[ENV_ADAPTER] = "file"
-    os.environ[ENV_DEVICE_ROOT] = str(root)
-    try:
-        renderers.render_devices(helpers.do_list(session_manager))
-    finally:
-        os.environ.pop(ENV_ADAPTER, None)
-        os.environ.pop(ENV_DEVICE_ROOT, None)
+    monkeypatch.setenv(ENV_ADAPTER, "file")
+    monkeypatch.setenv(ENV_DEVICE_ROOT, str(root))
+    renderers.render_devices(helpers.do_list(session_manager))
     assert "[bold red]" not in capsys.readouterr().out

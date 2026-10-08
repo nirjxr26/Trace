@@ -64,6 +64,18 @@ def _enable_audit_triggers(conn) -> None:  # type: ignore[no-untyped-def]
             pass
 
 
+def _tamper_seq_one(session_manager: DatabaseSessionManager) -> None:
+    """Break the chain hash of seq 1 behind the append-only triggers.
+
+    One invocation, so a failure points at the tamper and not at a neighbour in the same
+    `pytest.raises` block that could also throw.
+    """
+    with session_manager.engine.begin() as conn:
+        _disable_audit_triggers(conn)
+        conn.execute(sqlalchemy.text("UPDATE audit_events SET chain_hash=:h WHERE seq=1"), {"h": "f" * 64})
+        _enable_audit_triggers(conn)
+
+
 def test_mutate_payload_json_detected(session_manager: DatabaseSessionManager) -> None:
     CaseService(session_manager).create_case(CaseCreateDto(title="T1", lead_examiner="Ex"))
     with session_manager.engine.begin() as conn:
@@ -124,10 +136,7 @@ def test_the_shared_verify_core_refuses_a_tampered_chain(
     CaseService(session_manager).create_case(CaseCreateDto(title="A", lead_examiner="Ex"))
     CaseService(session_manager).create_case(CaseCreateDto(title="B", lead_examiner="Ex"))
     assert do_verify(AuditService(session_manager), "json", None).is_valid is True
-    with session_manager.engine.begin() as conn:
-        _disable_audit_triggers(conn)
-        conn.execute(sqlalchemy.text("UPDATE audit_events SET chain_hash=:h WHERE seq=1"), {"h": "f" * 64})
-        _enable_audit_triggers(conn)
+    _tamper_seq_one(session_manager)
     with pytest.raises(AuditTamperError, match="Tamper detected at seq 1"):
         do_verify(AuditService(session_manager), "json", None)
 
@@ -140,10 +149,7 @@ def test_the_repl_verify_surface_refuses_a_tampered_chain(
 
     CaseService(session_manager).create_case(CaseCreateDto(title="A", lead_examiner="Ex"))
     CaseService(session_manager).create_case(CaseCreateDto(title="B", lead_examiner="Ex"))
-    with session_manager.engine.begin() as conn:
-        _disable_audit_triggers(conn)
-        conn.execute(sqlalchemy.text("UPDATE audit_events SET chain_hash=:h WHERE seq=1"), {"h": "f" * 64})
-        _enable_audit_triggers(conn)
+    _tamper_seq_one(session_manager)
 
     monkeypatch.setattr("trace_core.core.service.db_manager", session_manager)
     rendered: list[tuple[str, str, str | None]] = []

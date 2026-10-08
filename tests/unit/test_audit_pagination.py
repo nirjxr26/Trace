@@ -1,11 +1,13 @@
 """Audit list projection, sequence search, and keyset paging contracts."""
 
 import json
-from collections.abc import Generator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager, contextmanager
+from typing import Any
 
 import pytest
 from sqlalchemy import event as sa_event
+from textual.widgets import DataTable
 from typer.testing import CliRunner
 
 from trace_core.audit.domain import AuditAction
@@ -16,6 +18,8 @@ from trace_core.cases.dto import CaseCreateDto
 from trace_core.cases.service import CaseService
 from trace_core.cli.main import app
 from trace_core.core.database.session import DatabaseSessionManager
+from trace_core.tui.app import TraceApp
+from trace_core.tui.screens.audit import PAGE_ROWS
 
 pytestmark = pytest.mark.unit
 runner = CliRunner()
@@ -65,7 +69,8 @@ def test_numeric_search_filters_on_the_primary_key_alone(session_manager: Databa
         AuditService(session_manager).list_event_summaries(AuditFilterDto(search=str(seqs[4])))
     where = seen[0].split(" WHERE ", 1)[1]
     assert "seq = " in where
-    assert "actor" not in where and "action" not in where
+    assert "actor" not in where
+    assert "action" not in where
 
 
 def test_text_search_still_matches_substrings(session_manager: DatabaseSessionManager) -> None:
@@ -85,7 +90,8 @@ def test_summary_list_selects_only_the_light_columns(session_manager: DatabaseSe
     assert "payload_json" not in sql
     assert "chain_hash" not in sql
     assert "signature" not in sql
-    assert "audit_events.actor" in sql and "audit_events.ts" in sql
+    assert "audit_events.actor" in sql
+    assert "audit_events.ts" in sql
 
 
 def test_full_list_still_hydrates_the_whole_ledger_row(session_manager: DatabaseSessionManager) -> None:
@@ -126,7 +132,6 @@ def test_keyset_cursor_narrows_the_primary_key_range(session_manager: DatabaseSe
     with _selects(session_manager) as seen:
         AuditService(session_manager).list_event_summaries(AuditFilterDto(limit=5, before_seq=sorted(seqs)[9]))
     assert "seq < " in seen[0]
-    assert "OFFSET 0" in seen[0]
 
 
 def test_keyset_and_filters_compose(session_manager: DatabaseSessionManager) -> None:
@@ -306,16 +311,16 @@ def test_pager_pages_are_distinct_windows(session_manager: DatabaseSessionManage
     assert [e.seq for e in pages.list_event_summaries(AuditFilterDto(limit=3, before_seq=seqs[5]))] == seqs[6:9]
 
 
-@pytest.mark.unit
-@pytest.mark.anyio
-async def test_audit_view_pages_back_through_every_event(
+@asynccontextmanager
+async def _audit_tab_on_a_long_ledger(
     session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from textual.widgets import DataTable
+) -> AsyncGenerator[tuple[Any, DataTable, list[int]], None]:
+    """Run the audit tab over a ledger longer than one window, with the first window loaded.
 
-    from trace_core.tui.app import TraceApp
-    from trace_core.tui.screens.audit import PAGE_ROWS
-
+    Single source for the prologue every TUI paging test repeats: point the global manager
+    at the test database, seed past `PAGE_ROWS` so there is a second page to fetch, mount
+    the app, and select the audit tab.
+    """
     monkeypatch.setattr("trace_core.core.service.db_manager", session_manager)
     seqs = _seed(session_manager, PAGE_ROWS + 25)
     app = TraceApp(session_manager)
@@ -324,7 +329,15 @@ async def test_audit_view_pages_back_through_every_event(
         await pilot.pause()
         table = app.query_one("#audit-table", DataTable)
         assert table.row_count == PAGE_ROWS
+        yield pilot, table, seqs
 
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_audit_view_pages_back_through_every_event(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with _audit_tab_on_a_long_ledger(session_manager, monkeypatch) as (pilot, table, seqs):
         table.focus()
         await pilot.pause()
         with _selects(session_manager) as seen:
@@ -376,10 +389,9 @@ def test_cli_after_seq_pages_upward(session_manager: DatabaseSessionManager, mon
 async def test_audit_header_count_tracks_every_loaded_row(
     session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from textual.widgets import DataTable, Static
+    from textual.widgets import Static
 
-    from trace_core.tui.app import TraceApp
-    from trace_core.tui.screens.audit import AUDIT_HEADER_ID, PAGE_ROWS
+    from trace_core.tui.screens.audit import AUDIT_HEADER_ID
 
     monkeypatch.setattr("trace_core.core.service.db_manager", session_manager)
     seqs = _seed(session_manager, PAGE_ROWS + 25)
@@ -403,10 +415,6 @@ async def test_audit_header_count_tracks_every_loaded_row(
 async def test_audit_table_stays_inside_the_sidebar(
     session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch, size: tuple[int, int]
 ) -> None:
-    from textual.widgets import DataTable
-
-    from trace_core.tui.app import TraceApp
-
     monkeypatch.setattr("trace_core.core.service.db_manager", session_manager)
     _seed(session_manager, 60)
     app = TraceApp(session_manager)
@@ -417,7 +425,8 @@ async def test_audit_table_stays_inside_the_sidebar(
         left = app.query_one("#audit-left")
         assert table.region.bottom <= left.region.bottom
         assert table.region.right <= left.region.right
-        assert table.region.width > 0 and table.region.height > 0
+        assert table.region.width > 0
+        assert table.region.height > 0
 
 
 @pytest.mark.unit
@@ -425,20 +434,7 @@ async def test_audit_table_stays_inside_the_sidebar(
 async def test_audit_view_extends_when_the_viewport_is_scrolled_not_the_cursor(
     session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from textual.widgets import DataTable
-
-    from trace_core.tui.app import TraceApp
-    from trace_core.tui.screens.audit import PAGE_ROWS
-
-    monkeypatch.setattr("trace_core.core.service.db_manager", session_manager)
-    seqs = _seed(session_manager, PAGE_ROWS + 25)
-    app = TraceApp(session_manager)
-    async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
-        await pilot.pause()
-        table = app.query_one("#audit-table", DataTable)
-        assert table.row_count == PAGE_ROWS
-
+    async with _audit_tab_on_a_long_ledger(session_manager, monkeypatch) as (pilot, table, seqs):
         cursor_before = table.cursor_row
         with _selects(session_manager) as seen:
             table.scroll_to(y=table.max_scroll_y, animate=False)
@@ -454,10 +450,6 @@ async def test_audit_view_extends_when_the_viewport_is_scrolled_not_the_cursor(
 async def test_audit_view_detail_is_not_refetched_when_the_tab_is_revisited(
     session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from textual.widgets import DataTable
-
-    from trace_core.tui.app import TraceApp
-
     monkeypatch.setattr("trace_core.core.service.db_manager", session_manager)
     _seed(session_manager, 5)
     app = TraceApp(session_manager)

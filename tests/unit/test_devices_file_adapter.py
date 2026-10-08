@@ -185,17 +185,19 @@ def test_a_subdirectory_is_never_enumerated_as_a_device(device_box: Path) -> Non
 def test_vanished_device_inspect_is_not_a_silent_success(device_box: Path) -> None:
     device = file_device.FileDevice(device_box).list_block_devices()[0]
     Path(device.node).unlink()
+    adapter = file_device.FileDevice(device_box)
     with pytest.raises(DeviceGoneError):
-        file_device.FileDevice(device_box).inspect(device)
+        adapter.inspect(device)
 
 
 @pytest.mark.parametrize("hostile", ["..", ".", "a/../..", "", "/", "..\\.."])
-def test_a_node_naming_the_root_or_its_parent_is_refused(device_box: Path, hostile: str) -> None:
+@pytest.mark.parametrize("entry_point", ["inspect", "verify"])
+def test_a_node_naming_the_root_or_its_parent_is_refused(device_box: Path, hostile: str, entry_point: str) -> None:
     info = DeviceInfo(node=hostile, kind=DeviceKind.FILE, requires_real_hardware_opt_in=False)
     adapter = file_device.FileDevice(device_box)
-    for call in (adapter.inspect, adapter.verify):
-        with pytest.raises(ValueError, match="Refusing"):
-            call(info)
+    call = getattr(adapter, entry_point)
+    with pytest.raises(ValueError, match="Refusing"):
+        call(info)
 
 
 def test_a_symlink_pointing_outside_the_root_is_refused(tmp_path: Path) -> None:

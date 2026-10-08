@@ -232,7 +232,8 @@ def test_the_documented_tui_behaviour_is_what_the_tui_offers() -> None:
 
     bound = {str(b.key) for b in CasesView.BINDINGS if isinstance(b, Binding)} | {"q", "enter"}
     single_letter = {token for token in TAB_HINTS["cases"].split() if len(token) == 1 and token.isalpha()}
-    assert single_letter <= bound, f"hint advertises unbound keys: {single_letter - bound}"
+    unbound = single_letter - bound
+    assert not unbound, f"hint advertises unbound keys: {unbound}"
 
 
 def test_the_key_reference_documents_every_tab_and_device_keys() -> None:
@@ -247,7 +248,7 @@ def test_the_key_reference_documents_every_tab_and_device_keys() -> None:
     for binding in DevicesView.BINDINGS:
         if not isinstance(binding, Binding):
             continue
-        assert binding.key in rendered, f"{binding.key} missing from the key reference"
+        assert binding.key in rendered
 
 
 def test_help_documents_only_flags_the_handler_accepts() -> None:

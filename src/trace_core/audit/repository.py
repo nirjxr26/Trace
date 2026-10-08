@@ -17,7 +17,7 @@ from trace_core.core.canonical import coerce_utc
 from trace_core.core.database.repository import ilike_literal, paginate
 
 _APPEND_ATTEMPTS = 3
-_SEQ_SEARCH_RE = re.compile(r"^[0-9]+$")
+_SEQ_SEARCH_RE = re.compile(r"^\d+$")
 SUMMARY_COLUMNS = (
     AuditEventModel.seq,
     AuditEventModel.ts,

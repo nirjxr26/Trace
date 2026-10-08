@@ -211,7 +211,10 @@ def test_frame_is_pure_and_draw_owns_the_spinner():
 
     display = UpdateProgressDisplay(current="0.2.3", target="0.2.4")
     display.on_stage(Stage.DOWNLOAD, StageStatus.ACTIVE)
-    assert display._frame().plain == display._frame().plain
+    first = display._frame().plain
+    second = display._frame().plain
+    assert first == second
+    assert SPIN_FRAMES[0] in first
 
     display.tty = True
     before = display._spin

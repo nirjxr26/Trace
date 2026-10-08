@@ -129,6 +129,10 @@ trace_steps_render() {
         glyph="$TRACE_FAIL_GLYPH"
         colour="$TRACE_RED"
         ;;
+      *)
+        glyph="$TRACE_PEND_GLYPH"
+        colour="$TRACE_AMBER"
+        ;;
     esac
     frame="${frame}\\r\\033[2K  ${colour}${TRACE_STEP_GUTTER}${glyph}  ${TRACE_RESET}${label}"
     if [ "$i" -lt "$last" ]; then
@@ -168,28 +172,31 @@ trace_animate() {
 }
 
 trace_step_start() {
-  TRACE_STEP_STATES[$1]="active"
-  TRACE_STEP_INDEX=$1
+  local index="$1"
+  TRACE_STEP_STATES[$index]="active"
+  TRACE_STEP_INDEX=$index
   TRACE_STEP_TICKS=0
   TRACE_DOT_IDX=0
   if [ "$VERBOSE" = "1" ] || ! trace_is_tty; then
-    printf '  |  ... %s\n' "${TRACE_STEP_LABELS[$1]}"
+    printf '  |  ... %s\n' "${TRACE_STEP_LABELS[$index]}"
     return 0
   fi
   trace_steps
 }
 
 trace_step_done() {
-  TRACE_STEP_STATES[$1]="done"
+  local index="$1"
+  TRACE_STEP_STATES[$index]="done"
   if [ "$VERBOSE" = "1" ] || ! trace_is_tty; then
-    printf '  |  [OK] %s\n' "${TRACE_STEP_LABELS[$1]}"
+    printf '  |  [OK] %s\n' "${TRACE_STEP_LABELS[$index]}"
     return 0
   fi
   trace_steps
 }
 
 trace_step_fail() {
-  TRACE_STEP_STATES[$1]="fail"
+  local index="$1"
+  TRACE_STEP_STATES[$index]="fail"
   if [ "$VERBOSE" = "0" ] && trace_is_tty; then
     trace_steps
     trace_steps_release
@@ -209,8 +216,9 @@ trace_title() {
 }
 
 trace_phase() {
+  local phase_index="$1"
   TRACE_PHASE_DONE=$((TRACE_PHASE_DONE + 1))
-  trace_step_start "$1"
+  trace_step_start "$phase_index"
 }
 
 trace_collect_tmp() {

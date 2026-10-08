@@ -4,7 +4,7 @@ from pathlib import Path
 
 from rich.markup import escape
 
-from trace_core.audit.dto import AuditFilterDto
+from trace_core.audit.dto import AuditEventSummaryDto, AuditFilterDto
 from trace_core.audit.service import AuditService
 from trace_core.core.errors import ApplicationError, ValidationError
 
@@ -91,48 +91,70 @@ def _page_choice() -> str:
     return answer or "enter"
 
 
+_QUIT_CHOICES = ("q", "quit", "n", "no")
+_BACK_CHOICES = ("b", "back", "p", "up")
+
+
+def _render_page(
+    svc: AuditService, filt: AuditFilterDto, cursor: tuple[int | None, int | None]
+) -> tuple[list[AuditEventSummaryDto], bool]:  # type: ignore[no-untyped-def]
+    """Render one window and report whether the ledger continues past it."""
+    from trace_core.audit.renderers import render_audit_table
+
+    before, after = cursor
+    page = filt.model_copy(update={"before_seq": before, "after_seq": after, "offset": 0, "limit": filt.limit + 1})
+    fetched = svc.list_event_summaries(page)
+    rows = fetched[: filt.limit]
+    render_audit_table(rows)
+    return rows, len(fetched) > filt.limit
+
+
+def _next_page_hint(filt: AuditFilterDto, cursor: tuple[int | None, int | None], rows: list) -> str:  # type: ignore[no-untyped-def]
+    before, _after = cursor
+    if before is None:
+        return f"More events: audit show --offset {filt.offset + filt.limit}"
+    return f"More events: audit show --before-seq {rows[-1].seq}"
+
+
+def _prompt_for_cursor(
+    cursor: tuple[int | None, int | None],
+    rows: list,  # type: ignore[no-untyped-def]
+    visited: list[tuple[int | None, int | None]],
+) -> tuple[int | None, int | None] | None:
+    """Next cursor for the window to show, or None to stop. Re-prompts on a no-op."""
+    from trace_core.core.ui.renderers import console
+
+    while True:
+        choice = _page_choice()
+        if choice in _QUIT_CHOICES:
+            return None
+        if choice not in _BACK_CHOICES:
+            visited.append(cursor)
+            return rows[-1].seq, None
+        if not visited:
+            console.print("[dim]Already at the newest event.[/dim]")
+            continue
+        return visited.pop()
+
+
 def _paged_list(svc: AuditService, filt: AuditFilterDto, interactive: bool) -> None:  # type: ignore[no-untyped-def]
     """Walk the ledger one fixed window at a time. Never holds more than one page."""
-    from trace_core.audit.renderers import render_audit_table
     from trace_core.core.ui.renderers import console
 
     interactive = interactive and _is_interactive()
-    before, after = filt.before_seq, filt.after_seq
+    cursor: tuple[int | None, int | None] = (filt.before_seq, filt.after_seq)
     visited: list[tuple[int | None, int | None]] = []
     while True:
-        page = filt.model_copy(
-            update={
-                "before_seq": before,
-                "after_seq": after,
-                "offset": 0,
-                "limit": filt.limit + 1,
-            }
-        )
-        fetched = svc.list_event_summaries(page)
-        more = len(fetched) > filt.limit
-        rows = fetched[: filt.limit]
-        render_audit_table(rows)
+        rows, more = _render_page(svc, filt, cursor)
         if not more:
             return
         if not interactive:
-            if before is None:
-                console.print(f"[dim]More events: audit show --offset {filt.offset + filt.limit}[/dim]\n")
-            else:
-                console.print(f"[dim]More events: audit show --before-seq {rows[-1].seq}[/dim]\n")
+            console.print(f"[dim]{_next_page_hint(filt, cursor, rows)}[/dim]\n")
             return
-        while True:
-            choice = _page_choice()
-            if choice in ("q", "quit", "n", "no"):
-                return
-            if choice not in ("b", "back", "p", "up"):
-                visited.append((before, after))
-                before, after = rows[-1].seq, None
-                break
-            if not visited:
-                console.print("[dim]Already at the newest event.[/dim]")
-                continue
-            before, after = visited.pop()
-            break
+        nxt = _prompt_for_cursor(cursor, rows, visited)
+        if nxt is None:
+            return
+        cursor = nxt
 
 
 def do_show_list(

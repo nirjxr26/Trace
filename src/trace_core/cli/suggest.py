@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from trace_core.cli.shell import InteractiveShell
 
 _CASE_SHOW = "case show"
+_AUDIT_SHOW = "audit show"
 _MANUAL_META = "Display command manual"
 
 
@@ -31,7 +32,7 @@ class TraceAutoSuggest(AutoSuggest):
             "device list",
             "device inspect",
             "device check",
-            "audit show",
+            _AUDIT_SHOW,
             "audit verify",
             "list cases",
             "create case",
@@ -58,7 +59,7 @@ class TraceAutoSuggest(AutoSuggest):
         if self.shell.active_case:
             ranked = [
                 _CASE_SHOW,
-                f"audit show --case {self.shell.active_case.number}",
+                f"{_AUDIT_SHOW} --case {self.shell.active_case.number}",
                 "case edit",
                 "case list",
             ]
@@ -81,9 +82,9 @@ class TraceAutoSuggest(AutoSuggest):
             )
             if any(text == p for p in case_prefixes):
                 return Suggestion(active_num)
-        if text.startswith("audit show") and self.shell.active_case and "--case" not in text:
+        if text.startswith(_AUDIT_SHOW) and self.shell.active_case and "--case" not in text:
             # ghost: audit show → audit show --case <active>
-            if text.strip() == "audit show":
+            if text.strip() == _AUDIT_SHOW:
                 return Suggestion(f" --case {self.shell.active_case.number}")
         return None
 

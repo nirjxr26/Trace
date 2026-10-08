@@ -305,7 +305,9 @@ def test_an_override_without_a_stated_reason_still_records_one(session_manager, 
     assert parse_details(payload)["reason"].strip()
 
 
-def test_every_device_ledger_row_is_written_through_a_before_commit_hook(session_manager, box: Path) -> None:
+def test_every_device_ledger_row_is_written_through_a_before_commit_hook(
+    session_manager, box: Path, monkeypatch
+) -> None:
     """[§14.5] mandatory forensic rows go in via `UnitOfWork.before_commit`, not ad hoc."""
     from trace_core.core.operators import process_session_id
 
@@ -322,12 +324,9 @@ def test_every_device_ledger_row_is_written_through_a_before_commit_hook(session
         registered.append(1)
         return original(self, build, actor)
 
-    DeviceService._ledger_hook = _counting  # type: ignore[method-assign]
-    try:
-        svc.inspect_device(str(box / "disk-a.dd"))
-        svc.check_device(str(box / "disk-a.dd"), acknowledge_unverified_source=True)
-    finally:
-        DeviceService._ledger_hook = original  # type: ignore[method-assign]
+    monkeypatch.setattr(DeviceService, "_ledger_hook", _counting)
+    svc.inspect_device(str(box / "disk-a.dd"))
+    svc.check_device(str(box / "disk-a.dd"), acknowledge_unverified_source=True)
     assert len(registered) == 3, "inspect writes one row; the acknowledged check writes gate + override"
 
 

@@ -120,7 +120,7 @@ function Write-StepBlock {
     Write-Host -NoNewline $frame
 }
 
-function Write-InstallTitle {
+function Show-InstallTitle {
     $ver = if ($script:DisplayVersion) { $script:DisplayVersion } else { "main" }
     $ver = $ver -replace '^v', ''
     if ($VerboseMode -or [Console]::IsOutputRedirected) {
@@ -559,7 +559,7 @@ if ($VerboseMode) {
     Write-Host ""
 }
 
-Write-InstallTitle
+Show-InstallTitle
 
 Step-TracePhase 0
 if ($VerboseMode) {
