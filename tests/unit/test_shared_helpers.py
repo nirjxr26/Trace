@@ -2,6 +2,7 @@
 
 import importlib
 import inspect
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -273,8 +274,12 @@ def test_uninstall_refuses_an_interactive_prompt_without_yes(monkeypatch) -> Non
 
     monkeypatch.setattr(uninstall, "interactive_terminal", lambda: False)
     res = CliRunner().invoke(app, ["uninstall"])
-    assert res.exit_code != 0
-    assert "--yes" in res.output
+    assert res.exit_code == 2
+    # Rich highlights the flag inside the error card, and whether the SGR codes land
+    # inside the word depends on the console width, so compare on the plain text.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", res.output)
+    assert "refusing interactive uninstall" in plain
+    assert "--yes" in plain
 
 
 def test_uninstall_prompts_only_when_both_streams_are_terminals(monkeypatch) -> None:  # type: ignore[no-untyped-def]

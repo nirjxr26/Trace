@@ -1,6 +1,7 @@
 """Tribunal tests for the file adapter: determinism, evidence shape, fault modes [D33]."""
 
 import inspect
+import os
 from pathlib import Path
 
 import pytest
@@ -190,9 +191,13 @@ def test_vanished_device_inspect_is_not_a_silent_success(device_box: Path) -> No
         adapter.inspect(device)
 
 
-@pytest.mark.parametrize("hostile", ["..", ".", "a/../..", "", "/", "..\\.."])
+@pytest.mark.parametrize(
+    "hostile",
+    ["..", ".", "a/../..", "", "/"] + (["..\\.."] if os.name == "nt" else []),
+)
 @pytest.mark.parametrize("entry_point", ["inspect", "verify"])
 def test_a_node_naming_the_root_or_its_parent_is_refused(device_box: Path, hostile: str, entry_point: str) -> None:
+    """`..\\..` is only an escape on Windows; on POSIX it is one legal filename."""
     info = DeviceInfo(node=hostile, kind=DeviceKind.FILE, requires_real_hardware_opt_in=False)
     adapter = file_device.FileDevice(device_box)
     call = getattr(adapter, entry_point)

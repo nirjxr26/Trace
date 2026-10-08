@@ -93,6 +93,9 @@ def test_inspect_reads_nothing_but_calls_smartctl_once(monkeypatch: pytest.Monke
     adapter = linux.LinuxDevice(dev_root=str(Path("/nonexistent-root")))
     monkeypatch.setattr(adapter, "_exists", lambda name: True)
     monkeypatch.setattr(linux, "_sysfs_value", lambda name, key: {"serial": "S1", "transport": "sata"}.get(key))
+    # `inspect` resolves the lsblk row for native identity, so a host with real block
+    # devices would contribute a real WWN and mask what smartctl reported.
+    monkeypatch.setattr(linux, "lsblk_json", lambda: {})
     seen: list[list[str]] = []
     monkeypatch.setattr(linux, "smartctl_readiness", lambda: None)
 

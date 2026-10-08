@@ -512,6 +512,13 @@ def test_service_module_level_imports_touch_no_adapter() -> None:
         assert helper in dir(service_module), f"composition root {helper} disappeared"
 
 
+class _WindllMustNotLoad:
+    """Stands in for `ctypes.windll` off Windows, where the attribute does not exist."""
+
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(f"adapter selection reached ctypes.windll.{name} off-platform")
+
+
 @pytest.mark.parametrize(
     ("env", "expected"),
     [
@@ -524,6 +531,8 @@ def test_service_module_level_imports_touch_no_adapter() -> None:
 )
 def test_adapter_env_selects_but_never_unlocks_real_hardware(monkeypatch, env: str, expected: str | None) -> None:
     """[D27] the env var picks an adapter; the opt-in flag stays required."""
+    import ctypes
+
     from trace_core.devices import service as service_module
 
     if env:
@@ -531,10 +540,11 @@ def test_adapter_env_selects_but_never_unlocks_real_hardware(monkeypatch, env: s
     else:
         monkeypatch.delenv(service_module.ENV_ADAPTER, raising=False)
     monkeypatch.setattr(service_module.sys, "platform", "linux" if expected != "Win32Device" else "win32")
+    # Selecting the Windows adapter off-platform must not reach `ctypes.windll`, which
+    # exists only on Windows. Asserting the class name is the whole contract here.
+    monkeypatch.setattr(ctypes, "windll", _WindllMustNotLoad(), raising=False)
     adapter = service_module.os_adapter()
     assert (type(adapter).__name__ if adapter is not None else None) == expected
-    if adapter is not None:
-        assert all(d.requires_real_hardware_opt_in for d in adapter.list_block_devices()) or True
 
 
 def test_os_adapter_is_absent_on_an_unsupported_platform(monkeypatch) -> None:

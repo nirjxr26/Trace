@@ -587,6 +587,10 @@ def test_probe_of_a_denied_drive_is_eacces_without_opening(monkeypatch: pytest.M
 
 
 def test_wmi_enrichment_names_a_drive_without_opening_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `_wmi` refuses to run unless `sys.platform == "win32"`, so this must say so rather
+    # than depend on the runner being Windows: off Windows it returned {} and every
+    # assertion below failed against an empty dict.
+    monkeypatch.setattr(win32.sys, "platform", "win32")
     document = [
         {
             "DeviceID": "\\\\.\\PHYSICALDRIVE0",
@@ -608,6 +612,7 @@ def test_wmi_enrichment_names_a_drive_without_opening_it(monkeypatch: pytest.Mon
 
 
 def test_wmi_enrichment_accepts_a_single_drive_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(win32.sys, "platform", "win32")
     monkeypatch.setattr(
         win32, "run_capped", lambda argv, **k: b"{" + b'"DeviceID": "\\\\\\\\.\\\\PHYSICALDRIVE2"' + b"}"
     )
@@ -617,6 +622,7 @@ def test_wmi_enrichment_accepts_a_single_drive_document(monkeypatch: pytest.Monk
 def test_wmi_enrichment_degrades_to_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     from trace_core.devices._subprocess import HelperFailure
 
+    monkeypatch.setattr(win32.sys, "platform", "win32")
     monkeypatch.setattr(
         win32, "run_capped", lambda argv, **k: (_ for _ in ()).throw(HelperFailure(UnknownCause.TOOL_MISSING, "x"))
     )
