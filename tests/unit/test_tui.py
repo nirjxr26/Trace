@@ -67,7 +67,7 @@ async def test_tui_pilot_flow(seeded_manager: DatabaseSessionManager) -> None:
         await pilot.pause()
         assert "Alpha" in _text(app.query_one("#case-dossier", Static))
 
-        await pilot.press("2")
+        await pilot.press("3")
         await pilot.pause()
         assert app.query_one(TabbedContent).active == "audit"
         assert "Audit" in app.export_screenshot()
@@ -77,7 +77,7 @@ async def test_tui_pilot_flow(seeded_manager: DatabaseSessionManager) -> None:
         assert "Case details updated" in _text(app.query_one("#audit-detail", Static))
         assert "Seq" in app.export_screenshot()
 
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         assert app.query_one(TabbedContent).active == "settings"
         assert "Settings" in app.export_screenshot()

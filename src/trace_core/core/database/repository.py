@@ -105,21 +105,6 @@ class SqlAlchemyBaseRepository[ModelT, EntityT, IdT](ABC):
         self.session.flush()
         return self._to_domain(model)
 
-    def delete(self, entity_id: IdT, purge: bool = False) -> bool:
-        """Permanently delete a row by primary key.
-
-        Forensic policy lives in feature repositories (e.g. soft-delete/archive).
-        Do not add soft-delete magic here; callers must implement retention explicitly.
-        """
-        _ = purge
-        model = self._fetch(entity_id)
-        if not model:
-            return False
-
-        self.session.delete(model)
-        self.session.flush()
-        return True
-
     def exists(self, entity_id: IdT) -> bool:
         """Check if an entity exists by primary key without hydrating full entity."""
         stmt = select(self._pk()).where(self._pk() == entity_id)

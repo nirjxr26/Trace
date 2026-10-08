@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from trace_core.audit.domain import AUDIT_LEDGER_NOT_INITIALIZED_MESSAGE, AuditAction
-from trace_core.audit.dto import AuditEventDto, AuditFilterDto, VerifyResultDto
+from trace_core.audit.dto import AuditEventDto, AuditEventSummaryDto, AuditFilterDto, VerifyResultDto
 from trace_core.audit.events import Context, Subject
 from trace_core.audit.models import AuditEventModel
 from trace_core.core.database.health import is_missing_relation_error
@@ -105,6 +105,13 @@ class AuditService(BaseService):
         with _ledger_session(self.session_manager) as session:
             repo = SqlAlchemyAuditRepository(session)
             return repo.list_events(filt)
+
+    def list_event_summaries(self, f: AuditFilterDto | None = None) -> list[AuditEventSummaryDto]:
+        from trace_core.audit.repository import SqlAlchemyAuditRepository
+
+        filt = f or AuditFilterDto()
+        with _ledger_session(self.session_manager) as session:
+            return SqlAlchemyAuditRepository(session).list_event_summaries(filt)
 
     def verify(self) -> VerifyResultDto:
         with _ledger_session(self.session_manager) as session:

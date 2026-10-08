@@ -167,6 +167,8 @@ class CaseShellCommandHandler(BaseShellHandler):
 
     def get_completions(self, text: str, ctx: ShellContext) -> list[Any]:
         parts = text.split()
+        if not self.owns_text(text):
+            return []
         if text.startswith("case"):
             return self._complete_case_command(parts, text, ctx)
         return self._complete_aliases(parts, text, ctx)

@@ -11,7 +11,6 @@ class ShellContext:
 
     active_case: Any | None = None
     service: Any | None = None
-    extra: dict[str, Any] | None = None
 
 
 class ShellCommandHandler(ABC):
@@ -40,8 +39,13 @@ class ShellCommandHandler(ABC):
         """Return list of (command_syntax, alias, description) for interactive help."""
         return []
 
-    def get_completions(self, text: str, ctx: ShellContext) -> list[str]:
-        """Provide auto-completion suggestions for prompt-toolkit."""
+    def get_completions(self, text: str, ctx: ShellContext) -> list[Any]:
+        """Provide auto-completion suggestions for prompt-toolkit.
+
+        A `(value, description)` pair per suggestion; the completer renders a bare value
+        with an empty description and treats a non-empty description on an empty value as
+        a non-insertable group heading.
+        """
         return []
 
 
@@ -78,6 +82,15 @@ class ShellCommandRegistry:
         """Return all registered handlers."""
         return list(self._handlers.values())
 
+    def known_words(self) -> list[str]:
+        """Every word the shell accepts: command names plus single-word aliases.
 
-# Global singleton registry
-command_registry = ShellCommandRegistry()
+        The shell asks this instead of keeping its own list, so registering a handler
+        makes its command reachable from the unknown-command suggestion and the root
+        completer without a second edit elsewhere.
+        """
+        words = list(self._handlers)
+        for alias in self._alias_map:
+            if " " not in alias:
+                words.append(alias)
+        return words

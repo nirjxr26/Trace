@@ -4,7 +4,7 @@ from pathlib import Path
 
 from rich.markup import escape
 
-from trace_core.audit.dto import AuditFilterDto
+from trace_core.audit.dto import AuditEventSummaryDto, AuditFilterDto
 from trace_core.audit.service import AuditService
 from trace_core.core.errors import ApplicationError, ValidationError
 
@@ -72,27 +72,126 @@ def do_decrypt(in_path: str, out: str, passphrase: str) -> Path:  # type: ignore
     return atomic_write_lines(out, [plain.decode("utf-8")])
 
 
-def do_show_list(svc: AuditService, filt: AuditFilterDto, case_number: str | None, output: str) -> None:
+_PAGE_PROMPT = "  [Enter] older  [b] back  [q] quit"
+
+
+def _is_interactive() -> bool:
+    from trace_core.core.cli.args import interactive_terminal
+
+    return interactive_terminal()
+
+
+def _page_choice() -> str:
+    from trace_core.core.ui.renderers import console
+
+    try:
+        answer = console.input(f"[dim]{_PAGE_PROMPT}[/dim] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return "q"
+    return answer or "enter"
+
+
+_QUIT_CHOICES = ("q", "quit", "n", "no")
+_BACK_CHOICES = ("b", "back", "p", "up")
+
+
+def _render_page(
+    svc: AuditService, filt: AuditFilterDto, cursor: tuple[int | None, int | None]
+) -> tuple[list[AuditEventSummaryDto], bool]:  # type: ignore[no-untyped-def]
+    """Render one window and report whether the ledger continues past it."""
+    from trace_core.audit.renderers import render_audit_table
+
+    before, after = cursor
+    page = filt.model_copy(update={"before_seq": before, "after_seq": after, "offset": 0, "limit": filt.limit + 1})
+    fetched = svc.list_event_summaries(page)
+    rows = fetched[: filt.limit]
+    render_audit_table(rows)
+    return rows, len(fetched) > filt.limit
+
+
+def _next_page_hint(filt: AuditFilterDto, cursor: tuple[int | None, int | None], rows: list) -> str:  # type: ignore[no-untyped-def]
+    before, _after = cursor
+    if before is None:
+        return f"More events: audit show --offset {filt.offset + filt.limit}"
+    return f"More events: audit show --before-seq {rows[-1].seq}"
+
+
+def _prompt_for_cursor(
+    cursor: tuple[int | None, int | None],
+    rows: list,  # type: ignore[no-untyped-def]
+    visited: list[tuple[int | None, int | None]],
+) -> tuple[int | None, int | None] | None:
+    """Next cursor for the window to show, or None to stop. Re-prompts on a no-op."""
+    from trace_core.core.ui.renderers import console
+
+    while True:
+        choice = _page_choice()
+        if choice in _QUIT_CHOICES:
+            return None
+        if choice not in _BACK_CHOICES:
+            visited.append(cursor)
+            return rows[-1].seq, None
+        if not visited:
+            console.print("[dim]Already at the newest event.[/dim]")
+            continue
+        return visited.pop()
+
+
+def _paged_list(svc: AuditService, filt: AuditFilterDto, interactive: bool) -> None:  # type: ignore[no-untyped-def]
+    """Walk the ledger one fixed window at a time. Never holds more than one page."""
+    from trace_core.core.ui.renderers import console
+
+    interactive = interactive and _is_interactive()
+    cursor: tuple[int | None, int | None] = (filt.before_seq, filt.after_seq)
+    visited: list[tuple[int | None, int | None]] = []
+    while True:
+        rows, more = _render_page(svc, filt, cursor)
+        if not more:
+            return
+        if not interactive:
+            console.print(f"[dim]{_next_page_hint(filt, cursor, rows)}[/dim]\n")
+            return
+        nxt = _prompt_for_cursor(cursor, rows, visited)
+        if nxt is None:
+            return
+        cursor = nxt
+
+
+def do_show_list(
+    svc: AuditService, filt: AuditFilterDto, case_number: str | None, output: str, pager: bool = False
+) -> None:
     """List + timeline + render core shared by Typer and shell. Callers own capture/parse UI."""
     from trace_core.audit.renderers import render_events
 
+    json_output = output.lower() == "json"
+    if not case_number and not json_output:
+        _paged_list(svc, filt, pager)
+        return
     events = svc.list_events(filt)
     if render_case_timeline_view(svc, case_number, events, output):
         return
-    if not events and case_number and output.lower() != "json":
+    if not events and case_number and not json_output:
         _empty_timeline_notice(case_number)
         return
     render_events(events, output)
 
 
 def do_verify(svc: AuditService, output: str, anchor: str | None):  # type: ignore[no-untyped-def]
-    """Verify + anchor + render core shared by Typer and shell. Returns result; callers own Tamper policy."""
+    """Verify + anchor + render core shared by Typer and shell. Enforces the Tamper policy itself.
+
+    The policy lives here rather than in each surface because a caller that forgets to
+    inspect the result reports a broken chain as valid, which is the one answer the
+    ledger must never give.
+    """
     from trace_core.audit.anchor import verify_against_anchor
     from trace_core.audit.renderers import render_verify
+    from trace_core.core.errors import AuditTamperError
 
     res = svc.verify()
     verify_against_anchor(svc, res, anchor)
     render_verify(res, output, anchor)
+    if not res.is_valid:
+        raise AuditTamperError(f"Tamper detected at seq {res.first_mismatch_seq} ({res.mismatch_type})")
     return res
 
 

@@ -11,7 +11,7 @@ from trace_core.cases.domain import Case
 from trace_core.cases.service import CaseService
 from trace_core.cli.suggest import TraceAutoSuggest, TraceShellCompleter
 from trace_core.core.cli.error_handler import capture_cli_errors
-from trace_core.core.cli.registry import ShellCommandHandler, ShellCommandRegistry, ShellContext
+from trace_core.core.cli.registry import ShellCommandRegistry, ShellContext
 
 __all__ = ["InteractiveShell", "TraceAutoSuggest", "TraceShellCompleter", "run_interactive_shell"]
 from trace_core.core.database.session import DatabaseSessionManager
@@ -29,6 +29,17 @@ from trace_core.core.ui.renderers import (
     table_padding,
 )
 from trace_core.core.ui.theme import THEME_TOKENS
+
+
+def _split_line(line: str) -> list[str]:
+    """Whitespace split that honours quotes and keeps every backslash literal."""
+    parts = shlex.split(line, posix=False)
+    stripped = []
+    for part in parts:
+        if len(part) >= 2 and part[0] == part[-1] and part[0] in "\"'":
+            part = part[1:-1]
+        stripped.append(part)
+    return stripped
 
 
 def _format_active_case(active_case: Any, empty_hint: str) -> Text:
@@ -67,9 +78,17 @@ def _print_help_row(syntax: str, alias: str, desc: str) -> None:
 CONSOLE_HELP_ENTRIES: tuple[tuple[str, str, str], ...] = (
     ("status", "", "Display system status and connection info"),
     ("clear / cls", "", "Clear console screen and re-render banner"),
+    ("recent / recents", "", "List recently active cases"),
+    ("back / b", "", "Return to the general context"),
     ("help / ?", "", "Show this command manual"),
     ("exit / quit", "", "Exit the interactive shell"),
 )
+
+_CONSOLE_COMMANDS: frozenset[str] = frozenset(
+    word for syntax, _, _ in CONSOLE_HELP_ENTRIES for word in syntax.replace("/", " ").split()
+)
+
+_SHORT_ALIASES: tuple[str, ...] = ("ls", "sh", "ed")
 
 
 class InteractiveShell:
@@ -96,10 +115,6 @@ class InteractiveShell:
 
         for handler in default_handlers():
             self.registry.register(handler)
-
-    def register_handler(self, handler: ShellCommandHandler) -> None:
-        """Allow other AI agents and feature modules to plug in commands."""
-        self.registry.register(handler)
 
     @property
     def service(self) -> CaseService | None:
@@ -294,7 +309,7 @@ class InteractiveShell:
             stripped = _re.sub(r"(?i)^\s*trace\s+", "", clean_line).strip()
             if not stripped:
                 return
-            tokens = shlex.split(stripped)
+            tokens = _split_line(stripped)
             clean_line = stripped
         except ValueError:
             render_error_card("Invalid Command", f"Command '{clean_line}' has unbalanced quotes.")
@@ -313,23 +328,7 @@ class InteractiveShell:
 
         from trace_core.core.cli.completion import filter_completions
 
-        words = [h.command_name for h in self.registry.all_handlers()]
-        words += [
-            "help",
-            "?",
-            "clear",
-            "cls",
-            "status",
-            "recent",
-            "recents",
-            "back",
-            "b",
-            "exit",
-            "quit",
-            "ls",
-            "sh",
-            "ed",
-        ]
+        words = list(dict.fromkeys([*self.registry.known_words(), *_CONSOLE_COMMANDS, *_SHORT_ALIASES]))
         matches = filter_completions([(w, w) for w in words], tokens[0].lower(), limit=1)
         if matches:
             remediation = f"Did you mean `{matches[0][0]}`? Type `help` for command list."

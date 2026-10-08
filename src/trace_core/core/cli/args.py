@@ -56,3 +56,15 @@ def extract_int_flag(args: list[str], default: int, *flags: str) -> int:
         return int(raw)
     except ValueError:
         raise ValidationError(f"Invalid integer value '{raw}' for {'/'.join(flags)}.") from None
+
+
+def interactive_terminal() -> bool:
+    """True when a prompt can actually be read and shown. Single source for the guard.
+
+    Both streams must be terminals: a command with stdout piped still has a stdin the
+    user can type into, and a confirmation written into a pipe or a log is not a
+    confirmation.
+    """
+    import sys
+
+    return sys.stdin.isatty() and sys.stdout.isatty()

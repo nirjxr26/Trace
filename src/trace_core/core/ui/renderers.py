@@ -176,6 +176,63 @@ def rule_line(term_w: int, max_len: int = 66) -> str:
     return "  " + (get_rule_char() * rule_width(term_w, max_len))
 
 
+GUTTER = "│ "
+
+
+def step_line(status: Any, label: str, glyph: str | None = None) -> Text:
+    """One step row: left gutter, status glyph, label. Shared by the CLI and the TUI.
+
+    `status` is the state, and the colour is resolved from it. `glyph` exists only so an
+    animating surface can supply the next spinner frame; every other caller leaves it
+    None and gets the shared glyph for the status.
+
+    This used to take a *glyph* and recover the state by searching the glyph table for a
+    match. Two of the three call sites passed the state instead, so those rows rendered
+    the literal enum name, and the reverse lookup could not tell FAILED from PENDING
+    because they share a glyph.
+    """
+    from trace_core.updates.stages import stage_glyph, stage_token
+
+    body = Text()
+    body.append(GUTTER, style=THEME_HEX["muted"])
+    body.append(f"{glyph or stage_glyph(status)} ", style=THEME_HEX[stage_token(status)])
+    body.append(label)
+    return body
+
+
+def done_line() -> Text:
+    """Closing line of a completed multi-step operation."""
+    body = Text()
+    body.append(GUTTER, style=THEME_HEX["muted"])
+    body.append("Done", style="dim")
+    return body
+
+
+CLOSING_INDENT = "  "
+
+
+def closing_line(glyph: str, message: str, token: str = "success") -> None:
+    """One tinted closing line, indented to line up with the step rows above it."""
+    from rich.markup import escape
+
+    console.print(f"{CLOSING_INDENT}[{THEME_TOKENS[token]}]{glyph} {escape(message)}[/{THEME_TOKENS[token]}]")
+
+
+def closing_block(glyph: str, message: str, hint: str | None = None, token: str = "success") -> None:
+    """Closing line, an optional next action, and the blank line either surface ends on.
+
+    The installers print this same shape by hand; this is the Python copy of it, so the
+    update module and the installer cannot drift apart on spacing again.
+    """
+    closing_line(glyph, message, token)
+    if hint:
+        from rich.markup import escape
+
+        console.print("")
+        console.print(f"{CLOSING_INDENT}[{THEME_TOKENS['muted']}]{escape(hint)}[/{THEME_TOKENS['muted']}]")
+    console.print("")
+
+
 def table_padding(bp: str) -> tuple[int, int]:
     """Single source for table padding: tight except XL workstation."""
     return (0, 2) if bp == "XL" else (0, 1)
@@ -744,14 +801,19 @@ def render_entity_panel(
 
 
 def render_json(data: Any) -> None:
-    """Print clean formatted JSON to console with breathing room."""
+    """Print clean formatted JSON to console with breathing room.
+
+    `soft_wrap` is required, not cosmetic: Rich hard-wraps at the console width, which
+    inserts a newline inside a JSON string and makes `--output json` unparseable for any
+    line longer than the terminal. That mode exists so a record can be machine-verified.
+    """
     console.print("")
     if hasattr(data, "model_dump_json"):
-        console.print(data.model_dump_json(indent=2))
+        console.print(data.model_dump_json(indent=2), soft_wrap=True)
     elif isinstance(data, list) and data and hasattr(data[0], "model_dump"):
-        console.print(json.dumps([item.model_dump(mode="json") for item in data], indent=2))
+        console.print(json.dumps([item.model_dump(mode="json") for item in data], indent=2), soft_wrap=True)
     else:
-        console.print(json.dumps(data, indent=2, default=str))
+        console.print(json.dumps(data, indent=2, default=str), soft_wrap=True)
     console.print("")
 
 

@@ -29,7 +29,7 @@ def test_install_with_yes_runs_lifecycle(
         ["update", "install", "--manifest", str(manifest_path), "--artifact", str(art_path), "--yes"],
     )
     assert res.exit_code == 0
-    assert "Trace updated successfully." in res.output
+    assert "Trace updated to v1.5.0" in res.output
 
 
 def test_install_bypass_minimum_records_override(

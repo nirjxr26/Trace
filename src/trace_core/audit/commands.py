@@ -8,7 +8,6 @@ from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.exit_codes import EXIT_ERROR
 from trace_core.core.cli.output import OUTPUT_HELP
 from trace_core.core.database.session import DatabaseSessionManager
-from trace_core.core.errors import AuditTamperError
 from trace_core.core.ui.renderers import render_error_card, render_output, render_success
 
 audit_app = typer.Typer(name="audit", help="Inspect, verify, and export tamper-evident audit ledger.")
@@ -39,6 +38,8 @@ def _show_list(
     search: str | None,
     limit: int,
     offset: int,
+    before_seq: int | None,
+    after_seq: int | None,
     output: str,
 ) -> None:
 
@@ -50,10 +51,12 @@ def _show_list(
         search=search,
         limit=limit,
         offset=offset,
+        before_seq=before_seq,
+        after_seq=after_seq,
     )
     from trace_core.audit.helpers import do_show_list
 
-    do_show_list(svc, f, case_number, output)
+    do_show_list(svc, f, case_number, output, pager=True)
 
 
 @audit_app.command("show")
@@ -61,10 +64,12 @@ def audit_show(
     case_number: str = typer.Option(None, "--case", help="Filter by case number"),
     action: str = typer.Option(None, "--action", help="Filter by action"),
     actor: str = typer.Option(None, "--actor", help="Filter by actor (substring)"),
-    search: str = typer.Option(None, "--search", "-q", help="Search actor/action/case"),
+    search: str = typer.Option(None, "--search", "-q", help="Search actor/action/case, or exact seq"),
     output: str = typer.Option("table", "--output", "-o", help=OUTPUT_HELP),
     limit: int = typer.Option(50, "--limit", help="Max rows (1..500)"),
     offset: int = typer.Option(0, "--offset", help="Offset"),
+    before_seq: int = typer.Option(None, "--before-seq", help="Only events older than seq (deep paging)"),
+    after_seq: int = typer.Option(None, "--after-seq", help="Only events newer than seq (paging back)"),
     seq: int = typer.Option(None, "--seq", help="Show single event by seq (detailed 5W1H)"),
 ) -> None:
     with capture_cli_errors("Audit Show"):
@@ -75,7 +80,7 @@ def audit_show(
             if not show_seq_view(svc, seq, output):
                 raise typer.Exit(EXIT_ERROR)
             return
-        _show_list(svc, case_number, action, actor, search, limit, offset, output)
+        _show_list(svc, case_number, action, actor, search, limit, offset, before_seq, after_seq, output)
 
 
 @audit_app.command("verify")
@@ -86,10 +91,7 @@ def audit_verify(
     with capture_cli_errors("Audit Verify"):
         from trace_core.audit.helpers import do_verify
 
-        svc = _get_service()
-        res = do_verify(svc, output, anchor)
-        if not res.is_valid:
-            raise AuditTamperError(f"Tamper detected at seq {res.first_mismatch_seq} ({res.mismatch_type})")
+        do_verify(_get_service(), output, anchor)
 
 
 @audit_app.command("export")

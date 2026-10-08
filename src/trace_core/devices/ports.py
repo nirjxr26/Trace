@@ -10,6 +10,10 @@ class DeviceEnumerator(Protocol):
 
     def list_block_devices(self) -> list[DeviceInfo]: ...
 
+    def change_token(self) -> tuple[str, ...]:
+        """Cheap change signal for polling. Equal tokens mean enumeration would agree."""
+        ...
+
 
 class DeviceInspector(Protocol):
     """Captures device identity; produces no protection fields."""
@@ -21,3 +25,7 @@ class WriteBlockerProbe(Protocol):
     """Checks write protection; produces no fingerprint fields."""
 
     def verify(self, device: DeviceInfo) -> GateCheck: ...
+
+
+class DeviceAdapter(DeviceEnumerator, DeviceInspector, WriteBlockerProbe, Protocol):
+    """One object satisfying all three ports. Every adapter in the suite provides all three."""

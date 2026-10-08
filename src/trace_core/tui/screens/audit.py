@@ -1,12 +1,13 @@
 """Audit tab: live ledger stream + detail + scope + raw drawer."""
 
 from rich.text import Text
+from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import DataTable, Input, Rule, Static
 
-from trace_core.audit.dto import AuditEventDto, AuditFilterDto
+from trace_core.audit.dto import AuditEventDto, AuditEventSummaryDto, AuditFilterDto
 from trace_core.audit.events import parse_details
 from trace_core.audit.renderers import action_title, subject_case_label
 from trace_core.audit.service import AuditService
@@ -21,9 +22,11 @@ TABLE_ID = "audit-table"
 AUDIT_HEADER_ID = "audit-header"
 AUDIT_DETAIL_ID = "audit-detail"
 TABLE_COLUMNS = (("Seq", 7), ("Event", 12))
+PAGE_ROWS = 200
+PREFETCH_LINES = 20
 
 
-class AuditView(TablePane[AuditEventDto]):
+class AuditView(TablePane[AuditEventSummaryDto]):
     """Top: stream table. Bottom: selected event detail. Filters on top."""
 
     BINDINGS = [
@@ -43,15 +46,19 @@ class AuditView(TablePane[AuditEventDto]):
         super().__init__()
         self._manager = session_manager
         self._scope: str | None = None
-        self._events: list[AuditEventDto] = []
+        self._exhausted = False
+        self._detail_seq: int | None = None
+        self._detail: AuditEventDto | None = None
 
     @property
     def _svc(self) -> AuditService:
         return AuditService(self._manager)
 
     def compose(self) -> ComposeResult:
-        from trace_core.tui.widgets import DossierScroll
+        from trace_core.tui.widgets import DossierScroll, PagedTable
 
+        table = PagedTable(id=TABLE_ID, cursor_type="row", show_header=False)
+        table.on_scrolled = self._extend
         with Horizontal(id="audit-main"):
             with Vertical(id="audit-left"):
                 yield Input(placeholder="Search actor, action, case, seq...", id="audit-search")
@@ -59,25 +66,60 @@ class AuditView(TablePane[AuditEventDto]):
                 yield Rule()
                 yield Static("", id=AUDIT_HEADER_ID, classes="table-head")
                 yield Rule()
-                yield DataTable(id=TABLE_ID, cursor_type="row", show_header=False)
+                yield table
             with DossierScroll(id="audit-right"):
                 yield Static("Select an event…", id=AUDIT_DETAIL_ID)
 
+    def _window(self, before_seq: int | None) -> list[AuditEventSummaryDto]:
+        return self._svc.list_event_summaries(
+            AuditFilterDto(
+                case_number=self._scope,
+                search=self.query_one("#audit-search", Input).value.strip() or None,
+                before_seq=before_seq,
+                limit=PAGE_ROWS,
+            )
+        )
+
     def refresh_data(self) -> None:
         """Reload stream + detail. Called on mount, tab switch, and scope change."""
-        query = self.query_one("#audit-search", Input).value.strip() or None
-        scope = self._scope
         scope_widget = self.query_one("#audit-scope", Static)
-        scope_widget.update(f"Scoped: {scope}   (s clears)" if scope else "")
-        scope_widget.display = bool(scope)
+        scope_widget.update(f"Scoped: {self._scope}   (s clears)" if self._scope else "")
+        scope_widget.display = bool(self._scope)
         try:
-            self._events = self._svc.list_events(AuditFilterDto(case_number=scope, search=query, limit=100))
+            rows = self._window(None)
         except Exception as exc:  # boundary: every service failure becomes a toast, never a crash
             self.app.notify(str(exc), severity="error")
             return
-        self.fill_table(self._events, [str(e.seq) for e in self._events])
+        self._exhausted = len(rows) < PAGE_ROWS
+        self.fill_table(rows, [str(e.seq) for e in rows])
 
-    def row_cells(self, event: AuditEventDto, selected: bool) -> list:  # type: ignore[no-untyped-def]
+    def _extend(self) -> None:
+        table = self._table()
+        if self._exhausted or not self._items:
+            return
+        at_last_row = table.cursor_row is not None and table.cursor_row >= len(self._items) - 1
+        near_end = table.max_scroll_y - table.scroll_offset.y <= PREFETCH_LINES
+        if not (at_last_row or near_end):
+            return
+        oldest = self._items[-1].seq
+        try:
+            rows = self._window(oldest)
+        except Exception as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        self._exhausted = len(rows) < PAGE_ROWS
+        self.append_rows(rows, [str(e.seq) for e in rows])
+
+    def _selected_event(self) -> AuditEventDto | None:
+        row = self._selected()
+        if row is None:
+            return None
+        if self._detail_seq != row.seq:
+            self._detail = self._svc.get_by_seq(row.seq)
+            self._detail_seq = row.seq
+        return self._detail
+
+    def row_cells(self, event: AuditEventSummaryDto, selected: bool) -> list:  # type: ignore[no-untyped-def]
         from trace_core.audit.renderers import short_action_label
         from trace_core.tui.theme import SELECT_PREFIX
 
@@ -88,12 +130,12 @@ class AuditView(TablePane[AuditEventDto]):
         from trace_core.audit.verifier import verify_event
         from trace_core.tui.theme import DOT_BAD, DOT_OK, integrity_line
 
-        e = self._selected()
+        e = self._selected_event()
         if e is None:
             from trace_core.tui.theme import detail_placeholder
 
             self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(
-                detail_placeholder(bool(self._events), "No audit events found — create or close a case.")
+                detail_placeholder(bool(self._items), "No audit events found — create or close a case.")
             )
             return
         details = parse_details(e.payload_json)
@@ -148,7 +190,7 @@ class AuditView(TablePane[AuditEventDto]):
         if action == "export":
             self.action_export()
         elif action == "anchor":
-            self.app.notify("Open the Integrity tab to check an anchor file.")
+            self.app.notify("Check an anchor file with `audit verify --anchor FILE`.")
         else:
             self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")
 
@@ -156,16 +198,21 @@ class AuditView(TablePane[AuditEventDto]):
         self.app.push_screen(TextInputModal("Scope to case (blank clears)", "2026-CR-0001"), self._scoped)
 
     def _scoped(self, value: str | None) -> None:
-        self._scope = value
+        self._scope = value or None
         self.refresh_data()
 
+    @on(DataTable.RowHighlighted)
+    def _grown(self, event: DataTable.RowHighlighted) -> None:
+        if event.data_table.id == self.TABLE_ID:
+            self._extend()
+
     def action_raw(self) -> None:
-        e = self._selected()
+        e = self._selected_event()
         if e is None:
             from trace_core.tui.theme import detail_placeholder
 
             self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(
-                detail_placeholder(bool(self._events), "No audit events found — create or close a case.")
+                detail_placeholder(bool(self._items), "No audit events found — create or close a case.")
             )
             return
         self.app.push_screen(RawModal(f"seq {e.seq} payload", e.payload_json))

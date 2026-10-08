@@ -35,7 +35,7 @@ class CaseRepository(Protocol):
         deleted_only: bool = False,
     ) -> list[Case]: ...
     def update(self, entity: Case) -> Case: ...
-    def delete(self, entity_id: uuid.UUID, purge: bool = False) -> bool: ...
+    def delete(self, entity_id: uuid.UUID, purge: bool = False, expected_version: int | None = None) -> bool: ...
     def soft_delete(self, case_id: uuid.UUID, expected_version: int, archived_by: str | None = None) -> bool: ...
     def restore(self, case_id: uuid.UUID, expected_version: int) -> bool: ...
     def purge(self, case_id: uuid.UUID, expected_version: int) -> bool: ...
@@ -223,6 +223,19 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         self.session.flush()
         return True
 
+    def _guard_sealed(self, model: CaseModel, entity: Case) -> None:
+        """Refuse to write a closed case back to an open state [§14.3].
+
+        The domain forbids the transition and the service refuses the command, but a caller
+        holding a stale entity could otherwise reach `update` directly. `purge` already
+        re-checks archive-before-purge here; sealed closure gets the same defence, so the
+        repository is not a way around the invariant it persists.
+        """
+        from trace_core.cases.domain import TransitionError
+
+        if parse_enum_value(CaseStatus, model.status) is CaseStatus.CLOSED and entity.status is not CaseStatus.CLOSED:
+            raise TransitionError(CaseStatus.CLOSED, entity.status, f"Case {model.number} is permanently sealed.")
+
     def purge(self, case_id: uuid.UUID, expected_version: int) -> bool:
         """Permanently delete a case record. Archive-first is enforced here, not only
         at the service, so no repository caller can hard-delete an active case."""
@@ -246,7 +259,7 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         self.record_purge(purged_number)
         return True
 
-    def delete(self, entity_id: uuid.UUID, purge: bool = False, expected_version: int | None = None) -> bool:  # type: ignore[override]
+    def delete(self, entity_id: uuid.UUID, purge: bool = False, expected_version: int | None = None) -> bool:
         """Delete case entity. Forensic path requires OCC version."""
         if expected_version is None:
             raise ValueError("expected_version is required for forensic delete")
@@ -260,6 +273,7 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
         if not model:
             raise ValueError(f"Case with id {entity.id} does not exist.")
 
+        self._guard_sealed(model, entity)
         self._guard_version(model, entity.version, "Case", entity.number)
 
         self._update_model(model, entity)

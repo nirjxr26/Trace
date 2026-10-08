@@ -273,3 +273,129 @@ def test_shell_help_shows_pending_update(
     shell.service = service
     shell.execute_line("help")
     assert "Update 9.9.9 available" in capsys.readouterr().out
+
+
+def test_uninstall_rejects_an_unknown_action() -> None:
+    from trace_core.core.cli.uninstall_handler import UninstallShellCommandHandler
+
+    assert UninstallShellCommandHandler().execute("frobnicate", [], None) is False
+
+
+def test_uninstall_redirects_known_flags_to_standalone() -> None:
+    from trace_core.core.cli.uninstall_handler import UninstallShellCommandHandler
+
+    handler = UninstallShellCommandHandler()
+    assert handler.execute("--purge-data", [], None) is True
+    assert handler.execute("", [], None) is True
+
+
+def test_the_root_completer_offers_every_registered_command() -> None:
+    """Root completion is derived from the registry, so a new handler is reachable at once."""
+    from trace_core.cli.shell import InteractiveShell
+    from trace_core.cli.suggest import TraceShellCompleter
+
+    shell = InteractiveShell()
+    offered = {cmd for cmd, _ in TraceShellCompleter._root_options(shell)}
+    assert {h.command_name for h in shell.registry.all_handlers()} <= offered
+    for handler in shell.registry.all_handlers():
+        for alias in handler.aliases:
+            if " " not in alias:
+                assert alias in offered
+
+
+def test_every_console_command_is_reachable_as_a_suggestion() -> None:
+    """`recent`/`recents`/`back`/`b` were accepted but absent from the suggestion list."""
+    from trace_core.cli.shell import _CONSOLE_COMMANDS, _SHORT_ALIASES, InteractiveShell
+
+    shell = InteractiveShell()
+    known = set(shell.registry.known_words()) | set(_CONSOLE_COMMANDS) | set(_SHORT_ALIASES)
+    assert {"recent", "recents", "back", "b", "ls", "sh", "ed"} <= known
+    assert {"device", "audit", "case"} <= set(shell.registry.known_words())
+
+
+def test_every_tab_detail_pane_gets_the_same_width_share() -> None:
+    """`#device-right` was in the border and padding rules but absent from the width rule."""
+    import re
+
+    from trace_core.tui.app import TraceApp
+
+    css = TraceApp.CSS
+    blocks = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+    widthed = {sel.strip() for selectors, body in blocks if "width: 2fr" in body for sel in selectors.split(",")}
+    padded = {sel.strip() for selectors, body in blocks if "padding: 1 2" in body for sel in selectors.split(",")}
+    right_panes = {sel for sel in padded if sel.endswith("-right")}
+    missing = right_panes - widthed
+    assert not missing, f"detail panes with padding but no width: {missing}"
+    assert {"#cases-right", "#device-right"} <= widthed
+
+
+def test_a_multi_word_alias_is_owned_and_completable() -> None:
+    """`owns_text` compared one word, so `list cases ` matched nothing and lost its completions."""
+    from trace_core.cases.shell_handler import CaseShellCommandHandler
+    from trace_core.core.cli.registry import ShellContext
+
+    handler = CaseShellCommandHandler()
+    assert handler.owns_text("list cases ") is True
+    assert handler.owns_text("list cases") is True
+    assert handler.owns_text("list ") is False
+    assert handler.get_completions("list cases ", ShellContext())
+
+
+def test_a_handler_ignores_a_line_it_does_not_own() -> None:
+    from trace_core.audit.shell_handler import AuditShellCommandHandler
+    from trace_core.core.cli.registry import ShellContext
+
+    handler = AuditShellCommandHandler()
+    assert handler.owns_text("audit show") is True
+    assert handler.get_completions("auditor something", ShellContext()) == []
+
+
+def test_the_anchor_notice_names_a_command_that_exists() -> None:
+    """It pointed at an Integrity tab that was merged into Settings, so nobody could act on it."""
+    import inspect as py_inspect
+    import re
+
+    from trace_core.cli.shell import InteractiveShell
+    from trace_core.tui.screens.audit import AuditView
+
+    source = py_inspect.getsource(AuditView.run_command)
+    suggestions = re.findall(r"`([^`]+)`", source)
+    assert suggestions, "the notice must name the real command"
+    root, _, _ = suggestions[0].partition(" ")
+    assert root in {h.command_name for h in InteractiveShell().registry.all_handlers()}
+
+
+def test_repl_keeps_windows_device_nodes_verbatim() -> None:
+    from trace_core.cli.shell import _split_line
+
+    assert _split_line(r"device inspect \\.\PhysicalDrive0 --allow-real-hardware") == [
+        "device",
+        "inspect",
+        r"\\.\PhysicalDrive0",
+        "--allow-real-hardware",
+    ]
+
+
+def test_repl_split_still_honours_quotes_and_rejects_unbalanced() -> None:
+    from trace_core.cli.shell import _split_line
+
+    assert _split_line('case list --search "hello world"') == ["case", "list", "--search", "hello world"]
+    with pytest.raises(ValueError):
+        _split_line('say "unbalanced')
+
+
+def test_repl_inspect_reaches_a_backslash_node_verbatim(
+    service: CaseService, tmp_path, monkeypatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The transcript that failed: backslashes must survive to the resolver."""
+    from trace_core.devices import synthetic
+    from trace_core.devices.service import ENV_ADAPTER, ENV_DEVICE_ROOT
+
+    root = tmp_path / "box"
+    root.mkdir()
+    synthetic.write_disk(root / "disk-a.dd", size=2048)
+    monkeypatch.setenv(ENV_ADAPTER, "file")
+    monkeypatch.setenv(ENV_DEVICE_ROOT, str(root))
+    shell = InteractiveShell(service=service)
+    shell.execute_line(rf"device inspect {root}\disk-a.dd --allow-real-hardware")
+    assert "not in the current enumeration" not in capsys.readouterr().out

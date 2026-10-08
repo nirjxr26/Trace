@@ -71,11 +71,11 @@ def update_install(
     ),
 ) -> None:
     with capture_cli_errors("Update Install"):
-        import sys
         import uuid
 
         from rich.prompt import Confirm
 
+        from trace_core.core.cli.args import interactive_terminal
         from trace_core.updates.checker import ensure_artifact_path, resolve_channel
         from trace_core.updates.errors import UpdateError
         from trace_core.updates.lifecycle import UpdateLifecycle
@@ -94,7 +94,7 @@ def update_install(
             bypass_note = minimum_bypass_note(current, m) or ""
         render_install_summary(m, current, bypass_note)
         if not yes:
-            if not sys.stdin.isatty():
+            if not interactive_terminal():
                 raise UpdateError("refusing interactive install without --yes in non-interactive mode")
             if not Confirm.ask("Install update?"):
                 console.print("[dim]Install cancelled.[/dim]")

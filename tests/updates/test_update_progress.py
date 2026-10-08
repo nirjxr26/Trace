@@ -6,12 +6,15 @@ from trace_core.cli.main import app
 from trace_core.updates.domain import UpdateState
 from trace_core.updates.dto import UpdateResultDto
 from trace_core.updates.stages import (
+    SPIN_DELAY_SECONDS,
+    SPIN_FRAMES,
     STAGE_ORDER,
     Stage,
     StageStatus,
     format_mb,
     format_speed,
     stage_from_state,
+    stage_is_spinning,
 )
 
 
@@ -51,7 +54,7 @@ def test_stage_mapping_covers_all_states():
         UpdateState.FAILED,
     ):
         assert stage_from_state(state) is None
-    assert tuple(STAGE_ORDER) == (Stage.DOWNLOAD, Stage.VERIFY, Stage.INSTALL, Stage.HEALTH)
+    assert tuple(STAGE_ORDER) == (Stage.VERIFY, Stage.DOWNLOAD, Stage.INSTALL, Stage.HEALTH)
 
 
 def test_format_speed_guards():
@@ -131,6 +134,10 @@ def test_install_summary_hides_trust_details(capsys, signed_release):
     assert "TRUSTED" not in out
     assert "sha256" not in out.lower()
     assert manifest.signing_key_id not in out
+    # The target version and the step list are the live region's job; stating either here
+    # too put both on screen three times over.
+    assert f"Target:  v{manifest.version}" not in out
+    assert "Steps: download" not in out
 
 
 def test_finish_success_frame(capsys):
@@ -140,8 +147,13 @@ def test_finish_success_frame(capsys):
     display = UpdateProgressDisplay(current="0.2.3", target="0.2.4")
     display.finish(dto, "0.2.3")
     out = capsys.readouterr().out
-    assert "Trace updated successfully." in out
-    assert "v0.2.3 → v0.2.4" in out
+    # The target version rides on the closing line; it used to be a second line of its
+    # own, so the success path stated the outcome twice.
+    assert "Trace updated to v0.2.4" in out
+    assert "Trace updated successfully." not in out
+    assert out.count("Verifying") == 1
+    assert "  ✓ Trace updated to v0.2.4" in out
+    assert "  Run `trace case list` to resume work." in out
 
 
 def test_finish_rolled_back_frame(capsys):
@@ -176,13 +188,80 @@ def test_frame_checklist_states():
     from trace_core.updates.renderers import UpdateProgressDisplay
 
     display = UpdateProgressDisplay(current="0.2.3", target="0.2.4")
-    display.on_stage(Stage.DOWNLOAD, StageStatus.DONE)
-    display.on_stage(Stage.VERIFY, StageStatus.ACTIVE)
+    display.on_stage(Stage.VERIFY, StageStatus.DONE)
+    display.on_stage(Stage.DOWNLOAD, StageStatus.ACTIVE)
     frame = display._frame()
-    text = frame.plain
-    assert "│ ● Downloaded" in text
-    assert "│ ● Verifying" in text
-    assert "Installing" not in text
+    lines = frame.plain.splitlines()
+    assert lines == [
+        "│ ● Verifying",
+        f"│ {SPIN_FRAMES[0]} Downloading",
+        "│ ▲ Installing",
+        "│ ▲ Finishing setup",
+    ]
+
+
+def test_frame_is_pure_and_draw_owns_the_spinner():
+    """Building a frame must not change it. The spinner advances in _draw, once per
+    drawn frame, never as a side effect of rendering.
+
+    It used to advance inside the row loop, so rendering the same state twice returned
+    two different glyphs and calling _frame() twice desynced the animation from the screen.
+    """
+    from trace_core.updates.renderers import UpdateProgressDisplay
+
+    display = UpdateProgressDisplay(current="0.2.3", target="0.2.4")
+    display.on_stage(Stage.DOWNLOAD, StageStatus.ACTIVE)
+    first = display._frame().plain
+    second = display._frame().plain
+    assert first == second
+    assert SPIN_FRAMES[0] in first
+
+    display.tty = True
+    before = display._spin
+    display._frame()
+    assert display._spin == before
+
+
+def test_spinner_waits_until_the_step_has_been_running():
+    """A step that finishes immediately must never show a frame of motion.
+
+    Animating from the first frame meant a step completing in a few tens of milliseconds
+    flashed a spinner for a single frame, which reads as a glitch rather than as progress.
+    """
+    from trace_core.updates.renderers import UpdateProgressDisplay
+
+    display = UpdateProgressDisplay(current="0.2.3", target="0.2.4")
+    display.on_stage(Stage.DOWNLOAD, StageStatus.ACTIVE)
+    display.tty = True
+
+    class _Sink:
+        def update(self, _frame):  # noqa: ANN001, ANN202
+            return None
+
+    display._live = _Sink()
+    for _ in range(4):
+        display._draw(force=True)
+    assert display._spin == 0
+    assert display._frame().plain.splitlines()[1] == f"│ {SPIN_FRAMES[0]} Downloading"
+
+    display._active_since -= SPIN_DELAY_SECONDS + 0.01
+    display._draw(force=True)
+    assert display._spin == 1
+    assert display._frame().plain.splitlines()[1] == f"│ {SPIN_FRAMES[1]} Downloading"
+
+
+def test_stage_is_spinning_bounds():
+    assert stage_is_spinning(None, 100.0) is False
+    assert stage_is_spinning(100.0, 100.0 + SPIN_DELAY_SECONDS / 2) is False
+    assert stage_is_spinning(100.0, 100.0 + SPIN_DELAY_SECONDS) is True
+
+
+def test_failed_and_pending_have_different_glyphs():
+    """A failure must be distinguishable from a step that has not started."""
+    from trace_core.updates.stages import stage_glyph
+
+    assert stage_glyph(StageStatus.FAILED) != stage_glyph(StageStatus.PENDING)
+    assert stage_glyph(StageStatus.FAILED) == "✕"
 
 
 def test_check_cli_variants(signed_release, temp_storage_root, monkeypatch):

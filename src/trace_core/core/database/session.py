@@ -233,14 +233,24 @@ def db_identity(manager: DatabaseSessionManager | None = None) -> str:
 
 
 def get_db(ctx: Any | None) -> DatabaseSessionManager:  # type: ignore[no-untyped-def]
-    """Single source for DB manager from shell context or global. Reusable."""
+    """Single source for DB manager from shell context or global. Reusable.
+
+    The fallback is read through the `service` module on every call rather than bound here.
+    `service.db_manager` is the name everything rebinds - `conftest` and every test that
+    points a CLI or shell surface at its own database - so reading this module's own copy
+    returned the original instance and a shell handler given only a context talked to a
+    second, empty database over the same `sqlite:///:memory:` URL. The REPL reported a
+    tampered ledger as valid because it verified nothing.
+    """
     try:
         mgr = getattr(getattr(ctx, "service", None), "session_manager", None)
         if mgr is not None:
             return mgr  # type: ignore[no-any-return]
     except Exception:
         pass
-    return db_manager
+    from trace_core.core import service as core_service
+
+    return core_service.db_manager
 
 
 # Default global instance configured with application settings

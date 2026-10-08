@@ -3,6 +3,7 @@
 import typer
 
 from trace_core.core.cli.error_handler import capture_cli_errors
+from trace_core.core.cli.exit_codes import EXIT_ERROR
 from trace_core.core.database.health import fetch_db_snapshot, migration_entries
 from trace_core.core.database.migrations import apply_migrations, get_table_names
 from trace_core.core.database.session import db_manager
@@ -26,7 +27,7 @@ def _require_db() -> None:
     snap = fetch_db_snapshot(db_manager)
     if not snap.healthy:
         render_error_card("Cannot Connect to Database", snap.message, "Start PostgreSQL or set TRACE_DATABASE_URL.")
-        raise typer.Exit(code=1)
+        raise typer.Exit(EXIT_ERROR)
 
 
 def _migration_table_columns(bp: str, term_w: int) -> list[tuple[str, dict]]:
@@ -93,7 +94,7 @@ def db_status() -> None:
         console.print(grid)
 
         if not is_healthy:
-            raise typer.Exit(code=1)
+            raise typer.Exit(EXIT_ERROR)
 
         # Inspect tables
         tables, applied, pending = snap.tables, snap.applied, snap.pending

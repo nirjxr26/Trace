@@ -1,5 +1,6 @@
 """Audit repository: serialized global chain append, list, and streaming helpers."""
 
+import re
 from typing import Any
 from uuid import UUID
 
@@ -8,7 +9,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from trace_core.audit.domain import GENESIS_CHAIN, AuditAction, build_payload, chain_hash, payload_hash
-from trace_core.audit.dto import AuditEventDto, AuditFilterDto
+from trace_core.audit.dto import AuditEventDto, AuditEventSummaryDto, AuditFilterDto
 from trace_core.audit.events import SUBJECT_TYPES
 from trace_core.audit.models import AuditChainStateModel, AuditEventModel
 from trace_core.cases.domain import normalize_number
@@ -16,6 +17,14 @@ from trace_core.core.canonical import coerce_utc
 from trace_core.core.database.repository import ilike_literal, paginate
 
 _APPEND_ATTEMPTS = 3
+_SEQ_SEARCH_RE = re.compile(r"^\d+$")
+SUMMARY_COLUMNS = (
+    AuditEventModel.seq,
+    AuditEventModel.ts,
+    AuditEventModel.action,
+    AuditEventModel.actor,
+    AuditEventModel.subject_case_number,
+)
 
 
 def _common_fields(m: AuditEventModel, *, ts: Any, action: Any, subject_case_id: Any) -> dict[str, Any]:
@@ -161,24 +170,52 @@ class SqlAlchemyAuditRepository:
             return 0, GENESIS_CHAIN
         return head.last_seq, head.last_chain_hash
 
-    def list_events(self, f: AuditFilterDto | None = None) -> list[AuditEventDto]:
-        """Newest-first. Contract: case_number exact, actor/action/search substring."""
-        filt = f or AuditFilterDto()
+    def _filtered(self, filt: AuditFilterDto):  # type: ignore[no-untyped-def]
         stmt = select(AuditEventModel)
+        if filt.before_seq is not None:
+            stmt = stmt.where(AuditEventModel.seq < filt.before_seq)
+        if filt.after_seq is not None:
+            stmt = stmt.where(AuditEventModel.seq > filt.after_seq)
         if filt.case_number:
             stmt = stmt.where(AuditEventModel.subject_case_number == normalize_number(filt.case_number))
         if filt.action:
             stmt = stmt.where(AuditEventModel.action == filt.action.value)
         if filt.actor:
             stmt = stmt.where(ilike_literal(AuditEventModel.actor, filt.actor.strip()))
-        if filt.search and filt.search.strip():
-            term = filt.search.strip()
-            stmt = stmt.where(
-                ilike_literal(AuditEventModel.subject_case_number, term)
-                | ilike_literal(AuditEventModel.actor, term)
-                | ilike_literal(AuditEventModel.action, term)
-            )
-        stmt = stmt.order_by(AuditEventModel.seq.desc())
-        stmt = paginate(stmt, filt.limit, filt.offset)
+        term = (filt.search or "").strip()
+        if term:
+            if _SEQ_SEARCH_RE.match(term):
+                stmt = stmt.where(AuditEventModel.seq == int(term))
+            else:
+                stmt = stmt.where(
+                    ilike_literal(AuditEventModel.subject_case_number, term)
+                    | ilike_literal(AuditEventModel.actor, term)
+                    | ilike_literal(AuditEventModel.action, term)
+                )
+        return stmt.order_by(AuditEventModel.seq.desc())
+
+    def list_events(self, f: AuditFilterDto | None = None) -> list[AuditEventDto]:
+        """Newest-first. Contract: seq/case_number exact, actor/action/search substring."""
+        filt = f or AuditFilterDto()
+        stmt = paginate(self._filtered(filt), filt.limit, filt.offset)
         rows = self.session.scalars(stmt).all()
         return [_model_to_dto(m) for m in rows]
+
+    def list_event_summaries(self, f: AuditFilterDto | None = None) -> list[AuditEventSummaryDto]:
+        filt = f or AuditFilterDto()
+        stmt = paginate(
+            self._filtered(filt).with_only_columns(*SUMMARY_COLUMNS),
+            filt.limit,
+            filt.offset,
+        )
+        rows = self.session.execute(stmt).all()
+        return [
+            AuditEventSummaryDto(
+                seq=r.seq,
+                ts=coerce_utc(r.ts),  # type: ignore[arg-type]
+                action=AuditAction(r.action),
+                actor=r.actor,
+                subject_case_number=r.subject_case_number,
+            )
+            for r in rows
+        ]

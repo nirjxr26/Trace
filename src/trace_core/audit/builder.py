@@ -133,6 +133,76 @@ def for_case_purged(
     return _case_event(AuditAction.CASE_PURGED, number, sid, {}, command or f"case delete {number} --purge")
 
 
+def _device_event(
+    action: AuditAction, details: dict[str, Any], command: str
+) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
+    return (action, _subject_device(), details, _ctx(command))
+
+
+def for_device_inspected(
+    node: str,
+    serial: str,
+    model: str,
+    capacity_bytes: int,
+    interface: str,
+    source: str,
+    verdict: str | None = None,
+    unknown_cause: str | None = None,
+    command: str | None = None,
+) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
+    """Identity observation. `node` is hardware-supplied, so it lands in details, not as the subject."""
+    details: dict[str, Any] = {
+        "node": node,
+        "serial": serial,
+        "model": model,
+        "capacity_bytes": capacity_bytes,
+        "interface": interface,
+        "source": source,
+    }
+    if verdict is not None:
+        details["verdict"] = verdict
+    if unknown_cause is not None:
+        details["unknown_cause"] = unknown_cause
+    return _device_event(AuditAction.DEVICE_INSPECTED, details, command or f"device inspect {node}")
+
+
+def for_device_gate_checked(
+    node: str,
+    verdict: str,
+    unknown_cause: str | None,
+    evidence: dict[str, Any],
+    serial: str | None = None,
+    command: str | None = None,
+) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
+    return _device_event(
+        AuditAction.DEVICE_GATE_CHECKED,
+        {"node": node, "verdict": verdict, "unknown_cause": unknown_cause, "evidence": evidence, "serial": serial},
+        command or f"device check {node}",
+    )
+
+
+def for_device_override(
+    node: str,
+    original_verdict: str,
+    original_unknown_cause: str,
+    authorized_by: str,
+    reason: str,
+    command: str | None = None,
+) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
+    """Accepting an unverified source. The pre-override verdict is preserved, never the post one [D19]."""
+    return _device_event(
+        AuditAction.DEVICE_OVERRIDE,
+        {
+            "node": node,
+            "original_verdict": original_verdict,
+            "original_unknown_cause": original_unknown_cause,
+            "authorized_by": authorized_by,
+            "reason": reason,
+        },
+        command or f"device check {node} --acknowledge-unverified-source",
+    )
+
+
 def merge_details_context(details: dict[str, Any], ctx: Context) -> dict[str, Any]:
     """Flatten Subject/Context into ledger details (no DB change). System provenance wins."""
     out = dict(details)

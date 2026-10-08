@@ -1,13 +1,13 @@
 """Built-in uninstaller: `trace uninstall`."""
 
 import shutil
-import sys
 from pathlib import Path
 
 import typer
 
-from trace_core.core.ui.renderers import console
-from trace_core.tui.theme import done_line, step_line
+from trace_core.core.cli.args import interactive_terminal
+from trace_core.core.cli.exit_codes import EXIT_SUCCESS
+from trace_core.core.ui.renderers import CLOSING_INDENT, console, done_line, step_line
 from trace_core.updates.stages import StageStatus
 
 _ALWAYS = ("app", "install")
@@ -57,12 +57,17 @@ def run_uninstall(purge_data: bool) -> int:
     console.print(done_line())
     console.print("")
     if purge_data:
-        console.print("Kept: PostgreSQL server. Drop the data manually if needed: DROP DATABASE trace;", style="dim")
+        console.print(
+            f"{CLOSING_INDENT}Kept: PostgreSQL server. Drop the data manually if needed: DROP DATABASE trace;",
+            style="dim",
+        )
     else:
         console.print(
-            "Kept: storage (~/.trace/storage), trust keys (~/.trace/trust), PostgreSQL database.", style="dim"
+            f"{CLOSING_INDENT}Kept: storage (~/.trace/storage), trust keys (~/.trace/trust), PostgreSQL database.",
+            style="dim",
         )
-        console.print("Run `trace uninstall --purge-data` to remove those too.", style="dim")
+        console.print(f"{CLOSING_INDENT}Run `trace uninstall --purge-data` to remove those too.", style="dim")
+    console.print("")
     return 0
 
 
@@ -71,7 +76,7 @@ def uninstall_cmd(
     yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation."),
 ) -> None:
     """Remove Trace. Without --purge-data the app is removed but storage, trust keys and the database are kept."""
-    if not sys.stdin.isatty() and not yes:
+    if not interactive_terminal() and not yes:
         raise typer.BadParameter("refusing interactive uninstall without --yes in non-interactive mode")
     if not yes:
         scope = (
@@ -80,5 +85,5 @@ def uninstall_cmd(
             else "the app only (storage and database are kept)"
         )
         if not typer.confirm(f"This removes {scope}. Continue?", default=False):
-            raise typer.Exit(0)
+            raise typer.Exit(EXIT_SUCCESS)
     raise typer.Exit(run_uninstall(purge_data))

@@ -9,12 +9,13 @@ from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.tui.theme import TRACE_THEME
 
 TAB_HINTS: dict[str, str] = {
-    "cases": "↑↓ Navigate   Enter Open   / Search   r Refresh   q Quit",
+    "cases": "↑↓ Navigate   Enter Open   / Search   r Recent   q Quit",
+    "devices": "↑↓ Navigate   i Inspect   c Check   k Kind   / Search   q Quit",
     "audit": "↑↓ Navigate   Enter Open   / Search   r Refresh   q Quit",
     "settings": "↑↓ Sections   Enter Run   m Migrate   u Install update   q Quit",
 }
 
-_TAB_ORDER = ("cases", "audit", "settings")
+_TAB_ORDER = ("cases", "devices", "audit", "settings")
 
 
 class TraceApp(App[None]):
@@ -34,26 +35,27 @@ class TraceApp(App[None]):
         background: $surface;
         padding: 0 2;
     }
-    #cases-top, #audit-main, #settings-top { height: 1fr; }
-    #cases-left, #cases-right, #audit-left, #audit-right, #settings-left, #settings-right {
+    #cases-top, #audit-main, #settings-top, #device-main { height: 1fr; }
+    #cases-left, #cases-right, #audit-left, #audit-right, #settings-left, #settings-right, #device-left, #device-right {
         border: round $panel;
         background: $surface;
         padding: 0 1;
     }
-    #cases-right, #audit-right, #settings-right {
+    #cases-right, #audit-right, #settings-right, #device-right {
         padding: 1 2;
     }
-    #cases-left, #audit-left, #settings-left { width: 1fr; margin-right: 1; }
-    #cases-right, #audit-right, #settings-right { width: 2fr; }
+    #cases-left, #audit-left, #settings-left, #device-left { width: 1fr; margin-right: 1; }
+    #cases-right, #audit-right, #settings-right, #device-right { width: 2fr; }
     #settings-sections { height: 1fr; background: transparent; }
     #settings-sections:focus { background-tint: transparent; }
     #settings-left .card-title { padding: 1 1 1 1; }
     #settings-sections ListItem { height: auto; padding: 0 1; margin-bottom: 1; background: transparent; background-tint: transparent; color: $text-muted; }
     #settings-sections ListItem.-hovered, #settings-sections ListItem.-highlight { background: transparent; background-tint: transparent; border: none; color: $text; text-style: bold; }
     .table-head { text-style: bold; color: $text; height: 1; }
-    #settings-left Rule, #cases-left Rule, #audit-left Rule { color: $panel; margin: 0 0 1 0; }
-    #case-search, #audit-search { border: round $panel; margin-bottom: 1; background: transparent; }
-    #case-search:focus, #audit-search:focus { background: transparent; background-tint: transparent; }
+    #settings-left Rule, #cases-left Rule, #audit-left Rule, #device-left Rule { color: $panel; margin: 0 0 1 0; }
+    #case-search, #audit-search, #device-search { border: round $panel; margin-bottom: 1; background: transparent; }
+    #device-table { scrollbar-size-horizontal: 0; }
+    #case-search:focus, #audit-search:focus, #device-search:focus { background: transparent; background-tint: transparent; }
     #audit-scope { height: 1; color: $muted; }
     VerticalScroll { scrollbar-size: 1 1; }
     * { scrollbar-background: transparent; scrollbar-color: $panel; scrollbar-corner-color: transparent; }
@@ -70,6 +72,7 @@ class TraceApp(App[None]):
     .input-row Button { min-width: 16; border: round $panel; }
     #db-migrations { height: 1fr; }
     #db-migrations DataTable { height: 1fr; }
+    #audit-table, #case-table, #device-table { height: 1fr; }
     DataTable { background: transparent; border: none; }
     DataTable > .datatable--header { background: transparent; text-style: bold; }
     DataTable > .datatable--cursor { background: $surface-active; color: $text; text-style: bold; }
@@ -83,8 +86,9 @@ class TraceApp(App[None]):
 
     BINDINGS = [
         Binding("1", "tab('cases')", "Cases"),
-        Binding("2", "tab('audit')", "Audit"),
-        Binding("3", "tab('settings')", "Settings"),
+        Binding("2", "tab('devices')", "Devices"),
+        Binding("3", "tab('audit')", "Audit"),
+        Binding("4", "tab('settings')", "Settings"),
         Binding("left", "prev_tab", "Prev tab", show=False),
         Binding("right", "next_tab", "Next tab", show=False),
         Binding("r", "refresh", "Refresh", show=False),
@@ -107,11 +111,14 @@ class TraceApp(App[None]):
     def compose(self) -> ComposeResult:
         from trace_core.tui.screens.audit import AuditView
         from trace_core.tui.screens.cases import CasesView
+        from trace_core.tui.screens.devices import DevicesView
         from trace_core.tui.screens.settings import SettingsView
 
         with TabbedContent(initial="cases"):
             with TabPane("Cases", id="cases"):
                 yield CasesView(self._session_manager)
+            with TabPane("Devices", id="devices"):
+                yield DevicesView(self._session_manager)
             with TabPane("Audit", id="audit"):
                 yield AuditView(self._session_manager)
             with TabPane("Settings", id="settings"):
