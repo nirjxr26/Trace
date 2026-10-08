@@ -210,6 +210,7 @@ def test_postgres_migration_017_accepts_a_null_case_row(
     pg_session_manager: DatabaseSessionManager,
 ) -> None:
     with pg_session_manager.engine.begin() as conn:
+        probe_seq = conn.execute(text("SELECT COALESCE(MAX(seq), 0) FROM audit_events")).scalar_one() + 1
         payload: dict[str, object] = {
             "action": "DEVICE_INSPECTED",
             "actor": "Ex A",
@@ -221,15 +222,16 @@ def test_postgres_migration_017_accepts_a_null_case_row(
             "details": {},
         }
         p_hash = payload_hash(payload)
-        c_hash = chain_hash(GENESIS_CHAIN, p_hash, 1_000_000)
+        c_hash = chain_hash(GENESIS_CHAIN, p_hash, probe_seq)
         conn.execute(
             text(
                 "INSERT INTO audit_events (seq, ts, action, actor, subject_type, "
                 "subject_case_number, payload_json, payload_hash, prev_chain, chain_hash) "
-                "VALUES (1000000, now(), 'DEVICE_INSPECTED', 'Ex A', 'device', NULL, "
+                "VALUES (:seq, now(), 'DEVICE_INSPECTED', 'Ex A', 'device', NULL, "
                 ":pj, :ph, :pc, :ch)"
             ),
             {
+                "seq": probe_seq,
                 "pj": canonical_json_str(payload),
                 "ph": p_hash,
                 "pc": GENESIS_CHAIN,
@@ -238,7 +240,8 @@ def test_postgres_migration_017_accepts_a_null_case_row(
         )
     with pg_session_manager.engine.begin() as conn:
         row = conn.execute(
-            text("SELECT subject_case_number, subject_type FROM audit_events WHERE seq = 1000000")
+            text("SELECT subject_case_number, subject_type FROM audit_events WHERE seq = :seq"),
+            {"seq": probe_seq},
         ).fetchone()
         assert row is not None
         assert row.subject_case_number is None

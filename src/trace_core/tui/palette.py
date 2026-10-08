@@ -94,7 +94,7 @@ class KeysModal(_BaseModal, ModalScreen[None]):
         (
             "Navigation",
             (
-                ("1 – 3", "switch tabs  Cases · Audit · Settings"),
+                ("1 – 4", "switch tabs  Cases · Devices · Audit · Settings"),
                 ("← / →", "prev / next tab"),
                 ("↑ / ↓", "move / select"),
                 ("Enter", "open / select"),
@@ -112,6 +112,14 @@ class KeysModal(_BaseModal, ModalScreen[None]):
                 ("u", "restore archived"),
                 ("r", "recent-first toggle"),
                 ("v", "raw JSON drawer"),
+            ),
+        ),
+        (
+            "Devices",
+            (
+                ("i", "inspect device"),
+                ("c", "check write protection"),
+                ("k", "cycle device kind"),
             ),
         ),
         (

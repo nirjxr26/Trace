@@ -10,6 +10,7 @@ module imports and runs on any platform, which is what lets the tribunal test it
 off-device with injected helpers.
 """
 
+import ctypes
 import errno
 import os
 import sys
@@ -33,6 +34,8 @@ from trace_core.devices._subprocess import (
     smartctl_succeeded,
 )
 from trace_core.devices.domain import (
+    RESULT_FALSE,
+    RESULT_TRUE,
     DeviceFingerprint,
     DeviceGoneError,
     DeviceInfo,
@@ -44,8 +47,9 @@ from trace_core.devices.domain import (
     ProtectionCheck,
     ProtectionEvidence,
     UnknownCause,
-    WpVerdict,
+    verdict_for,
 )
+from trace_core.devices.synthetic import absent_serial
 
 ADAPTER_VERSION: Final[str] = "linux-v1"
 DEV_ROOT: Final[str] = "/dev"
@@ -109,7 +113,7 @@ class LinuxDevice:
         fingerprint = DeviceFingerprint(
             serial=ObservedSerial(value=native.serial),
             model=native.model,
-            capacity_bytes=device.size_bytes or 0,
+            capacity_bytes=non_negative_int(entry.get("size")) or device.size_bytes or 0,
             firmware=firmware,
             interface=native.interface,
             wwn=native.wwn or enriched_wwn,
@@ -119,6 +123,13 @@ class LinuxDevice:
 
     def verify(self, device: DeviceInfo) -> GateCheck:
         checks, cause = self._probe(Path(device.node).name)
+        verdict, cause = verdict_for(
+            checks,
+            read_only_check=CHECK_SYSFS_RO,
+            read_only_result=RESULT_TRUE,
+            writable_result=RESULT_FALSE,
+            cause=cause,
+        )
         evidence = ProtectionEvidence(
             platform="linux",
             checks=checks,
@@ -126,7 +137,7 @@ class LinuxDevice:
             checked_at=now_utc(),
             unknown_cause=cause,
         )
-        return GateCheck(verdict=_verdict_for(cause, checks), evidence=evidence, checked_at=now_utc())
+        return GateCheck(verdict=verdict, evidence=evidence, checked_at=now_utc())
 
     def _exists(self, name: str) -> bool:
         return (Path(self._dev_root) / name).exists()
@@ -162,9 +173,20 @@ class LinuxDevice:
         )
 
     def _native(self, device: DeviceInfo, name: str, entry: dict[str, Any]) -> _Native:
+        """Identity for one device, from lsblk first and sysfs second.
+
+        The serial fallback was the node path, so two different disks that both report no
+        serial produced the SAME fingerprint: unplug A from /dev/sdb, plug a different
+        physical B that also reports no serial, and any later comparison keyed on serial
+        concludes "same device". `absent_serial` exists precisely to mark an absent
+        identity and marks it deterministically from the node alone, so the two states
+        cannot collide. The caller reports the result as `synthetic`, never as observed.
+        """
         return _Native(
-            serial=clean_text(entry.get("serial")) or _sysfs_value(name, "serial") or f"{self._dev_root}/{name}",
-            model=device.model_hint or clean_text(entry.get("model")) or name,
+            serial=clean_text(entry.get("serial"))
+            or _sysfs_value(name, "serial")
+            or absent_serial(f"{self._dev_root}/{name}"),
+            model=clean_text(entry.get("model")) or device.model_hint or name,
             interface=_interface(clean_text(entry.get("tran")) or _sysfs_value(name, "transport")),
             wwn=clean_text(entry.get("wwn")),
         )
@@ -199,7 +221,19 @@ class LinuxDevice:
         return tuple(checks), _probe_cause(sysfs_ro, ioctl, exclusive)
 
     def _exclusive_open(self, path: Path) -> bool | OSError:
-        """`O_RDONLY|O_EXCL` must fail on a writable device. True means refused for writing."""
+        """Whether an exclusive open was refused, and why not when it was.
+
+        `O_EXCL` on a block device does NOT measure write protection. open(2): with
+        O_EXCL on a block device, open fails EBUSY when the device "is in use by the
+        system (e.g., it is mounted)". It has no relationship to bdev_is_read_only(), so a
+        read-only-but-mounted disk fails while a writable-but-unmounted one succeeds.
+
+        The refusal is therefore corroborating evidence that the device is claimed or
+        mounted, and is recorded as such - never as the write-protection answer. That
+        answer comes from `sysfs_ro`, with BLKROGET as the second opinion. Treating this
+        refusal as a protection signal is what made a mounted read-only disk look
+        writable and forced an unnecessary override on the examiner's own disks.
+        """
         if sys.platform != "linux":
             return OSError(errno.ENOSYS, "exclusive open is Linux-only")
         try:
@@ -211,6 +245,18 @@ class LinuxDevice:
         return False
 
     def _blkroget(self, path: Path) -> bool | OSError | None:
+        """The kernel's own write-protection answer, via BLKROGET.
+
+        The previous call was `fcntl.ioctl(fd, BLKROGET, 1)`. BLKROGET is `_IO(0x12, 94)`
+        and its handler is `put_user(bdev_is_read_only(bdev), (int __user *)arg)` - a
+        4-byte WRITE to a user pointer. ctypes passes an integer argument through as the
+        pointer value, so this issued `ioctl(fd, code, 1)`, and put_user to address 1
+        returned EFAULT. It then returned None on every call, for every device, so the
+        second opinion never existed and SYSFS_DISAGREEMENT was unreachable.
+
+        An output buffer is allocated and passed instead, so the value actually lands in
+        memory this process owns.
+        """
         if sys.platform != "linux":
             return None
         try:
@@ -222,26 +268,25 @@ class LinuxDevice:
         except OSError as exc:
             return exc
         try:
-            buffer = fcntl.ioctl(fd, BLKROGET, 1)
+            buffer = bytearray(ctypes.c_int())
+            fcntl.ioctl(fd, BLKROGET, buffer, True)
         except OSError:
             return None
         finally:
             os.close(fd)
-        return buffer[0] == 1
-
-
-def _verdict_for(cause: UnknownCause | None, checks: tuple[ProtectionCheck, ...]) -> WpVerdict:
-    if cause is not None:
-        return WpVerdict.UNKNOWN
-    return WpVerdict.WRITABLE if any(c.result == "False" for c in checks) else WpVerdict.READ_ONLY
+        return ctypes.c_int.from_buffer(buffer).value == 1
 
 
 def _probe_cause(sysfs_ro: bool | None, ioctl: bool | OSError | None, exclusive: bool | OSError) -> UnknownCause | None:
     for outcome in (ioctl, exclusive):
-        if isinstance(outcome, PermissionError):
-            return UnknownCause.EACCES
         if isinstance(outcome, OSError) and outcome.errno == errno.EACCES:
             return UnknownCause.EACCES
+    for outcome in (ioctl, exclusive):
+        # A device yanked between the existence check and the open arrives as ENOENT.
+        # Folding that into IOCTL_FAILURE recorded "we could not tell" for a device that
+        # was gone, and the two need different operator responses: re-attach, or escalate.
+        if isinstance(outcome, OSError) and outcome.errno == errno.ENOENT:
+            return UnknownCause.DEVICE_DISAPPEARED
     for outcome in (ioctl, exclusive):
         if isinstance(outcome, OSError) and outcome.errno != errno.ENOSYS:
             return UnknownCause.IOCTL_FAILURE
@@ -255,11 +300,19 @@ def _probe_cause(sysfs_ro: bool | None, ioctl: bool | OSError | None, exclusive:
 def _exclusive_check(exclusive: bool | OSError) -> ProtectionCheck:
     if isinstance(exclusive, bool):
         return ProtectionCheck(name=CHECK_OPEN_EXCLUSIVE, result="denied" if exclusive else "opened")
-    if isinstance(exclusive, PermissionError):
+    # PermissionError is an OSError with errno EACCES, and `_exclusive_open` converts it
+    # to True before it can be returned, so the isinstance branch below was unreachable.
+    if exclusive.errno == errno.EACCES:
         return ProtectionCheck(
             name=CHECK_OPEN_EXCLUSIVE,
             result=UnknownCause.EACCES.value,
             detail=EACCES_DETAIL,
+        )
+    if exclusive.errno == errno.ENOENT:
+        return ProtectionCheck(
+            name=CHECK_OPEN_EXCLUSIVE,
+            result=UnknownCause.DEVICE_DISAPPEARED.value,
+            detail="device disappeared between enumeration and the probe",
         )
     if exclusive.errno == errno.ENOSYS:
         return ProtectionCheck(name=CHECK_OPEN_EXCLUSIVE, result="unsupported")
@@ -321,8 +374,18 @@ def _sysfs_value(name: str, key: str) -> str | None:
 
 
 def _read(path: str) -> str | None:
+    """A sysfs attribute as text, or None when it cannot be read.
+
+    `UnicodeDecodeError` is a ValueError, not an OSError, so a device declaring a
+    non-UTF-8 serial - which a USB stick or SD reader is free to do, since these bytes
+    come from the hardware and not the kernel - escaped `inspect()` as an unexpected
+    exception. That broke the contract that every degradation names its own cause: no
+    inspection was built, nothing was ledgered, and the operator saw a generic failure.
+    Undecodable bytes are replaced rather than raised; the value is untrusted hardware
+    text either way, and `ObservedSerial` bounds and strips it.
+    """
     try:
-        return Path(path).read_text(encoding="utf-8")
+        return Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
 

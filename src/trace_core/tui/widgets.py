@@ -87,6 +87,21 @@ def selected_item[T](table: DataTable, items: Sequence[T]) -> T | None:
     return items[idx]
 
 
+class PagedTable(DataTable):
+    """DataTable that reports vertical scrolling to a callback."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.on_scrolled: Callable[[], None] | None = None
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_y(old_value, new_value)
+        if round(old_value) == round(new_value):
+            return
+        if self.on_scrolled is not None:
+            self.on_scrolled()
+
+
 class TablePane[T](Vertical):
     """Filterable list pane shared by the Cases/Audit tabs. Single source for the table.
 
@@ -124,6 +139,11 @@ class TablePane[T](Vertical):
     def focus_default(self) -> None:
         self._table().focus()
 
+    def _update_header(self) -> None:
+        from trace_core.tui.theme import header_with_count
+
+        self.query_one(f"#{self.HEADER_ID}", Static).update(header_with_count(self.COLUMNS, len(self._items)))
+
     def fill_table(self, rows: Sequence[T], keys: Sequence[str]) -> None:
         """Replace the table body and restore the cursor onto the same row index."""
         self._items = list(rows)
@@ -138,13 +158,23 @@ class TablePane[T](Vertical):
         except Exception:
             pass
         self._last_cursor = table.cursor_row if table.cursor_row is not None else 0
-        from trace_core.tui.theme import header_with_count
-
-        self.query_one(f"#{self.HEADER_ID}", Static).update(header_with_count(self.COLUMNS, len(self._items)))
+        self._update_header()
         self.render_detail()
 
     def refresh_data(self) -> None:
         raise NotImplementedError
+
+    def append_rows(self, rows: Sequence[T], keys: Sequence[str]) -> None:
+        """Extend the table body without clearing or moving the cursor."""
+        if not rows:
+            return
+        table = self._table()
+        cursor = table.cursor_row if table.cursor_row is not None else 0
+        start = len(self._items)
+        self._items.extend(rows)
+        for offset, row in enumerate(rows):
+            table.add_row(*self.row_cells(row, start + offset == cursor), key=keys[offset])
+        self._update_header()
 
     def _repaint_selection(self) -> None:
         table = self._table()

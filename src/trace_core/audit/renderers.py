@@ -1,10 +1,11 @@
 """Audit renderers."""
 
+from collections.abc import Sequence
 from typing import Any, Final
 
 from rich.text import Text
 
-from trace_core.audit.dto import AuditEventDto, VerifyResultDto
+from trace_core.audit.dto import AuditEventDto, AuditEventSummaryDto, VerifyResultDto
 from trace_core.core.ui.renderers import (
     COLUMN_CASE_NUMBER,
     format_india_datetime,
@@ -43,7 +44,7 @@ def _audit_table_columns(bp: str) -> list[tuple[str, dict[str, Any]]]:
     ]
 
 
-def render_audit_table(events: list[AuditEventDto]) -> None:
+def render_audit_table(events: Sequence[AuditEventDto | AuditEventSummaryDto]) -> None:
     from trace_core.core.ui.renderers import breakpoint_width, format_ledger_time
 
     bp, term_w = breakpoint_width()

@@ -17,6 +17,13 @@ param (
 
 $ErrorActionPreference = "Stop"
 
+trap {
+    if (Get-Command Release-Steps -ErrorAction SilentlyContinue) {
+        Release-Steps
+    }
+    throw $_
+}
+
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 foreach ($rawArg in $args) {
@@ -39,11 +46,31 @@ foreach ($rawArg in $args) {
 
 $TraceHomeDir = Join-Path $Home ".trace"
 $InstallLog = Join-Path $TraceHomeDir "install.log"
-$PhaseTotal = 6
+$PhaseTotal = 4
 $script:PhaseDone = 0
-$script:DownloadShown = 0
-$script:Shown = 0
-$script:SpinIdx = 0
+$script:StepIndex = 0
+$script:StepPainted = $false
+$script:DotIdx = 0
+$script:DoneGlyph = [string]([char]0x25CF)
+$script:PendGlyph = [string]([char]0x25B2)
+$script:NextGlyph = [string]([char]0x25CF)
+$script:FailGlyph = [string]([char]0x2715)
+$script:TickGlyph = [string]([char]0x2713)
+$script:DotFrames = @(
+    [string]([char]0x280B), [string]([char]0x2819), [string]([char]0x2839), [string]([char]0x2838),
+    [string]([char]0x283C), [string]([char]0x2834), [string]([char]0x2826), [string]([char]0x2827),
+    [string]([char]0x2807), [string]([char]0x280F)
+)
+$script:SpinDelayTicks = 4
+$script:StepTicks = 0
+$script:StepLabels = @(
+    "Verifying",
+    "Downloading",
+    "Installing",
+    "Finishing setup"
+)
+$script:StepGutter = [string]([char]0x2502) + " "
+$script:StepStates = @("pending", "pending", "pending", "pending")
 $VerboseMode = [bool]$VerboseOutput
 if ($env:TRACE_VERBOSE -eq "1") {
     $VerboseMode = $true
@@ -67,84 +94,112 @@ function Show-TraceUsage {
     Write-Output "  --help              Usage; exit 0"
 }
 
-function Get-TraceBar {
-    param([int]$Pct)
-    $filled = [math]::Floor($Pct * 20 / 100)
-    $empty = 20 - $filled
-    $full = [string]([char]0x2588)
-    $lite = [string]([char]0x2591)
-    ("$full" * $filled) + ("$lite" * $empty)
-}
-
-function Show-Bar {
-    param([int]$Pct)
-    $bar = Get-TraceBar $Pct
-    $ver = if ($script:DisplayVersion) { $script:DisplayVersion } else { "install" }
-    if ($VerboseMode) {
-        return
-    }
-    $isTty = -not [Console]::IsOutputRedirected
-    if (-not $isTty) {
-        if ($Pct -ne 100 -or $script:DownloadShown -eq 1) {
-            return
+function Write-StepBlock {
+    $esc = [char]27
+    $count = $script:StepLabels.Count
+    $frame = ""
+    for ($i = 0; $i -lt $count; $i++) {
+        $glyph = $script:PendGlyph
+        $colour = "33"
+        $label = $script:StepLabels[$i]
+        if ($script:StepStates[$i] -eq "done") {
+            $glyph = $script:DoneGlyph
+            $colour = "32"
+        } elseif ($script:StepStates[$i] -eq "active") {
+            $glyph = $script:DotFrames[$script:DotIdx % $script:DotFrames.Count]
+            $colour = "32"
+        } elseif ($script:StepStates[$i] -eq "fail") {
+            $glyph = $script:FailGlyph
+            $colour = "31"
         }
-        $script:DownloadShown = 1
-        Write-Output ("Downloading Trace {0}..." -f $ver)
-        Write-Output ""
-        Write-Output (("[{0}] 100%" -f $bar))
-        Write-Output ""
-        return
+        $frame += "`r{0}[2K  {1}[{2}m{3}{4}  {1}[0m{5}" -f $esc, $esc, $colour, $script:StepGutter, $glyph, $label
+        if ($i -lt $count - 1) {
+            $frame += "`n"
+        }
     }
-    if ($script:DownloadShown -eq 0) {
-        $script:DownloadShown = 1
-        Write-Host ("Downloading Trace {0}..." -f $ver) -ForegroundColor Green
-        Write-Output ""
-    }
-    Write-Host -NoNewline ("`r[{0}] {1}%   " -f $bar, $Pct) -ForegroundColor Green
-    if ($Pct -eq 100) {
-        Write-Output ""
-        Write-Output ""
-    }
+    Write-Host -NoNewline $frame
 }
 
-function Show-Spin {
-    if ($VerboseMode) {
+function Write-InstallTitle {
+    $ver = if ($script:DisplayVersion) { $script:DisplayVersion } else { "main" }
+    $ver = $ver -replace '^v', ''
+    if ($VerboseMode -or [Console]::IsOutputRedirected) {
         return
     }
-    if ([Console]::IsOutputRedirected) {
-        return
-    }
-    if ($script:Shown -lt 0) {
-        $script:Shown = 0
-    }
-    $script:SpinIdx += 1
-    $frames = @('|', '/', '-', '\')
-    $frame = $frames[$script:SpinIdx % 4]
-    $bar = Get-TraceBar $script:Shown
-    Write-Host -NoNewline ("`r[{0}] {1}% {2}   " -f $bar, $script:Shown, $frame) -ForegroundColor Green
+    Write-Output ""
+    Write-Host ("  Trace {0}" -f $ver)
+    Write-Output ""
 }
 
-function Step-One {
-    $script:Shown += 1
-    Show-Bar $script:Shown
-}
-
-function Step-To {
-    param([int]$Target)
-    if ($VerboseMode) {
-        $script:Shown = $Target
+function Show-Steps {
+    if ($VerboseMode -or [Console]::IsOutputRedirected) {
         return
     }
-    while ($script:Shown -lt $Target) {
-        Step-One
-        Start-Sleep -Milliseconds 50
+    $esc = [char]27
+    if ($script:StepPainted) {
+        Write-Host -NoNewline ("`r$esc[{0}A" -f ($script:StepLabels.Count - 1))
+    } else {
+        Write-Host -NoNewline "$esc[?25l"
+    }
+    Write-StepBlock
+    $script:StepPainted = $true
+}
+
+function Release-Steps {
+    if (-not $script:StepPainted) {
+        return
+    }
+    Write-Host -NoNewline ("`n$([char]27)[?25h")
+    $script:StepPainted = $false
+}
+
+function Animate-Steps {
+    if ($VerboseMode -or [Console]::IsOutputRedirected) {
+        return
+    }
+    $script:StepTicks += 1
+    if ($script:StepTicks -gt $script:SpinDelayTicks) {
+        $script:DotIdx += 1
+    }
+    Show-Steps
+}
+
+function Start-Step {
+    param([int]$Index)
+    $script:StepStates[$Index] = "active"
+    $script:StepIndex = $Index
+    $script:StepTicks = 0
+    $script:DotIdx = 0
+    if ($VerboseMode -or [Console]::IsOutputRedirected) {
+        Write-Output ("  |  ... {0}" -f $script:StepLabels[$Index])
+        return
+    }
+    Show-Steps
+}
+
+function Done-Step {
+    param([int]$Index)
+    $script:StepStates[$Index] = "done"
+    if ($VerboseMode -or [Console]::IsOutputRedirected) {
+        Write-Output ("  |  [OK] {0}" -f $script:StepLabels[$Index])
+        return
+    }
+    Show-Steps
+}
+
+function Fail-Step {
+    param([int]$Index)
+    $script:StepStates[$Index] = "fail"
+    if (-not $VerboseMode -and -not [Console]::IsOutputRedirected) {
+        Show-Steps
+        Release-Steps
     }
 }
 
 function Step-TracePhase {
-    param([string]$Label)
+    param([int]$Index)
     $script:PhaseDone += 1
-    Step-To ([int][math]::Floor($script:PhaseDone * 100 / $PhaseTotal))
+    Start-Step $Index
 }
 
 function Write-Trace {
@@ -182,10 +237,9 @@ function Invoke-LoggedCommand {
 }
 
 function Invoke-LiveCommand {
-    param([int]$Target, [scriptblock]$Action, [object[]]$ActionArgs = @())
+    param([scriptblock]$Action, [object[]]$ActionArgs = @())
     if ($VerboseMode -or [Console]::IsOutputRedirected) {
         Invoke-LoggedCommand $Action -ActionArgs $ActionArgs
-        $script:Shown = $Target
         return
     }
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("trace-install-" + [Guid]::NewGuid().ToString("N") + ".log")
@@ -202,13 +256,8 @@ function Invoke-LiveCommand {
     } -ArgumentList @($Action, $ActionArgs, $tmp, $here)
     try {
         while (($job.State -eq 'Running') -or ($job.State -eq 'NotStarted')) {
-            if ($script:Shown -lt $Target) {
-                Step-One
-                Start-Sleep -Seconds 1
-            } else {
-                Show-Spin
-                Start-Sleep -Seconds 1
-            }
+            Animate-Steps
+            Start-Sleep -Milliseconds 120
         }
         Write-TempLog $tmp
         if ($job.State -eq 'Failed') {
@@ -219,12 +268,13 @@ function Invoke-LiveCommand {
         Remove-Job $job -Force -ErrorAction SilentlyContinue
         Remove-Item -Force $tmp -ErrorAction SilentlyContinue
     }
-    Step-To $Target
+    Done-Step $script:StepIndex
 }
 
 function Stop-TraceInstall {
     param([string]$Step)
     if ((-not [Console]::IsOutputRedirected) -and (-not $VerboseMode)) {
+        Fail-Step $script:StepIndex
         Write-Output ""
     }
     Write-Progress -Activity "Installing Trace" -Completed -ErrorAction SilentlyContinue
@@ -235,14 +285,17 @@ function Stop-TraceInstall {
 
 function Show-Success {
     param([string]$Ver)
-    $tick = [string]([char]0x2713)
+    $tick = $script:TickGlyph
     $isTty = -not [Console]::IsOutputRedirected
     if ($isTty -and -not $VerboseMode) {
+        Release-Steps
         Write-Output ""
     }
     if ($isTty) {
-        Write-Host ("{0} Installation complete" -f $tick) -ForegroundColor Green
-        Write-Host ("Trace {0} installed successfully." -f $Ver) -ForegroundColor Green
+        Write-Host ("  {0} Installation complete" -f $tick) -ForegroundColor Green
+        Write-Output ""
+        Write-Host "  Run trace to get started"
+        Write-Output ""
     } else {
         Write-Output "Installation complete"
         Write-Output ("Trace {0} installed successfully." -f $Ver)
@@ -506,7 +559,9 @@ if ($VerboseMode) {
     Write-Host ""
 }
 
-Step-TracePhase "python"
+Write-InstallTitle
+
+Step-TracePhase 0
 if ($VerboseMode) {
     Write-Host "[1/6] Searching for Python 3.12+..." -ForegroundColor Yellow
 }
@@ -541,43 +596,46 @@ if (-not $FoundPython) {
     Write-Host "  'Add python.exe to PATH' is checked during installation." -ForegroundColor Yellow
     Stop-TraceInstall "python"
 }
+Done-Step 0
 
-Step-TracePhase "source"
+Step-TracePhase 1
 Write-Trace ("Source ready at {0}" -f $RepoRoot)
+Done-Step 1
 
 $VenvDir = Join-Path $RepoRoot ".venv"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 
-Step-TracePhase "venv"
+Step-TracePhase 2
 if ($VerboseMode) {
     Write-Host "[2/6] Configuring virtual environment..." -ForegroundColor Yellow
 }
 if (-not (Test-Path $VenvPython)) {
     Write-Trace ("  Creating virtual environment at '{0}'..." -f $VenvDir)
     try {
-        Invoke-LiveCommand -Target 50 -Action { param($py, $vd) & $py -m venv $vd } -ActionArgs @($FoundPython, $VenvDir)
+        Invoke-LiveCommand -Action { param($py, $vd) & $py -m venv $vd } -ActionArgs @($FoundPython, $VenvDir)
     } catch {
         Stop-TraceInstall "venv"
     }
 } else {
     Write-Trace "  [OK] Existing virtual environment detected."
+    Done-Step 2
 }
 
-Step-TracePhase "dependencies"
 if ($VerboseMode) {
     Write-Host "[3/6] Installing locked dependencies..." -ForegroundColor Yellow
     Write-Host "  Using pip with cryptographic hash verification..."
 }
 try {
-    Invoke-LiveCommand -Target 66 -Action { param($py) & $py -m pip install --quiet "pip==26.2.1" } -ActionArgs @($VenvPython)
-    Invoke-LiveCommand -Target 66 -Action { param($py) & $py -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt } -ActionArgs @($VenvPython)
-    Invoke-LiveCommand -Target 66 -Action { param($py) & $py -m pip install --quiet --no-deps -e . } -ActionArgs @($VenvPython)
+    Invoke-LiveCommand -Action { param($py) & $py -m pip install --quiet "pip==26.2.1" } -ActionArgs @($VenvPython)
+    Invoke-LiveCommand -Action { param($py) & $py -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt } -ActionArgs @($VenvPython)
+    Invoke-LiveCommand -Action { param($py) & $py -m pip install --quiet --no-deps -e . } -ActionArgs @($VenvPython)
 } catch {
     Stop-TraceInstall "dependencies"
 }
 Write-Trace "  [OK] Dependencies installed successfully."
+Done-Step 2
 
-Step-TracePhase "config"
+Step-TracePhase 3
 if ($VerboseMode) {
     Write-Host "[4/6] Verifying environment and storage directories..." -ForegroundColor Yellow
 }
@@ -607,7 +665,7 @@ $TrustDir = Join-Path $Home ".trace\trust\releases"
 try {
     New-Item -ItemType Directory -Force -Path $TrustDir | Out-Null
     $Bundle = Join-Path ([IO.Path]::GetTempPath()) "trace-trusted-keys.bundle"
-    Invoke-LiveCommand -Target 83 -Action { param($url, $out) Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing } -ActionArgs @("https://github.com/nirjxr26/Trace/releases/latest/download/trusted-keys.bundle", $Bundle)
+    Invoke-LiveCommand -Action { param($url, $out) Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing } -ActionArgs @("https://github.com/nirjxr26/Trace/releases/latest/download/trusted-keys.bundle", $Bundle)
     $Provisioned = 0
     foreach ($line in (Get-Content -Path $Bundle)) {
         $parts = $line.Trim() -split "\s+", 2
@@ -649,7 +707,7 @@ $TraceExe = Join-Path $VenvDir "Scripts\trace.exe"
 
 if (-not $SkipDbMigration) {
     try {
-        Invoke-LiveCommand -Target 83 -Action { param($exe) & $exe doctor } -ActionArgs @($TraceExe)
+        Invoke-LiveCommand -Action { param($exe) & $exe doctor } -ActionArgs @($TraceExe)
         Write-Trace "  [OK] Database verified and up to date."
     } catch {
         Write-Trace "  [!] Database unreachable. Trace will self-initialize on first use once it is reachable."
@@ -659,7 +717,6 @@ if (-not $SkipDbMigration) {
     Write-Trace "  Skipping database verification as requested."
 }
 
-Step-TracePhase "launcher"
 if ($VerboseMode) {
     Write-Host "[6/6] Exposing 'trace' command to User PATH..." -ForegroundColor Yellow
 }
@@ -685,5 +742,6 @@ if ($UserPath -notlike "*$UserBin*") {
 } else {
     Write-Trace ("  [OK] '{0}' is already in PATH." -f $UserBin)
 }
+Done-Step 3
 
 Show-Success -Ver ("v{0}" -f $script:DisplayVersion)

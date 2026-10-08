@@ -149,24 +149,41 @@ def test_signature_guard_messages_name_the_subject(subject: str) -> None:
         update_signing._verify_signature(f"ed25519:{'0' * 16}", None, b"data", subject)
 
 
-def test_stage_label_serves_cli_and_tui() -> None:
+def test_stage_label_is_one_map_shared_by_every_surface():
     for stage in Stage:
-        assert update_stages.stage_label(stage, StageStatus.ACTIVE) == update_stages.STAGE_ACTIVE_LABEL[stage]
-        assert update_stages.stage_label(stage, StageStatus.DONE) == update_stages.STAGE_DONE_LABEL[stage]
-        assert update_stages.stage_label(stage, StageStatus.FAILED) == update_stages.STAGE_FAILED_LABEL[stage]
-    assert (
-        update_stages.stage_label(Stage.DOWNLOAD, StageStatus.PENDING)
-        == update_stages.STAGE_FAILED_LABEL[Stage.DOWNLOAD]
+        assert update_stages.stage_label(stage) == update_stages.STAGE_LABEL[stage]
+    # The map used to exist three times over (active/done/failed) with identical contents.
+    assert not [name for name in dir(update_stages) if name.endswith("_LABEL") and name != "STAGE_LABEL"], (
+        "a status-specific label map came back; the label must not vary with status"
     )
 
 
-def test_stage_line_consumers_read_the_shared_map() -> None:
+def test_stage_line_consumers_read_the_shared_map():
     assert "stage_label" in _source(update_renderers)
     from trace_core.tui.screens import settings as settings_screen
 
     settings_src = _source(settings_screen)
     assert "STAGE_DONE_LABEL" not in settings_src
-    assert "stage_label(stage, status)" in settings_src
+    assert "stage_label(stage)" in settings_src
+    assert "STAGE_ORDER" in settings_src
+
+
+def test_step_line_renders_a_glyph_for_every_status():
+    """A status must render as its glyph, never as the enum's own name.
+
+    step_line used to take a glyph and reverse-map it to a status, so callers that passed
+    the status rendered the words pending/active/done/failed where a glyph belonged.
+    """
+    from rich.console import Console
+
+    from trace_core.core.ui.renderers import step_line
+
+    console = Console(force_terminal=False, width=40)
+    for status in StageStatus:
+        rendered = step_line(status, "Label").plain
+        assert rendered == f"│ {update_stages.stage_glyph(status)} Label"
+        assert str(status) not in rendered
+        assert console is not None
 
 
 @pytest.mark.parametrize(
@@ -212,3 +229,65 @@ def test_cache_path_stays_under_storage(tmp_path: Path, monkeypatch) -> None:  #
 
     monkeypatch.setattr(settings_mod.settings, "storage_root", tmp_path, raising=False)
     assert str(update_cache.cache_path()).startswith(str(tmp_path))
+
+
+def _fake_tty(monkeypatch: Any, stdin: bool, stdout: bool) -> None:  # type: ignore[no-untyped-def]
+    import sys
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: stdin, raising=False)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: stdout, raising=False)
+
+
+def test_interactive_terminal_needs_both_streams(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.cli.args import interactive_terminal
+
+    _fake_tty(monkeypatch, True, True)
+    assert interactive_terminal() is True
+    _fake_tty(monkeypatch, True, False)
+    assert interactive_terminal() is False
+    _fake_tty(monkeypatch, False, True)
+    assert interactive_terminal() is False
+    _fake_tty(monkeypatch, False, False)
+    assert interactive_terminal() is False
+
+
+def test_every_interactive_guard_goes_through_the_shared_helper() -> None:
+    """No surface may keep a private isatty check; the three had drifted apart."""
+    import sys
+
+    from trace_core.core.cli import uninstall
+    from trace_core.updates import commands as update_commands
+
+    for module in (audit_helpers, uninstall, update_commands):
+        assert "isatty" not in _source(module), module.__name__
+    assert sys.modules["trace_core.core.cli.args"].interactive_terminal is not None
+    assert audit_helpers._is_interactive() is not None
+
+
+def test_uninstall_refuses_an_interactive_prompt_without_yes(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Only the refusal path is exercised: the affirmative path runs the uninstaller."""
+    from typer.testing import CliRunner
+
+    from trace_core.cli.main import app
+    from trace_core.core.cli import uninstall
+
+    monkeypatch.setattr(uninstall, "interactive_terminal", lambda: False)
+    res = CliRunner().invoke(app, ["uninstall"])
+    assert res.exit_code != 0
+    assert "--yes" in res.output
+
+
+def test_uninstall_prompts_only_when_both_streams_are_terminals(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """With a terminal available it reaches the confirm, and declining never uninstalls."""
+    from typer.testing import CliRunner
+
+    from trace_core.cli.main import app
+    from trace_core.core.cli import uninstall
+
+    def _must_not_run(purge: bool) -> int:
+        raise AssertionError("uninstaller ran after a declined confirmation")
+
+    monkeypatch.setattr(uninstall, "interactive_terminal", lambda: True)
+    monkeypatch.setattr(uninstall, "run_uninstall", _must_not_run)
+    res = CliRunner().invoke(app, ["uninstall"], input="n\n")
+    assert res.exit_code == 0

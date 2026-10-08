@@ -158,20 +158,61 @@ def test_a_writable_source_exits_ten(monkeypatch: pytest.MonkeyPatch, device_fil
     assert "writable" in result.stdout.lower()
 
 
-def test_the_acknowledgement_flag_requires_confirmation(device_file_env: Path) -> None:
+def test_the_acknowledgement_flag_needs_the_typed_token(device_file_env: Path) -> None:
+    """A y/N answer is too thin for a step that manufactures trust over unverified evidence."""
     result = runner.invoke(
-        app, ["device", "check", str(device_file_env / "disk-a.dd"), "--acknowledge-unverified-source"], input="n\n"
+        app, ["device", "check", str(device_file_env / "disk-a.dd"), "--acknowledge-unverified-source"], input="y\n"
     )
     assert "cancelled" in result.stdout.lower()
     assert result.exit_code == EXIT_SUCCESS
 
 
-def test_the_acknowledgement_flag_proceeds_when_confirmed(device_file_env: Path) -> None:
+def test_a_wrong_typed_token_is_refused(device_file_env: Path) -> None:
     result = runner.invoke(
-        app, ["device", "check", str(device_file_env / "disk-a.dd"), "--acknowledge-unverified-source"], input="y\n"
+        app, ["device", "check", str(device_file_env / "disk-a.dd"), "--acknowledge-unverified-source"], input="nope\n"
+    )
+    assert "cancelled" in result.stdout.lower()
+    assert result.exit_code == EXIT_SUCCESS
+
+
+def test_the_acknowledgement_flag_proceeds_on_the_exact_token(device_file_env: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["device", "check", str(device_file_env / "disk-a.dd"), "--acknowledge-unverified-source"],
+        input="UNVERIFIED\n",
     )
     assert result.exit_code == EXIT_SUCCESS
     assert "READ_ONLY" in result.stdout
+
+
+def test_the_shell_also_requires_the_typed_token(monkeypatch, device_box: Path) -> None:
+    """The control existed only on the Typer surface.
+
+    The REPL accepted `--ack-unverified` and passed it straight to the service, so the
+    typed token an operator was trained to expect on the CLI bought nothing in the shell.
+    """
+    from trace_core.devices.shell_handler import DeviceShellCommandHandler
+
+    node = str(device_box / "disk-a.dd")
+    reached: list[dict[str, Any]] = []
+
+    # The handler wraps dispatch in capture_cli_errors, which renders a card rather than
+    # propagating, so the assertion is on what the gate was called with.
+    def _check(_sm, _node, **kwargs):  # type: ignore[no-untyped-def]
+        reached.append(kwargs)
+        return None
+
+    monkeypatch.setattr("trace_core.devices.helpers.do_check", _check)
+    monkeypatch.setattr("trace_core.devices.renderers.render_gate", lambda *a, **k: None)
+
+    handler = DeviceShellCommandHandler()
+    monkeypatch.setattr("trace_core.devices.commands.confirm_typed_number", lambda *a, **k: False)
+    assert handler.execute("check", ["--ack-unverified", node], None) is True
+    assert reached == [], "the gate ran without the typed token"
+
+    monkeypatch.setattr("trace_core.devices.commands.confirm_typed_number", lambda *a, **k: True)
+    assert handler.execute("check", ["--ack-unverified", node], None) is True
+    assert reached and reached[0]["acknowledge_unverified_source"] is True
 
 
 def test_yes_skips_the_acknowledgement_prompt(device_file_env: Path) -> None:
@@ -180,6 +221,33 @@ def test_yes_skips_the_acknowledgement_prompt(device_file_env: Path) -> None:
     )
     assert result.exit_code == EXIT_SUCCESS
     assert "READ_ONLY" in result.stdout
+
+
+def test_the_documented_tui_behaviour_is_what_the_tui_offers() -> None:
+    """Stale hint text misdirects an operator mid-incident, so bind it to the real bindings."""
+    from textual.binding import Binding
+
+    from trace_core.tui.app import TAB_HINTS
+    from trace_core.tui.screens.cases import CasesView
+
+    bound = {str(b.key) for b in CasesView.BINDINGS if isinstance(b, Binding)} | {"q", "enter"}
+    single_letter = {token for token in TAB_HINTS["cases"].split() if len(token) == 1 and token.isalpha()}
+    assert single_letter <= bound, f"hint advertises unbound keys: {single_letter - bound}"
+
+
+def test_the_key_reference_documents_every_tab_and_device_keys() -> None:
+    from textual.binding import Binding
+
+    from trace_core.tui.app import _TAB_ORDER
+    from trace_core.tui.palette import KeysModal
+    from trace_core.tui.screens.devices import DevicesView
+
+    rendered = " ".join(f"{key} {desc}" for _, items in KeysModal.GROUPS for key, desc in items)
+    assert str(len(_TAB_ORDER)) in rendered and "Devices" in rendered
+    for binding in DevicesView.BINDINGS:
+        if not isinstance(binding, Binding):
+            continue
+        assert binding.key in rendered, f"{binding.key} missing from the key reference"
 
 
 def test_help_documents_only_flags_the_handler_accepts() -> None:
@@ -194,9 +262,11 @@ def test_help_documents_only_flags_the_handler_accepts() -> None:
                 assert token in accepted, f"help advertises {token!r}, which the handler does not accept"
 
 
-def test_the_short_ack_alias_really_overrides(device_file_env: Path) -> None:
+def test_the_short_ack_alias_really_overrides(device_file_env: Path, monkeypatch) -> None:
+    """`--yes` is the shell's only way past the prompt, matching the CLI."""
     from trace_core.devices.shell_handler import _ACK_FLAGS, DeviceShellCommandHandler
 
+    monkeypatch.setattr("trace_core.devices.commands.confirm_typed_number", lambda *a, **k: True)
     handler = DeviceShellCommandHandler()
     node = str(device_file_env / "disk-a.dd")
     for flag in _ACK_FLAGS:

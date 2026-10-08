@@ -33,6 +33,8 @@ from trace_core.devices._subprocess import (
     smartctl_succeeded,
 )
 from trace_core.devices.domain import (
+    RESULT_FALSE,
+    RESULT_TRUE,
     DeviceAccessDeniedError,
     DeviceFingerprint,
     DeviceGoneError,
@@ -45,8 +47,9 @@ from trace_core.devices.domain import (
     ProtectionCheck,
     ProtectionEvidence,
     UnknownCause,
-    WpVerdict,
+    verdict_for,
 )
+from trace_core.devices.synthetic import absent_serial
 
 ADAPTER_VERSION: Final[str] = "win32-v1"
 PHYSICAL_DRIVE: Final[str] = r"\\.\PhysicalDrive"
@@ -55,10 +58,24 @@ CHECK_EXISTENCE: Final[str] = "exists"
 CHECK_IS_WRITABLE: Final[str] = "ioctl_is_writable"
 
 GENERIC_READ: Final[int] = 0x80000000
+# A read-only handle still has to share with writers. Requesting only FILE_SHARE_READ made
+# CreateFileW fail with ERROR_SHARING_VIOLATION whenever another process held the drive for
+# write or delete - an imaging tool, AV, the volume stack of a mounted reader - and that
+# failure was reported as DEVICE_DISAPPEARED, so a present, readable evidence drive looked
+# unplugged and vanished from enumeration too. Sharing is about the handle's own access
+# mode, not about permitting writes through ours.
 FILE_SHARE_READ: Final[int] = 0x00000001
+FILE_SHARE_WRITE: Final[int] = 0x00000002
+FILE_SHARE_DELETE: Final[int] = 0x00000004
+SHARE_MODE: Final[int] = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
 OPEN_EXISTING: Final[int] = 3
 INVALID_HANDLE_VALUE: Final[int] = -1
 ERROR_ACCESS_DENIED: Final[int] = 5
+ERROR_INSUFFICIENT_BUFFER: Final[int] = 122
+ERROR_MORE_DATA: Final[int] = 234
+
+DOS_DEVICE_BUFFER: Final[int] = 4096
+MAX_DOS_DEVICE_BUFFER: Final[int] = 1 << 20
 
 IOCTL_STORAGE_QUERY_PROPERTY: Final[int] = 0x2D1400
 IOCTL_DISK_GET_DRIVE_GEOMETRY_EX: Final[int] = 0x000700A0
@@ -105,12 +122,13 @@ class Win32Device:
         index = _index_of(device.node)
         if index is None:
             raise DeviceGoneError(device.node)
+        node = self._node(index)
         drive = self._drive(index)
         if drive is None:
             raise DeviceGoneError(device.node)
         cause, wwn = self._enrich(index, drive.interface)
         fingerprint = DeviceFingerprint(
-            serial=ObservedSerial(value=drive.serial or f"{PHYSICAL_DRIVE}{index}"),
+            serial=ObservedSerial(value=drive.serial or absent_serial(node)),
             model=drive.model or f"PhysicalDrive{index}",
             capacity_bytes=drive.size_bytes or 0,
             firmware=drive.firmware,
@@ -123,6 +141,13 @@ class Win32Device:
     def verify(self, device: DeviceInfo) -> GateCheck:
         index = _index_of(device.node)
         checks, cause = self._probe(index)
+        verdict, cause = verdict_for(
+            checks,
+            read_only_check=CHECK_IS_WRITABLE,
+            read_only_result=RESULT_FALSE,
+            writable_result=RESULT_TRUE,
+            cause=cause,
+        )
         evidence = ProtectionEvidence(
             platform="windows",
             checks=checks,
@@ -130,18 +155,26 @@ class Win32Device:
             checked_at=now_utc(),
             unknown_cause=cause,
         )
-        return GateCheck(verdict=_verdict_for(cause, checks), evidence=evidence, checked_at=now_utc())
+        return GateCheck(verdict=verdict, evidence=evidence, checked_at=now_utc())
 
     def _node(self, index: int) -> str:
         return f"{PHYSICAL_DRIVE}{index}"
 
     def _drives(self) -> list[_Drive]:
-        wmi = self._wmi()
+        """Every openable drive. CIM is fetched only when a handle is refused.
+
+        The CIM query spawns PowerShell and costs a few hundred milliseconds; it exists
+        solely to describe drives this process cannot open, so paying for it on the normal
+        elevated path made enumeration dominated by a subprocess it never used.
+        """
+        wmi: dict[int, dict[str, Any]] | None = None
         found: list[_Drive] = []
         for index in range(MAX_DRIVES):
             try:
                 drive = self._drive(index)
             except DeviceAccessDeniedError:
+                if wmi is None:
+                    wmi = self._wmi()
                 drive = _denied_drive(index, wmi.get(index, {}))
             if drive is not None:
                 found.append(drive)
@@ -262,12 +295,6 @@ def _writable_checks(handle: int) -> tuple[tuple[ProtectionCheck, ...], UnknownC
     ), UnknownCause.IOCTL_FAILURE
 
 
-def _verdict_for(cause: UnknownCause | None, checks: tuple[ProtectionCheck, ...]) -> WpVerdict:
-    if cause is not None:
-        return WpVerdict.UNKNOWN
-    return WpVerdict.WRITABLE if any(c.result == "True" for c in checks) else WpVerdict.READ_ONLY
-
-
 def _index_of(node: str) -> int | None:
     name = str(node).replace("/", "\\").rsplit("\\", 1)[-1]
     if not name.lower().startswith("physicaldrive"):
@@ -292,42 +319,62 @@ def _query_dos_devices() -> set[str]:
         return set()
     import ctypes
 
-    size = 4096
+    size = DOS_DEVICE_BUFFER
     while True:
         buffer = ctypes.create_unicode_buffer(size)
         needed = kernel.QueryDosDeviceW(None, buffer, size)
         if needed:
             return set("".join(buffer[:needed]).split("\x00")) - {""}
-        if kernel.GetLastError() != 234 or size >= 1 << 20:
+        if kernel.GetLastError() not in (ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA) or size >= MAX_DOS_DEVICE_BUFFER:
             return set()
         size *= 2
 
 
 def _try_open(node: str) -> tuple[int | None, int]:
-    """Read-share handle plus the Win32 error when it fails."""
+    """Read-only handle that still shares with writers, plus the Win32 error on failure.
+
+    The handle asks only for GENERIC_READ, so sharing write and delete permits nothing
+    through this handle; it only stops another process's open from failing because of us.
+    """
     kernel = _windll()
     if kernel is None:
         return None, 0
     import ctypes
+    import ctypes.wintypes as wintypes
 
-    handle = kernel.CreateFileW(
+    create_file = kernel.CreateFileW
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(
         ctypes.c_wchar_p(node),
         GENERIC_READ,
-        FILE_SHARE_READ,
+        SHARE_MODE,
         None,
         OPEN_EXISTING,
         0,
         None,
     )
-    if handle in (0, INVALID_HANDLE_VALUE):
+    if not handle or handle == INVALID_HANDLE_VALUE:
         return None, int(kernel.GetLastError())
     return int(handle), 0
 
 
 def _close(handle: int) -> None:
+    """Close a handle, reporting a failure rather than leaking it silently.
+
+    `_drives` opens and closes up to MAX_DRIVES handles per enumeration and this runs on
+    every poll cycle, so a close that failed would accumulate without anything to show
+    for it. The return value is checked and recorded in the log; the caller cannot do
+    anything about it, but it is no longer invisible.
+    """
     kernel = _windll()
-    if kernel is not None:
-        kernel.CloseHandle(handle)
+    if kernel is None:
+        return
+    import ctypes.wintypes as wintypes
+
+    if not kernel.CloseHandle(wintypes.HANDLE(handle)):
+        import structlog
+
+        structlog.get_logger().warning("CloseHandle failed", handle=handle, win32_error=int(kernel.GetLastError()))
 
 
 def _device_ioctl(handle: int, code: int, in_buffer: int, in_size: int, out_size: int) -> tuple[Any, int] | None:
@@ -403,6 +450,10 @@ DESCRIPTOR_TEXT_OFFSETS = {
     "firmware": OFF_PRODUCT_REVISION,
 }
 
+# STORAGE_BUS_TYPE (_STORAGE_BUS_TYPE, ntddstor.h): 0x0C=BusTypeSd, 0x0D=BusTypeMmc,
+# 0x0E=BusTypeVirtual, 0x13=BusTypeMax. 0x14 was listed here and does not exist, while the
+# three real values were missing, so every SD card, MMC device and hypervisor-attached
+# disk - the commonest lab targets - resolved to UNKNOWN and skipped smartctl entirely.
 INTERFACE_BUS_TYPES = {
     0x01: DeviceInterface.SCSI,
     0x03: DeviceInterface.SATA,
@@ -411,9 +462,11 @@ INTERFACE_BUS_TYPES = {
     0x09: DeviceInterface.SCSI,
     0x0A: DeviceInterface.SCSI,
     0x0B: DeviceInterface.SATA,
+    0x0C: DeviceInterface.SCSI,
+    0x0D: DeviceInterface.SCSI,
+    0x0E: DeviceInterface.VIRTUAL,
     0x0F: DeviceInterface.VIRTUAL,
     0x11: DeviceInterface.NVME,
-    0x14: DeviceInterface.VIRTUAL,
 }
 
 

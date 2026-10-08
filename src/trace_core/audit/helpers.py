@@ -72,27 +72,104 @@ def do_decrypt(in_path: str, out: str, passphrase: str) -> Path:  # type: ignore
     return atomic_write_lines(out, [plain.decode("utf-8")])
 
 
-def do_show_list(svc: AuditService, filt: AuditFilterDto, case_number: str | None, output: str) -> None:
+_PAGE_PROMPT = "  [Enter] older  [b] back  [q] quit"
+
+
+def _is_interactive() -> bool:
+    from trace_core.core.cli.args import interactive_terminal
+
+    return interactive_terminal()
+
+
+def _page_choice() -> str:
+    from trace_core.core.ui.renderers import console
+
+    try:
+        answer = console.input(f"[dim]{_PAGE_PROMPT}[/dim] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return "q"
+    return answer or "enter"
+
+
+def _paged_list(svc: AuditService, filt: AuditFilterDto, interactive: bool) -> None:  # type: ignore[no-untyped-def]
+    """Walk the ledger one fixed window at a time. Never holds more than one page."""
+    from trace_core.audit.renderers import render_audit_table
+    from trace_core.core.ui.renderers import console
+
+    interactive = interactive and _is_interactive()
+    before, after = filt.before_seq, filt.after_seq
+    visited: list[tuple[int | None, int | None]] = []
+    while True:
+        page = filt.model_copy(
+            update={
+                "before_seq": before,
+                "after_seq": after,
+                "offset": 0,
+                "limit": filt.limit + 1,
+            }
+        )
+        fetched = svc.list_event_summaries(page)
+        more = len(fetched) > filt.limit
+        rows = fetched[: filt.limit]
+        render_audit_table(rows)
+        if not more:
+            return
+        if not interactive:
+            if before is None:
+                console.print(f"[dim]More events: audit show --offset {filt.offset + filt.limit}[/dim]\n")
+            else:
+                console.print(f"[dim]More events: audit show --before-seq {rows[-1].seq}[/dim]\n")
+            return
+        while True:
+            choice = _page_choice()
+            if choice in ("q", "quit", "n", "no"):
+                return
+            if choice not in ("b", "back", "p", "up"):
+                visited.append((before, after))
+                before, after = rows[-1].seq, None
+                break
+            if not visited:
+                console.print("[dim]Already at the newest event.[/dim]")
+                continue
+            before, after = visited.pop()
+            break
+
+
+def do_show_list(
+    svc: AuditService, filt: AuditFilterDto, case_number: str | None, output: str, pager: bool = False
+) -> None:
     """List + timeline + render core shared by Typer and shell. Callers own capture/parse UI."""
     from trace_core.audit.renderers import render_events
 
+    json_output = output.lower() == "json"
+    if not case_number and not json_output:
+        _paged_list(svc, filt, pager)
+        return
     events = svc.list_events(filt)
     if render_case_timeline_view(svc, case_number, events, output):
         return
-    if not events and case_number and output.lower() != "json":
+    if not events and case_number and not json_output:
         _empty_timeline_notice(case_number)
         return
     render_events(events, output)
 
 
 def do_verify(svc: AuditService, output: str, anchor: str | None):  # type: ignore[no-untyped-def]
-    """Verify + anchor + render core shared by Typer and shell. Returns result; callers own Tamper policy."""
+    """Verify + anchor + render core shared by Typer and shell. Enforces the Tamper policy itself.
+
+    The policy lives here rather than in each surface because a caller that forgets to
+    inspect the result reports a broken chain as valid, which is the one answer the
+    ledger must never give.
+    """
     from trace_core.audit.anchor import verify_against_anchor
     from trace_core.audit.renderers import render_verify
+    from trace_core.core.errors import AuditTamperError
 
     res = svc.verify()
     verify_against_anchor(svc, res, anchor)
     render_verify(res, output, anchor)
+    if not res.is_valid:
+        raise AuditTamperError(f"Tamper detected at seq {res.first_mismatch_seq} ({res.mismatch_type})")
     return res
 
 

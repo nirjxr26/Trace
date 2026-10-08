@@ -50,9 +50,11 @@ class UnknownCause(StrEnum):
     SYSFS_DISAGREEMENT = "SYSFS_DISAGREEMENT"
     SMARTCTL_TIMEOUT = "SMARTCTL_TIMEOUT"
     SMARTCTL_MALFORMED = "SMARTCTL_MALFORMED"
+    LSBLK_MALFORMED = "LSBLK_MALFORMED"
     DEVICE_DISAPPEARED = "DEVICE_DISAPPEARED"
     TOOL_MISSING = "TOOL_MISSING"
     TOOL_TOO_OLD = "TOOL_TOO_OLD"
+    TOOL_VERSION_UNREADABLE = "TOOL_VERSION_UNREADABLE"
     UNKNOWN_OTHER = "UNKNOWN_OTHER"
 
 
@@ -196,6 +198,31 @@ class DeviceInspection(_DeviceModel):
         return _utc(v)
 
 
+class StoredObservation(_DeviceModel):
+    """One persisted observation, as it comes back out of storage.
+
+    `save_observation` writes the verdict, the unknown cause and the full evidence, but
+    `DeviceFingerprint` has no field for any of them, so every read path returned an
+    object that silently dropped the most security-relevant data the module produces. The
+    verdict that gates acquisition was write-only.
+
+    Frozen like the rest: a stored row is evidence and is never edited in place [D3].
+    """
+
+    node: str
+    fingerprint: DeviceFingerprint
+    inspected_at: datetime
+    inspected_by: str
+    verdict: WpVerdict | None = None
+    unknown_cause: UnknownCause | None = None
+    evidence: ProtectionEvidence | None = None
+
+    @field_validator("inspected_at")
+    @classmethod
+    def validate_inspected_at(cls, v: datetime) -> datetime:
+        return _utc(v)
+
+
 class GateCheck(_DeviceModel):
     """Trust half: built only by the protection probe."""
 
@@ -239,3 +266,48 @@ class WriteProtectionError(DeviceError):
         super().__init__(message)
         self.verdict = verdict
         self.evidence = evidence
+
+
+RESULT_TRUE = "True"
+RESULT_FALSE = "False"
+
+
+def verdict_for(
+    checks: tuple[ProtectionCheck, ...],
+    *,
+    read_only_check: str,
+    read_only_result: str,
+    writable_result: str,
+    cause: UnknownCause | None = None,
+) -> tuple[WpVerdict, UnknownCause | None]:
+    """The single write-protection verdict rule every adapter shares [D33].
+
+    Both the check NAME and both result literals are passed in, because each adapter
+    encodes the same fact with opposite polarity: the Windows row is
+    `ioctl_is_writable`, Linux's is `sysfs_ro`. Hard-coding either literal here silently
+    inverted one adapter.
+
+    Scoping by name is what makes the rule safe. An adapter emits several rows, and a
+    value-only scan reads whichever row happens to carry the string: the Windows
+    existence row is hard-coded to `RESULT_TRUE`, so an unscoped scan matched it, made
+    `READ_ONLY` unreachable, and reported every device `WRITABLE` into a signed,
+    append-only ledger row that can never be corrected.
+
+    An absent row, or a result that is neither literal, is UNKNOWN rather than WRITABLE:
+    claiming a source is writable when nothing determined it would be a false statement
+    in the evidence, and WRITABLE is not overridable, so it would also be a dead end for
+    an operator who legitimately must proceed.
+
+    Returns the cause alongside the verdict, because `require_cause_when_unknown`
+    forbids a `GateCheck` that claims UNKNOWN without one.
+    """
+    if cause is not None:
+        return WpVerdict.UNKNOWN, cause
+    row = next((check for check in checks if check.name == read_only_check), None)
+    if row is None:
+        return WpVerdict.UNKNOWN, UnknownCause.UNKNOWN_OTHER
+    if row.result == read_only_result:
+        return WpVerdict.READ_ONLY, None
+    if row.result == writable_result:
+        return WpVerdict.WRITABLE, None
+    return WpVerdict.UNKNOWN, UnknownCause.UNKNOWN_OTHER

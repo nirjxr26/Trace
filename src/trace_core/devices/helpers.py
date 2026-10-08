@@ -42,11 +42,13 @@ def do_check(
     *,
     allow_real_hardware: bool = False,
     acknowledge_unverified_source: bool = False,
+    override_reason: str = "",
 ) -> WpCheckDto:
     """Run the gate. Raises `WriteProtectionError` carrying verdict and evidence on refusal."""
     gate = _service(session_manager).check_device(
         node,
         allow_real_hardware=allow_real_hardware,
         acknowledge_unverified_source=acknowledge_unverified_source,
+        override_reason=override_reason,
     )
     return WpCheckDto.from_domain(gate)

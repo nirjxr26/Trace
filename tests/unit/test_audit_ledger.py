@@ -114,6 +114,48 @@ def test_mutate_chain_hash_detected(session_manager: DatabaseSessionManager) -> 
     assert res.mismatch_type == "chain_hash"
 
 
+def test_the_shared_verify_core_refuses_a_tampered_chain(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    """`do_verify` owns the Tamper policy, so no surface can report a broken chain as valid."""
+    from trace_core.audit.helpers import do_verify
+    from trace_core.core.errors import AuditTamperError
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="A", lead_examiner="Ex"))
+    CaseService(session_manager).create_case(CaseCreateDto(title="B", lead_examiner="Ex"))
+    assert do_verify(AuditService(session_manager), "json", None).is_valid is True
+    with session_manager.engine.begin() as conn:
+        _disable_audit_triggers(conn)
+        conn.execute(sqlalchemy.text("UPDATE audit_events SET chain_hash=:h WHERE seq=1"), {"h": "f" * 64})
+        _enable_audit_triggers(conn)
+    with pytest.raises(AuditTamperError, match="Tamper detected at seq 1"):
+        do_verify(AuditService(session_manager), "json", None)
+
+
+def test_the_repl_verify_surface_refuses_a_tampered_chain(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trace_core.audit.shell_handler import AuditShellCommandHandler
+    from trace_core.core.cli.registry import ShellContext
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="A", lead_examiner="Ex"))
+    CaseService(session_manager).create_case(CaseCreateDto(title="B", lead_examiner="Ex"))
+    with session_manager.engine.begin() as conn:
+        _disable_audit_triggers(conn)
+        conn.execute(sqlalchemy.text("UPDATE audit_events SET chain_hash=:h WHERE seq=1"), {"h": "f" * 64})
+        _enable_audit_triggers(conn)
+
+    monkeypatch.setattr("trace_core.core.service.db_manager", session_manager)
+    rendered: list[tuple[str, str, str | None]] = []
+    monkeypatch.setattr(
+        "trace_core.core.cli.error_handler.render_error_card",
+        lambda title, message, remediation=None: rendered.append((title, message, remediation)),
+    )
+    assert AuditShellCommandHandler().execute("verify", [], ShellContext()) is True
+    assert [title for title, _, _ in rendered] == ["Audit Verify"], rendered
+    assert "Tamper detected" in rendered[0][1]
+
+
 def test_mutate_prev_chain_detected(session_manager: DatabaseSessionManager) -> None:
     for t in ("A", "B"):
         CaseService(session_manager).create_case(CaseCreateDto(title=t, lead_examiner="Ex"))

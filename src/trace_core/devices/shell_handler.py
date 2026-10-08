@@ -14,7 +14,7 @@ _ACTION_HELP = (
     ("check", "Verify write protection"),
     ("help", "Show device help"),
 )
-_VALUE_FLAGS = ("--kind", "-k", "--output", "-o")
+_VALUE_FLAGS = ("--kind", "-k", "--output", "-o", "--reason")
 _LIST_FLAGS = _VALUE_FLAGS
 _CHECK_FLAGS = ("--allow-real-hardware", *_ACK_FLAGS, "--output", "-o", "--yes", "-y")
 _SHOW_FLAGS = ("--allow-real-hardware", "--output", "-o")
@@ -63,12 +63,20 @@ class DeviceShellCommandHandler(BaseShellHandler):
             render_inspection(do_inspect(None, node, allow_real_hardware=real), output=output)
             return True
 
+        acknowledged = any(flag in args for flag in _ACK_FLAGS)
+        if acknowledged and "--yes" not in args and "-y" not in args:
+            from trace_core.devices.commands import confirm_override
+
+            if not confirm_override():
+                return True
+
         render_gate(
             do_check(
                 None,
                 node,
                 allow_real_hardware=real,
-                acknowledge_unverified_source=any(flag in args for flag in _ACK_FLAGS),
+                acknowledge_unverified_source=acknowledged,
+                override_reason=_flag(args, "--reason") or "",
             ),
             output=output,
         )

@@ -1,13 +1,24 @@
 """Tribunal tests for the Windows adapter: index parsing, fail-closed probe, D33 shape."""
 
+import ctypes
 import json
 import pathlib
+from pathlib import Path
+from typing import cast
 
 import pytest
 
 from trace_core.devices import file_device, linux, synthetic, win32
 from trace_core.devices._subprocess import HelperFailure
 from trace_core.devices.domain import DeviceGoneError, DeviceInfo, DeviceKind, UnknownCause, WpVerdict
+from trace_core.devices.service import DeviceService
+
+
+def _record_and_return(bucket: list, value: object, result: object) -> object:  # type: ignore[no-untyped-def]
+    """Record a call and hand back a canned result, for stubbed collaborators."""
+    bucket.append(value)
+    return result
+
 
 pytestmark = pytest.mark.unit
 
@@ -90,7 +101,15 @@ def test_absent_drive_gates_unknown_never_writable(monkeypatch: pytest.MonkeyPat
 
 
 def test_unparseable_node_gates_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
-    gate = win32.Win32Device().verify(_info())
+    """A node that names no drive must be UNKNOWN before any handle is opened.
+
+    This previously opened this machine's real `PhysicalDrive0` with `CreateFileW` and
+    issued `IOCTL_DISK_IS_WRITABLE` against it, then discarded the result without
+    asserting on it. It reached real hardware because `_index_of("\\\\.\\PhysicalDrive0")`
+    parses to 0, so the unparseable node needs no device at all - and `_try_open` is
+    monkeypatched so no handle is taken even if one were implied.
+    """
+    monkeypatch.setattr(win32, "_try_open", lambda node: (None, 2))
     gate = win32.Win32Device().verify(
         DeviceInfo(node="nonsense", kind=DeviceKind.OS, requires_real_hardware_opt_in=True)
     )
@@ -118,14 +137,130 @@ def test_probe_reports_writable_when_the_ioctl_succeeds(monkeypatch: pytest.Monk
     assert {c.name for c in gate.evidence.checks} >= {win32.CHECK_EXISTENCE, win32.CHECK_IS_WRITABLE}
 
 
+def test_probe_reports_read_only_when_the_ioctl_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A write blocker must be reportable as READ_ONLY.
+
+    `_verdict_for` scanned every check for the literal "True" instead of reading the
+    named row, and the existence row is hard-coded to "True", so every verdict came back
+    WRITABLE and READ_ONLY was unreachable. That verdict is written into a signed,
+    append-only ledger row that can never be corrected. The evidence must now agree with
+    the verdict instead of contradicting it.
+    """
+    monkeypatch.setattr(win32, "_try_open", lambda node: (7, 0))
+    monkeypatch.setattr(win32, "_close", lambda handle: None)
+    monkeypatch.setattr(win32, "_is_writable", lambda handle: False)
+    gate = win32.Win32Device().verify(_info())
+    assert gate.verdict is WpVerdict.READ_ONLY
+    rows = {c.name: c.result for c in gate.evidence.checks}
+    assert rows[win32.CHECK_IS_WRITABLE] == "False"
+
+
+def test_an_existence_row_cannot_decide_the_verdict() -> None:
+    """The existence row is hard-coded "True"; a value-only scan matched it.
+
+    Guards the scoping rule itself rather than one adapter, so the bug cannot return by
+    a different route.
+    """
+    from trace_core.devices.domain import ProtectionCheck, verdict_for
+
+    checks = (
+        ProtectionCheck(name=win32.CHECK_EXISTENCE, result="True"),
+        ProtectionCheck(name=win32.CHECK_IS_WRITABLE, result="False"),
+    )
+    verdict, cause = verdict_for(
+        checks,
+        read_only_check=win32.CHECK_IS_WRITABLE,
+        read_only_result="False",
+        writable_result="True",
+    )
+    assert verdict is WpVerdict.READ_ONLY
+    assert cause is None
+
+
+def test_a_serialless_drive_is_marked_absent_not_named_by_its_node(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The serial fell back to the node path, so every serialless drive shared an identity
+    with itself: unplug A from PhysicalDrive0, plug a different B, and any later
+    comparison keyed on serial calls them the same device."""
+    from trace_core.devices.synthetic import absent_serial
+
+    monkeypatch.setattr(win32, "_try_open", lambda node: (7, 0))
+    monkeypatch.setattr(win32, "_close", lambda handle: None)
+    monkeypatch.setattr(win32, "_is_writable", lambda handle: False)
+    monkeypatch.setattr(
+        win32.Win32Device,
+        "_drive",
+        lambda self, index: win32._Drive(index, 500, None, None, None, win32.DeviceInterface.USB),
+    )
+    fingerprint = win32.Win32Device().inspect(_info()).fingerprint
+    node = r"\\.\PhysicalDrive0"
+    assert fingerprint.serial.value == absent_serial(node)
+    assert fingerprint.serial.value != node
+
+
+def test_no_bus_type_outside_the_sdk_enum() -> None:
+    """`_STORAGE_BUS_TYPE` runs 0x00..0x13 (BusTypeMax); anything above is undefined.
+
+    0x14 was mapped to VIRTUAL while the real 0x0E was absent, so the entry looked
+    plausible and the gap was invisible to a scan that only looked at constant NAMES.
+    """
+    for bus in win32.INTERFACE_BUS_TYPES:
+        assert 0x00 <= bus <= 0x13, f"{bus:#04x} is not a STORAGE_BUS_TYPE value"
+    assert 0x0E in win32.INTERFACE_BUS_TYPES, "BusTypeVirtual must be mapped"
+
+
+def test_the_opt_in_gate_is_actually_exercised(session_manager, device_box: Path) -> None:
+    """The module's single privilege gate had no test at all.
+
+    `service.py:_permit` raises AuthorizationError for a device flagged
+    `requires_real_hardware_opt_in`. Only the Linux and Windows adapters ever set that
+    flag, and neither is reachable from a test on this host, so the branch was uncovered
+    and the flag was only ever asserted to *exist* on a DeviceInfo - never to be refused.
+    """
+    from trace_core.core.errors import AuthorizationError
+    from trace_core.devices.domain import DeviceInfo, DeviceKind
+
+    real = DeviceInfo(
+        node=str(device_box / "disk-a.dd"),
+        kind=DeviceKind.OS,
+        requires_real_hardware_opt_in=True,
+        size_bytes=4096,
+        model_hint="m",
+    )
+
+    class _Adapter:
+        adapter_version = "stub"
+
+        def list_block_devices(self):  # type: ignore[no-untyped-def]
+            return [real]
+
+        def change_token(self):  # type: ignore[no-untyped-def]
+            return ("a",)
+
+        def inspect(self, device):  # type: ignore[no-untyped-def]
+            return file_device.FileDevice(device_box).inspect(device)
+
+        def verify(self, device):  # type: ignore[no-untyped-def]
+            return file_device.FileDevice(device_box).verify(device)
+
+    adapter = _Adapter()
+    service = DeviceService(session_manager, adapter, adapter, adapter)
+
+    with pytest.raises(AuthorizationError, match="allow-real-hardware"):
+        service.inspect_device(real.node)
+
+    assert service.inspect_device(real.node, allow_real_hardware=True).device.node == real.node
+
+
 def test_no_dead_constant_survives_in_the_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     import ast
     import re
 
-    batch = "\n".join(p.read_text(encoding="utf-8") for p in pathlib.Path("src/trace_core/devices").glob("*.py"))
-    tests = "\n".join(p.read_text(encoding="utf-8") for p in pathlib.Path("tests/unit").glob("test_devices*.py"))
+    root = pathlib.Path(__file__).resolve().parents[2] / "src" / "trace_core" / "devices"
+    test_dir = pathlib.Path(__file__).resolve().parent
+    batch = "\n".join(p.read_text(encoding="utf-8") for p in root.glob("*.py"))
+    tests = "\n".join(p.read_text(encoding="utf-8") for p in test_dir.glob("test_devices*.py"))
     dead: list[str] = []
-    for path in pathlib.Path("src/trace_core/devices").glob("*.py"):
+    for path in root.glob("*.py"):
         text = path.read_text(encoding="utf-8")
         ast.parse(text)
         for const in re.findall(r"^([A-Z][A-Z0-9_]{3,})\s*[:=]", text, re.M):
@@ -207,7 +342,9 @@ def test_smartctl_type_comes_only_from_a_closed_map(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(
         win32,
         "run_capped",
-        lambda argv, **k: seen.append(argv) or json.dumps({"smartctl": {"exit_status": 0}, "wwn": {"naa": 1}}).encode(),
+        lambda argv, **k: _record_and_return(
+            seen, argv, json.dumps({"smartctl": {"exit_status": 0}, "wwn": {"naa": 1}}).encode()
+        ),
     )
     for interface, expected in (
         (win32.DeviceInterface.USB, "usb"),
@@ -255,7 +392,7 @@ def test_smartctl_device_type_never_reaches_the_node_unvalidated(monkeypatch: py
     monkeypatch.setattr(
         win32,
         "run_capped",
-        lambda argv, **k: seen.append(argv) or json.dumps({"smartctl": {"exit_status": 0}}).encode(),
+        lambda argv, **k: _record_and_return(seen, argv, json.dumps({"smartctl": {"exit_status": 0}}).encode()),
     )
     win32.Win32Device()._enrich(3, win32.DeviceInterface.SATA)
     assert seen[0][-1] == r"\\.\PhysicalDrive3"
@@ -323,6 +460,96 @@ def test_change_token_is_empty_off_platform(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(win32, "_windll", lambda: None)
     assert win32.Win32Device().change_token() == ()
     assert win32._query_dos_devices() == set()
+
+
+class _FakeDosDevices:
+    """`QueryDosDeviceW` with a NULL device name needs a bigger buffer than the first one.
+
+    The real API signals that with ERROR_INSUFFICIENT_BUFFER (122), not ERROR_MORE_DATA
+    (234), and the adapter used to grow only on 234. It therefore gave up immediately and
+    returned an empty token on every machine, which silently disabled change-gated polling.
+    """
+
+    def __init__(self, payload: str, required: int) -> None:
+        self.payload = payload
+        self.required = required
+        self.sizes: list[int] = []
+
+    def __call__(self, _name: object, buffer: object, size: int) -> int:
+        self.sizes.append(size)
+        if size < self.required:
+            return 0
+        target = cast("ctypes.Array[ctypes.c_wchar]", buffer)
+        for offset, char in enumerate(self.payload):
+            target[offset] = char
+        return len(self.payload)
+
+
+def test_a_small_dos_device_buffer_grows_instead_of_giving_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = "PhysicalDrive0\x00C:\x00"
+    fake = _FakeDosDevices(payload, required=win32.DOS_DEVICE_BUFFER + 1)
+
+    class _Kernel:
+        QueryDosDeviceW = staticmethod(fake)
+
+        @staticmethod
+        def GetLastError() -> int:
+            return win32.ERROR_INSUFFICIENT_BUFFER
+
+    monkeypatch.setattr(win32, "_windll", lambda: _Kernel())
+    assert win32._query_dos_devices() == {"PhysicalDrive0", "C:"}
+    assert fake.sizes[0] == win32.DOS_DEVICE_BUFFER
+    assert len(fake.sizes) > 1, "the buffer must grow when the first size is too small"
+
+
+def test_an_unrelated_query_error_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeDosDevices("x", required=1 << 30)
+
+    class _Kernel:
+        QueryDosDeviceW = staticmethod(fake)
+
+        @staticmethod
+        def GetLastError() -> int:
+            return 5
+
+    monkeypatch.setattr(win32, "_windll", lambda: _Kernel())
+    assert win32._query_dos_devices() == set()
+    assert fake.sizes == [win32.DOS_DEVICE_BUFFER], "one attempt, no pointless growth"
+
+
+def test_enumeration_skips_the_cim_query_when_every_handle_opens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CIM spawns PowerShell for hundreds of ms and is only needed to describe a refused drive."""
+    adapter = win32.Win32Device()
+    monkeypatch.setattr(
+        adapter, "_drive", lambda index: win32._Drive(index, 1, "S", "M", None, win32.DeviceInterface.USB)
+    )
+    calls: list[int] = []
+
+    def fake_wmi() -> dict[str, object]:
+        calls.append(1)
+        return {}
+
+    monkeypatch.setattr(adapter, "_wmi", fake_wmi)
+    assert len(adapter._drives()) == win32.MAX_DRIVES
+    assert calls == []
+
+
+def test_enumeration_queries_cim_when_a_handle_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(win32, "_try_open", lambda node: (None, win32.ERROR_ACCESS_DENIED))
+    monkeypatch.setattr(
+        win32,
+        "_denied_drive",
+        lambda index, row: win32._Drive(index, None, "S", "M", None, win32.DeviceInterface.UNKNOWN),
+    )
+    calls: list[int] = []
+
+    def fake_wmi(self: object) -> dict[str, object]:
+        calls.append(1)
+        return {}
+
+    monkeypatch.setattr(win32.Win32Device, "_wmi", fake_wmi)
+    assert len(win32.Win32Device()._drives()) == win32.MAX_DRIVES
+    assert calls == [1], "CIM is fetched once, not per refused drive"
 
 
 def test_enumeration_lists_denied_drives_instead_of_hiding_them(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -482,7 +709,12 @@ def test_property_query_memory_survives_into_the_ioctl(monkeypatch: pytest.Monke
         (0x07, win32.DeviceInterface.USB),
         (0x0B, win32.DeviceInterface.SATA),
         (0x01, win32.DeviceInterface.SCSI),
-        (0x14, win32.DeviceInterface.VIRTUAL),
+        # _STORAGE_BUS_TYPE: 0x0C/0x0D/0x0E are SD, MMC and Virtual. The map previously
+        # listed 0x14, which is not a bus type at all, and omitted all three of these, so
+        # SD cards, MMC media and VM-attached disks resolved to UNKNOWN and lost smartctl.
+        (0x0C, win32.DeviceInterface.SCSI),
+        (0x0D, win32.DeviceInterface.SCSI),
+        (0x0E, win32.DeviceInterface.VIRTUAL),
         (0x00, win32.DeviceInterface.UNKNOWN),
         (0xFF, win32.DeviceInterface.UNKNOWN),
     ],

@@ -9,7 +9,7 @@ from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.tui.theme import TRACE_THEME
 
 TAB_HINTS: dict[str, str] = {
-    "cases": "↑↓ Navigate   Enter Open   / Search   r Refresh   q Quit",
+    "cases": "↑↓ Navigate   Enter Open   / Search   r Recent   q Quit",
     "devices": "↑↓ Navigate   i Inspect   c Check   k Kind   / Search   q Quit",
     "audit": "↑↓ Navigate   Enter Open   / Search   r Refresh   q Quit",
     "settings": "↑↓ Sections   Enter Run   m Migrate   u Install update   q Quit",
@@ -45,7 +45,7 @@ class TraceApp(App[None]):
         padding: 1 2;
     }
     #cases-left, #audit-left, #settings-left, #device-left { width: 1fr; margin-right: 1; }
-    #cases-right, #audit-right, #settings-right { width: 2fr; }
+    #cases-right, #audit-right, #settings-right, #device-right { width: 2fr; }
     #settings-sections { height: 1fr; background: transparent; }
     #settings-sections:focus { background-tint: transparent; }
     #settings-left .card-title { padding: 1 1 1 1; }
@@ -72,6 +72,7 @@ class TraceApp(App[None]):
     .input-row Button { min-width: 16; border: round $panel; }
     #db-migrations { height: 1fr; }
     #db-migrations DataTable { height: 1fr; }
+    #audit-table, #case-table, #device-table { height: 1fr; }
     DataTable { background: transparent; border: none; }
     DataTable > .datatable--header { background: transparent; text-style: bold; }
     DataTable > .datatable--cursor { background: $surface-active; color: $text; text-style: bold; }

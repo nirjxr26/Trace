@@ -7,7 +7,13 @@ import pytest
 from sqlalchemy import BigInteger, select, text
 
 from trace_core.devices import file_device, synthetic
-from trace_core.devices.domain import MAX_DEVICE_STRING, MAX_NODE_LENGTH, DeviceNotFoundError, WriteProtectionError
+from trace_core.devices.domain import (
+    MAX_DEVICE_STRING,
+    MAX_NODE_LENGTH,
+    DeviceNotFoundError,
+    WpVerdict,
+    WriteProtectionError,
+)
 from trace_core.devices.repository import SqlAlchemyDeviceRepository
 from trace_core.devices.service import DeviceService
 
@@ -155,6 +161,63 @@ def test_inspect_row_carries_the_observed_identity(session_manager, svc, box: Pa
     assert details["capacity_bytes"] == 2048
 
 
+def test_the_stored_verdict_is_readable_again(session_manager, box: Path) -> None:
+    """`save_observation` writes the verdict, cause and evidence; nothing read them back.
+
+    `_to_domain` returns a `DeviceFingerprint`, which has no field for any of them, so the
+    gate outcome - the fact that decides whether acquisition may proceed - was write-only.
+    """
+    from trace_core.devices.repository import SqlAlchemyDeviceRepository
+
+    node = str(box / "disk-a.dd")
+    gate = DeviceService(session_manager, *(lambda a: (a, a, a))(file_device.FileDevice(box))).check_device(node)
+    serial = gate.evidence.checks and _serial_for(box)
+
+    with session_manager.session() as session:
+        repo = SqlAlchemyDeviceRepository(session)
+        stored = repo.latest_observation(str(serial))
+    assert stored is not None
+    assert stored.verdict is WpVerdict.READ_ONLY
+    assert stored.unknown_cause is None
+    assert stored.evidence is not None
+    assert {c.name for c in stored.evidence.checks} >= {"exists", "parent_writable"}
+    assert stored.node == node
+    assert stored.inspected_by
+
+
+def _serial_for(box: Path) -> str:
+    from trace_core.core.fs import sha256_file
+    from trace_core.devices import synthetic
+
+    return synthetic.synthetic_serial(sha256_file(box / "disk-a.dd"))
+
+
+def test_observation_history_keeps_each_verdict(session_manager, box: Path) -> None:
+    from trace_core.devices.repository import SqlAlchemyDeviceRepository
+
+    adapter = file_device.FileDevice(box)
+    svc = DeviceService(session_manager, adapter, adapter, adapter)
+    node = str(box / "disk-a.dd")
+    svc.check_device(node)
+
+    # A refused writable source persists no observation by design, so drive the second row
+    # through the repository directly rather than expecting a refused gate to store one.
+    writable_adapter = file_device.FileDevice(box, behaviour=file_device.WRITABLE)
+    writable_device = writable_adapter.list_block_devices()[0]
+    writable_inspection = writable_adapter.inspect(writable_device)
+    with session_manager.session() as session:
+        SqlAlchemyDeviceRepository(session).save_observation(
+            writable_inspection, "tester", writable_adapter.verify(writable_device)
+        )
+        session.commit()
+
+    serial = _serial_for(box)
+    with session_manager.session() as session:
+        rows = SqlAlchemyDeviceRepository(session).observation_history(serial)
+    assert len(rows) == 2
+    assert {r.verdict for r in rows} == {WpVerdict.WRITABLE, WpVerdict.READ_ONLY}
+
+
 def test_gate_row_carries_the_verdict_and_its_evidence(session_manager, svc, box: Path) -> None:
     from trace_core.audit.events import parse_details
     from trace_core.core.operators import process_session_id
@@ -189,6 +252,83 @@ def test_a_refused_writable_source_is_still_ledgered(session_manager, box: Path)
     with pytest.raises(WriteProtectionError):
         svc.check_device(str(box / "disk-a.dd"))
     assert _actions(session_manager) == ["DEVICE_GATE_CHECKED"]
+
+
+def test_acknowledgement_cannot_buy_a_writable_source(session_manager, box: Path) -> None:
+    """[§12.2] WRITABLE is not overridable; the acknowledgement only ever clears UNKNOWN."""
+    from trace_core.core.operators import process_session_id
+
+    _ = process_session_id()
+    adapter = file_device.FileDevice(box, behaviour=file_device.WRITABLE)
+    svc = DeviceService(session_manager, adapter, adapter, adapter)
+    with pytest.raises(WriteProtectionError):
+        svc.check_device(str(box / "disk-a.dd"), acknowledge_unverified_source=True, override_reason="because")
+    assert _actions(session_manager) == ["DEVICE_GATE_CHECKED"]
+    assert _fingerprints(session_manager) == 0
+
+
+def test_the_override_event_preserves_the_pre_override_verdict_and_cause(session_manager, box: Path) -> None:
+    """[D19], [§12.2] the ledger records what was overridden, not what it became."""
+    from trace_core.audit.events import parse_details
+    from trace_core.core.operators import process_session_id
+
+    _ = process_session_id()
+    adapter = file_device.FileDevice(box, behaviour=file_device.UNKNOWN_PROTECTION)
+    svc = DeviceService(session_manager, adapter, adapter, adapter)
+    svc.check_device(str(box / "disk-a.dd"), acknowledge_unverified_source=True, override_reason="custody handoff")
+    with session_manager.session() as session:
+        rows = session.execute(
+            text("SELECT action, payload_json FROM audit_events WHERE action = 'DEVICE_OVERRIDE'")
+        ).all()
+    assert len(rows) == 1
+    details = parse_details(rows[0][1])
+    assert details["original_verdict"] == "UNKNOWN"
+    assert details["original_unknown_cause"] == "IOCTL_FAILURE"
+    assert details["reason"] == "custody handoff"
+    assert details["authorized_by"]
+    assert details["node"]
+
+
+def test_an_override_without_a_stated_reason_still_records_one(session_manager, box: Path) -> None:
+    """The key is mandatory: an override with a blank reason is still an accountable event."""
+    from trace_core.audit.events import parse_details
+    from trace_core.core.operators import process_session_id
+
+    _ = process_session_id()
+    adapter = file_device.FileDevice(box, behaviour=file_device.UNKNOWN_PROTECTION)
+    svc = DeviceService(session_manager, adapter, adapter, adapter)
+    svc.check_device(str(box / "disk-a.dd"), acknowledge_unverified_source=True, override_reason="   ")
+    with session_manager.session() as session:
+        payload = session.execute(
+            text("SELECT payload_json FROM audit_events WHERE action = 'DEVICE_OVERRIDE'")
+        ).scalar()
+    assert parse_details(payload)["reason"].strip()
+
+
+def test_every_device_ledger_row_is_written_through_a_before_commit_hook(session_manager, box: Path) -> None:
+    """[§14.5] mandatory forensic rows go in via `UnitOfWork.before_commit`, not ad hoc."""
+    from trace_core.core.operators import process_session_id
+
+    _ = process_session_id()
+    adapter = file_device.FileDevice(box, behaviour=file_device.UNKNOWN_PROTECTION)
+    svc = DeviceService(session_manager, adapter, adapter, adapter)
+    svc.check_device(str(box / "disk-a.dd"), acknowledge_unverified_source=True)
+    svc.inspect_device(str(box / "disk-a.dd"))
+
+    registered: list[int] = []
+    original = DeviceService._ledger_hook
+
+    def _counting(self, build, actor):  # type: ignore[no-untyped-def]
+        registered.append(1)
+        return original(self, build, actor)
+
+    DeviceService._ledger_hook = _counting  # type: ignore[method-assign]
+    try:
+        svc.inspect_device(str(box / "disk-a.dd"))
+        svc.check_device(str(box / "disk-a.dd"), acknowledge_unverified_source=True)
+    finally:
+        DeviceService._ledger_hook = original  # type: ignore[method-assign]
+    assert len(registered) == 3, "inspect writes one row; the acknowledged check writes gate + override"
 
 
 def test_a_refused_check_persists_no_observation(session_manager, box: Path) -> None:
@@ -458,6 +598,26 @@ def test_check_accepts_a_matching_inspection(session_manager, svc, box: Path) ->
     assert gate.verdict.value == "READ_ONLY"
 
 
+def test_check_refuses_a_same_node_device_that_changed_size(session_manager, svc, box: Path) -> None:
+    """The guard compared node NAMES only, never any device identity.
+
+    A different disk answering the same node passed the check, so a stale fingerprint
+    from one device could be carried into a gate on another. The exception is named
+    FingerprintMismatchError while comparing no fingerprint at all.
+    """
+    from trace_core.devices.domain import FingerprintMismatchError
+
+    node = str(box / "disk-a.dd")
+    inspection = svc.inspect_device(node)
+    before = inspection.device.size_bytes
+
+    synthetic.write_disk(node, seed=b"a-much-longer-disk", size=before * 4)
+    assert svc.enumerator.list_block_devices()[0].size_bytes == before * 4
+
+    with pytest.raises(FingerprintMismatchError):
+        svc.check_device(node, inspection=inspection)
+
+
 @pytest.mark.parametrize("omitted", range(3))
 def test_partial_injection_never_leaves_a_port_unset(session_manager, box: Path, omitted: int) -> None:
     """Every port was `Any` until the Ports were bound; a missing one became an AttributeError."""
@@ -589,13 +749,31 @@ def _resolving(*nodes: str) -> DeviceService:
         ("physicaldrive0", r"\\.\PhysicalDrive0"),
         ("pd0", r"\\.\PhysicalDrive0"),
         ("PD12", r"\\.\PhysicalDrive12"),
-        ("12", r"\\.\PhysicalDrive12"),
-        ("007", r"\\.\PhysicalDrive7"),
     ],
 )
 def test_short_ids_resolve_to_the_enumerated_device(given: str, expected: str) -> None:
     svc = _resolving(r"\\.\PhysicalDrive0", r"\\.\PhysicalDrive12", r"\\.\PhysicalDrive7")
     assert svc._resolve(given, True).node == expected
+
+
+def test_a_bare_number_does_not_alias_a_physical_drive() -> None:
+    """Only a `pd`/`PhysicalDrive` prefix may select a drive by number.
+
+    The prefix was optional, so `12`, `pd12` and `PhysicalDrive12` all produced one key.
+    With a single such node enumerated, `device check pd12` silently opened the wrong
+    device, and `007` collapsed onto `pd7`.
+    """
+    from trace_core.devices.domain import DeviceNotFoundError
+    from trace_core.devices.service import _pd_key
+
+    assert _pd_key("12") is None
+    assert _pd_key("007") is None
+    assert _pd_key("pd12") == _pd_key("PhysicalDrive12")
+
+    svc = _resolving(r"\\.\PhysicalDrive12")
+    for bare in ("12", "007"):
+        with pytest.raises(DeviceNotFoundError):
+            svc._resolve(bare, True)
 
 
 def test_basenames_still_resolve() -> None:
@@ -632,7 +810,6 @@ def test_unknown_and_empty_nodes_are_refused() -> None:
         (r"\\.\PHYSICALDRIVE12", "pd12"),
         ("physicaldrive3", "pd3"),
         ("pd4", "pd4"),
-        ("007", "pd7"),
         ("/dev/sda", "sda"),
         ("disk-a.dd", "disk-a.dd"),
     ],
@@ -646,7 +823,7 @@ def test_short_id_is_stable_and_human(node: str, expected: str) -> None:
 def test_node_names_never_go_through_pathlib() -> None:
     from trace_core.devices.service import _node_name
 
-    assert _node_name("\\.\PhysicalDrive0") == "PhysicalDrive0"
+    assert _node_name(r"\\.\PhysicalDrive0") == "PhysicalDrive0"
     assert _node_name("/dev/sda") == "sda"
     assert _node_name("disk-a.dd") == "disk-a.dd"
     assert _node_name("C:/a/disk.dd") == "disk.dd"

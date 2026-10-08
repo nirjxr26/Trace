@@ -8,8 +8,16 @@ import pytest
 from trace_core.devices import _subprocess, linux
 from trace_core.devices._subprocess import HelperFailure, run_capped
 from trace_core.devices.domain import DeviceInfo, DeviceKind, UnknownCause, WpVerdict
+from trace_core.devices.synthetic import absent_serial
 
 pytestmark = pytest.mark.unit
+
+
+def _record_and_return(bucket: list, value: object, result: object) -> object:  # type: ignore[no-untyped-def]
+    """Record a call and hand back a canned result, for stubbed collaborators."""
+    bucket.append(value)
+    return result
+
 
 LSBLK = {
     "blockdevices": [
@@ -52,7 +60,8 @@ def test_unusable_names_and_models_are_dropped_or_emptied(monkeypatch: pytest.Mo
 
 
 def test_enumeration_survives_a_broken_document(monkeypatch: pytest.MonkeyPatch) -> None:
-    for hostile in (None, [], "text", {"blockdevices": "nope"}, {"blockdevices": [None, 5, {"name": "ok"}]}):
+    hostile_docs: list[object] = [None, [], "text", {"blockdevices": "nope"}, {"blockdevices": [None, 5]}]
+    for hostile in hostile_docs:
         monkeypatch.setattr(linux, "lsblk_json", lambda _h=hostile, **_k: _h)
         assert linux.LinuxDevice().list_block_devices() is not None
 
@@ -69,7 +78,12 @@ def test_enumeration_never_opens_a_device_for_content(monkeypatch: pytest.Monkey
     """[D23] list is discovery: no smartctl, no hashing, no probe."""
     monkeypatch.setattr(linux, "lsblk_json", lambda **_k: LSBLK)
     calls: list[str] = []
-    monkeypatch.setattr(linux, "run_capped", lambda argv, **k: calls.append(argv[0]) or b"{}")
+
+    def fake_run_capped(argv: list[str], **k: object) -> bytes:
+        calls.append(argv[0])
+        return b"{}"
+
+    monkeypatch.setattr(linux, "run_capped", fake_run_capped)
     monkeypatch.setattr(_subprocess, "sha256_file", lambda *a, **k: pytest.fail("list hashed a device"), raising=False)
     linux.LinuxDevice().list_block_devices()
     assert calls == [], "enumeration reached smartctl or any enrichment helper"
@@ -81,14 +95,12 @@ def test_inspect_reads_nothing_but_calls_smartctl_once(monkeypatch: pytest.Monke
     monkeypatch.setattr(linux, "_sysfs_value", lambda name, key: {"serial": "S1", "transport": "sata"}.get(key))
     seen: list[list[str]] = []
     monkeypatch.setattr(linux, "smartctl_readiness", lambda: None)
-    monkeypatch.setattr(
-        linux,
-        "run_capped",
-        lambda argv, **k: (
-            seen.append(argv)
-            or json.dumps({"smartctl": {"exit_status": 0}, "firmware_version": "FW1", "wwn": "0xabc"}).encode()
-        ),
-    )
+
+    def fake_run_capped(argv: list[str], **k: object) -> bytes:
+        seen.append(argv)
+        return json.dumps({"smartctl": {"exit_status": 0}, "firmware_version": "FW1", "wwn": "0xabc"}).encode()
+
+    monkeypatch.setattr(linux, "run_capped", fake_run_capped)
     inspection = adapter.inspect(_device("sda"))
     assert inspection.fingerprint.firmware == "FW1"
     assert inspection.fingerprint.wwn == "0xabc"
@@ -110,7 +122,7 @@ def test_smartctl_device_type_comes_only_from_a_closed_map(monkeypatch: pytest.M
         monkeypatch.setattr(
             linux,
             "run_capped",
-            lambda argv, **k: seen.append(argv) or json.dumps({"smartctl": {"exit_status": 0}}).encode(),
+            lambda argv, **k: _record_and_return(seen, argv, json.dumps({"smartctl": {"exit_status": 0}}).encode()),
         )
         adapter.inspect(_device("sdx"))
         assert seen[0][2] == expected
@@ -148,7 +160,9 @@ def test_native_fields_come_from_lsblk_not_an_invented_path(monkeypatch: pytest.
     assert inspection.fingerprint.interface is linux.DeviceInterface.NVME
 
 
-def test_native_serial_falls_back_through_sysfs_then_the_node(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_native_serial_falls_back_through_sysfs_then_marks_absence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The final fallback used to be the node path, so two disks that both report no
+    serial produced one identical fingerprint. `absent_serial` marks the state instead."""
     adapter = linux.LinuxDevice()
     monkeypatch.setattr(adapter, "_exists", lambda name: True)
     monkeypatch.setattr(linux, "smartctl_readiness", lambda: UnknownCause.TOOL_MISSING)
@@ -158,19 +172,37 @@ def test_native_serial_falls_back_through_sysfs_then_the_node(monkeypatch: pytes
     assert adapter.inspect(_device("sda")).fingerprint.serial.value == "SYSFS1"
 
     monkeypatch.setattr(linux, "_sysfs_value", lambda name, key: None)
-    assert adapter.inspect(_device("sda")).fingerprint.serial.value == "/dev/sda"
+    assert adapter.inspect(_device("sda")).fingerprint.serial.value == absent_serial("/dev/sda")
+
+
+def test_two_serialless_disks_at_different_nodes_do_not_collide() -> None:
+    """The node-path fallback made every serialless disk share a serial with its own path."""
+    first = absent_serial("/dev/sdb")
+    second = absent_serial("/dev/sdc")
+    assert first != second
+    assert first.startswith("SYNTH-")
 
 
 def test_sysfs_fallback_points_at_a_real_kernel_path(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
-    monkeypatch.setattr(linux, "_read", lambda path: seen.append(path) or None)
+
+    def fake_read(path: str) -> None:
+        seen.append(path)
+        return None
+
+    monkeypatch.setattr(linux, "_read", fake_read)
     linux._sysfs_value("sda", "serial")
     assert seen == [f"{linux.SYSFS_BLOCK}/sda/serial"]
 
 
 def test_a_device_name_never_becomes_a_path_outside_sys_block(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
-    monkeypatch.setattr(linux, "_read", lambda path: seen.append(path) or None)
+
+    def fake_read(path: str) -> None:
+        seen.append(path)
+        return None
+
+    monkeypatch.setattr(linux, "_read", fake_read)
     linux._sysfs_value("../../etc/shadow", "serial")
     assert seen == [f"{linux.SYSFS_BLOCK}/../../etc/shadow/serial"]
 
@@ -182,7 +214,7 @@ def test_missing_lsblk_row_degrades_without_guessing(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(linux, "_sysfs_value", lambda name, key: None)
     monkeypatch.setattr(linux, "smartctl_readiness", lambda: UnknownCause.TOOL_MISSING)
     fingerprint = adapter.inspect(_device("sda")).fingerprint
-    assert fingerprint.serial.value == "/dev/sda"
+    assert fingerprint.serial.value == absent_serial("/dev/sda")
     assert fingerprint.interface is linux.DeviceInterface.UNKNOWN
     assert fingerprint.source == "os"
 
@@ -191,7 +223,12 @@ def test_inspect_reuses_the_enumerated_rows_instead_of_re_running_lsblk(monkeypa
     """`inspect` re-reads one device, not the whole block tree."""
     adapter = linux.LinuxDevice()
     calls: list[int] = []
-    monkeypatch.setattr(linux, "lsblk_json", lambda **_k: calls.append(1) or LSBLK)
+
+    def fake_lsblk_json(**k: object) -> object:
+        calls.append(1)
+        return LSBLK
+
+    monkeypatch.setattr(linux, "lsblk_json", fake_lsblk_json)
     monkeypatch.setattr(adapter, "_exists", lambda name: True)
     monkeypatch.setattr(linux, "smartctl_readiness", lambda: UnknownCause.TOOL_MISSING)
     monkeypatch.setattr(linux, "_sysfs_value", lambda name, key: pytest.fail("lsblk row was not reused"))
@@ -208,7 +245,12 @@ def test_inspect_reuses_the_enumerated_rows_instead_of_re_running_lsblk(monkeypa
 def test_a_cold_inspect_still_reads_the_row_it_needs(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = linux.LinuxDevice()
     calls: list[int] = []
-    monkeypatch.setattr(linux, "lsblk_json", lambda **_k: calls.append(1) or LSBLK)
+
+    def fake_lsblk_json(**k: object) -> object:
+        calls.append(1)
+        return LSBLK
+
+    monkeypatch.setattr(linux, "lsblk_json", fake_lsblk_json)
     monkeypatch.setattr(adapter, "_exists", lambda name: True)
     monkeypatch.setattr(linux, "smartctl_readiness", lambda: UnknownCause.TOOL_MISSING)
     monkeypatch.setattr(linux, "_sysfs_value", lambda name, key: None)
@@ -257,21 +299,46 @@ def test_entry_lookup_survives_lsblk_being_absent(monkeypatch: pytest.MonkeyPatc
     assert linux.LinuxDevice()._entry("sda") == {}
 
 
+def _fake_proc(stdout: bytes = b"{}", returncode: int = 0) -> object:
+    """A stand-in Popen whose stdout yields `stdout` then EOF."""
+
+    class _Out:
+        def __init__(self) -> None:
+            self._left = stdout
+
+        def read(self, _n: int) -> bytes:
+            chunk, self._left = self._left, b""
+            return chunk
+
+        def close(self) -> None:
+            return None
+
+    class _Proc:
+        def __init__(self) -> None:
+            self.stdout = _Out()
+            self.returncode = returncode
+
+        def kill(self) -> None:
+            return None
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self.returncode
+
+    return _Proc()
+
+
 def test_stderr_is_never_buffered_from_a_helper(monkeypatch: pytest.MonkeyPatch) -> None:
     """A hostile tool can flood stderr; it has no use once the exit has become a cause."""
     captured: dict[str, object] = {}
 
-    class _Proc:
-        stdout = b"{}"
-        returncode = 0
-
-    def _run(argv, **kwargs):
+    def _popen(argv, **kwargs):
         captured.update(kwargs)
-        return _Proc()
+        return _fake_proc()
 
-    monkeypatch.setattr(_subprocess.subprocess, "run", _run)
+    monkeypatch.setattr(_subprocess.subprocess, "Popen", _popen)
     _subprocess.run_capped(["x"])
     assert captured["stderr"] is _subprocess.subprocess.DEVNULL
+    assert captured["stdin"] is _subprocess.subprocess.DEVNULL
 
 
 @pytest.mark.parametrize(
@@ -315,14 +382,16 @@ def test_oversized_smartctl_output_is_discarded(monkeypatch: pytest.MonkeyPatch,
 
 
 def test_oversized_lsblk_output_is_discarded(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _Proc:
-        stdout = b"x" * 4096
-        returncode = 0
+    """The cap is now enforced while reading, not after the whole stream is buffered.
 
-    monkeypatch.setattr(_subprocess.subprocess, "run", lambda *a, **k: _Proc())
+    The previous test replaced `run_capped` with a fake that had already been read whole,
+    so it exercised malformed JSON and never the cap it was named for.
+    """
+    monkeypatch.setattr(_subprocess.subprocess, "Popen", lambda *a, **k: _fake_proc(b"x" * 4096))
     with pytest.raises(HelperFailure) as caught:
         _subprocess.lsblk_json(cap=64)
     assert caught.value.cause is UnknownCause.SMARTCTL_MALFORMED
+    assert "exceeded" in str(caught.value)
 
 
 def test_nested_partitions_are_enumerated_too(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -367,6 +436,43 @@ def test_probe_disagreement_is_never_guessed(
     monkeypatch.setattr(linux, "read_sysfs_ro", lambda name: sysfs_ro)
     monkeypatch.setattr(adapter, "_blkroget", lambda path: ioctl)
     assert adapter._probe("sda")[1] is expected
+
+
+def test_a_device_vanishing_mid_probe_is_not_recorded_as_an_io_fault(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ENOENT is disappearance, not IOCTL_FAILURE.
+
+    A USB bridge that drops the device between enumeration and the open is the ordinary
+    case; the two need different operator responses (re-attach vs escalate) and different
+    audit outcomes.
+    """
+    adapter = linux.LinuxDevice()
+    monkeypatch.setattr(adapter, "_exists", lambda name: True)
+    monkeypatch.setattr(adapter, "_exclusive_open", lambda path: OSError(linux.errno.ENOENT, "gone"))
+    monkeypatch.setattr(linux, "read_sysfs_ro", lambda name: True)
+    monkeypatch.setattr(adapter, "_blkroget", lambda path: None)
+    checks, cause = adapter._probe("sda")
+    assert cause is UnknownCause.DEVICE_DISAPPEARED
+    row = next(c for c in checks if c.name == linux.CHECK_OPEN_EXCLUSIVE)
+    assert row.result == UnknownCause.DEVICE_DISAPPEARED.value
+
+
+def test_read_replaces_undecodable_bytes_instead_of_raising(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A device may declare a serial in bytes that are not UTF-8.
+
+    UnicodeDecodeError is a ValueError, not an OSError, so it escaped `inspect()` as an
+    unexpected error: no inspection, no ledger row, and a generic failure card with no
+    cause. Undecodable hardware text is replaced rather than raised, since the value is
+    untrusted either way and ObservedSerial bounds it.
+    """
+    seen: dict[str, object] = {}
+
+    def _read_text(_self, encoding=None, errors=None):  # type: ignore[no-untyped-def]
+        seen.update({"encoding": encoding, "errors": errors})
+        return "S�1"
+
+    monkeypatch.setattr(Path, "read_text", _read_text)
+    assert linux._read("/sys/block/sda/serial") == "S�1"
+    assert seen["errors"] == "replace"
 
 
 def test_permission_denied_names_eacces_with_remediation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -437,11 +543,7 @@ def test_sysfs_ro_unreadable_is_unknown_not_false(monkeypatch: pytest.MonkeyPatc
 
 
 def test_oversized_stdout_is_refused_before_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _Proc:
-        stdout = b"y" * 32
-        returncode = 0
-
-    monkeypatch.setattr(_subprocess.subprocess, "run", lambda *a, **k: _Proc())
+    monkeypatch.setattr(_subprocess.subprocess, "Popen", lambda *a, **k: _fake_proc(b"y" * 32))
     with pytest.raises(HelperFailure):
         run_capped(["x"], cap=8)
 
@@ -449,20 +551,16 @@ def test_oversized_stdout_is_refused_before_parsing(monkeypatch: pytest.MonkeyPa
 def test_helper_argv_is_never_a_shell_string(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    class _Proc:
-        stdout = b"{}"
-        returncode = 0
-
-    def _run(argv, **kwargs):
+    def _popen(argv, **kwargs):
         captured["argv"] = argv
         captured.update(kwargs)
-        return _Proc()
+        return _fake_proc()
 
-    monkeypatch.setattr(_subprocess.subprocess, "run", _run)
+    monkeypatch.setattr(_subprocess.subprocess, "Popen", _popen)
     run_capped(["smartctl", "-j"])
     assert isinstance(captured["argv"], list)
     assert captured["shell"] is False
-    assert "timeout" in captured
+    assert _subprocess.TIMEOUT_SECONDS
 
 
 def test_change_token_lists_kernel_block_names_without_a_subprocess(

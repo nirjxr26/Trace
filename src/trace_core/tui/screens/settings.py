@@ -4,22 +4,28 @@ Sections reuse the exact service calls behind the old Integrity/Database/Updates
 tabs plus read-only app facts. No new backend, no duplicated verification logic.
 """
 
+from time import monotonic
+
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.timer import Timer
 from textual.widgets import Button, ListItem, ListView, Rule, Static
 
 from trace_core.audit.renderers import subject_case_label
 from trace_core.core.database.session import DatabaseSessionManager
-from trace_core.updates.stages import STAGE_ORDER, Stage, StageStatus
+from trace_core.updates.stages import STAGE_ORDER, Stage, StageStatus, stage_glyph, stage_is_spinning
 
 TABLE_ID = "settings-sections"
 DETAIL_ID = "settings-detail"
 
 # Display cap for raw exception text in section bodies and notifications.
 MAX_ERROR_DETAIL = 500
+
+# Matches the install loop cadence in install.sh / install.ps1 and the update display.
+SPIN_INTERVAL = 0.12
 
 SECTIONS = (
     "Database",
@@ -72,6 +78,9 @@ class SettingsView(Vertical):
         self._install_state = {stage: StageStatus.PENDING for stage in STAGE_ORDER}
         self._dl_read = 0
         self._dl_total = 0
+        self._active_since: float | None = None
+        self._spin = 0
+        self._spin_timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="settings-top"):
@@ -200,9 +209,8 @@ class SettingsView(Vertical):
             body.append("Migration complete\n")
 
     def _updates_body(self, body: Text, width: int) -> None:
-        from trace_core.core.ui.renderers import sanitize_terminal
+        from trace_core.core.ui.renderers import sanitize_terminal, step_line
         from trace_core.core.ui.theme import THEME_HEX
-        from trace_core.tui.theme import step_line
         from trace_core.updates.stages import StageStatus
 
         if self._checking:
@@ -234,7 +242,8 @@ class SettingsView(Vertical):
             body.append("\nPress u or pick Update below to install.\n", style="dim")
 
     def _install_lines(self, body: Text) -> None:
-        from trace_core.tui.theme import done_line, download_bar, step_line
+        from trace_core.core.ui.renderers import done_line, step_line
+        from trace_core.tui.theme import download_bar
         from trace_core.updates.stages import Stage, StageStatus, stage_label
 
         prev = self._prev or "?"
@@ -244,9 +253,7 @@ class SettingsView(Vertical):
         failed = False
         for stage in STAGE_ORDER:
             status = self._install_state.get(stage, StageStatus.PENDING)
-            if status == StageStatus.PENDING:
-                continue
-            body.append_text(step_line(status, stage_label(stage, status)))
+            body.append_text(step_line(status, stage_label(stage), glyph=stage_glyph(status, self._spin)))
             body.append("\n")
             if status == StageStatus.FAILED:
                 failed = True
@@ -461,6 +468,9 @@ class SettingsView(Vertical):
         self._installing = True
         self._dl_read = 0
         self._dl_total = 0
+        self._active_since = None
+        self._spin = 0
+        self._start_spin()
         self._render_detail()
         self.app.run_worker(self._install_worker())
 
@@ -480,16 +490,48 @@ class SettingsView(Vertical):
         try:
             dto = await asyncio.to_thread(sync_install)
         except Exception as exc:
+            self._stop_spin()
             self._installing = False
             self.app.notify(str(exc)[:MAX_ERROR_DETAIL], severity="error")
             self.action_check()
             return
+        self._stop_spin()
         self._installing = False
         self.app.notify(f"Trace updated to v{dto.to_version}.")
         self.action_check()
 
     def _on_update_stage(self, stage: Stage, status: StageStatus) -> None:
         self._install_state[stage] = status
+        if status is StageStatus.ACTIVE:
+            self._active_since = monotonic()
+        elif status is not StageStatus.PENDING:
+            self._active_since = None
+            self._spin = 0
+        try:
+            self._render_detail()
+        except Exception:
+            pass
+
+    def _start_spin(self) -> None:
+        self._stop_spin()
+        self._spin_timer = self.set_interval(SPIN_INTERVAL, self._tick_spin)
+
+    def _stop_spin(self) -> None:
+        if self._spin_timer is not None:
+            self._spin_timer.stop()
+            self._spin_timer = None
+
+    def _tick_spin(self) -> None:
+        """Advance the glyph while a step is running.
+
+        The panel only redrew when the worker reported progress, so a long step that emits
+        nothing — verifying, installing, the health check — sat on one static glyph for its
+        whole duration. The gate is the shared one, so a step under the delay still holds
+        still here exactly as it does in the installer and the update display.
+        """
+        if self._active_since is None or not stage_is_spinning(self._active_since, monotonic()):
+            return
+        self._spin += 1
         try:
             self._render_detail()
         except Exception:

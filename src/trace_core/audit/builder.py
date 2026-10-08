@@ -183,14 +183,22 @@ def for_device_gate_checked(
 
 def for_device_override(
     node: str,
-    verdict: str,
-    unknown_cause: str,
-    acknowledged_by: str,
+    original_verdict: str,
+    original_unknown_cause: str,
+    authorized_by: str,
+    reason: str,
     command: str | None = None,
 ) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
+    """Accepting an unverified source. The pre-override verdict is preserved, never the post one [D19]."""
     return _device_event(
         AuditAction.DEVICE_OVERRIDE,
-        {"node": node, "verdict": verdict, "unknown_cause": unknown_cause, "acknowledged_by": acknowledged_by},
+        {
+            "node": node,
+            "original_verdict": original_verdict,
+            "original_unknown_cause": original_unknown_cause,
+            "authorized_by": authorized_by,
+            "reason": reason,
+        },
         command or f"device check {node} --acknowledge-unverified-source",
     )
 

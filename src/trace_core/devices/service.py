@@ -12,6 +12,8 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from trace_core.audit.domain import AuditAction
 from trace_core.audit.events import Context, Subject
 from trace_core.core.database.session import DatabaseSessionManager
@@ -35,6 +37,7 @@ from trace_core.devices.repository import SqlAlchemyDeviceRepository
 KIND_ALL = "all"
 ENV_ADAPTER = "TRACE_DEVICE_ADAPTER"
 ENV_DEVICE_ROOT = "TRACE_DEVICE_ROOT"
+_OVERRIDE_REASON = "accepted unverified source"
 
 
 class DeviceService(BaseService):
@@ -69,7 +72,7 @@ class DeviceService(BaseService):
         with self.transaction() as uow:
             actor = self._actor(uow)
             SqlAlchemyDeviceRepository(uow.session).save_observation(inspection, actor)
-            self._audit(uow, lambda: for_device_inspected(**_identity_details(inspection)), actor)
+            uow.before_commit(self._ledger_hook(lambda: for_device_inspected(**_identity_details(inspection)), actor))
         return inspection
 
     def check_device(
@@ -79,6 +82,7 @@ class DeviceService(BaseService):
         inspection: DeviceInspection | None = None,
         allow_real_hardware: bool = False,
         acknowledge_unverified_source: bool = False,
+        override_reason: str = "",
     ) -> GateCheck:
         device = self._resolve(node, allow_real_hardware)
         with self.transaction() as authz:
@@ -86,6 +90,10 @@ class DeviceService(BaseService):
         captured = inspection if inspection is not None else self.inspector.inspect(device)
         if _node_name(captured.device.node) != _node_name(device.node):
             raise FingerprintMismatchError(f"inspection is for {captured.device.node}, not the requested {device.node}")
+        if captured.device.size_bytes != device.size_bytes:
+            raise FingerprintMismatchError(
+                f"inspection reports {captured.device.size_bytes} bytes, the enumerated device reports {device.size_bytes}"
+            )
         gate = self.probe.verify(captured.device)
         refusal = _refusal_for(gate, acknowledge_unverified_source)
         from trace_core.audit.builder import for_device_gate_checked, for_device_override
@@ -96,17 +104,21 @@ class DeviceService(BaseService):
         with self.transaction() as uow:
             actor = self._actor(uow)
             SqlAlchemyDeviceRepository(uow.session).save_observation(captured, actor, gate)
-            self._audit(uow, lambda: for_device_gate_checked(**_gate_details(captured, gate)), actor)
+            uow.before_commit(
+                self._ledger_hook(lambda: for_device_gate_checked(**_gate_details(captured, gate)), actor)
+            )
             if gate.verdict is WpVerdict.UNKNOWN:
-                self._audit(
-                    uow,
-                    lambda: for_device_override(
-                        node=captured.device.node,
-                        verdict=gate.verdict.value,
-                        unknown_cause=_cause_value(gate),
-                        acknowledged_by=actor,
-                    ),
-                    actor,
+                uow.before_commit(
+                    self._ledger_hook(
+                        lambda: for_device_override(
+                            node=captured.device.node,
+                            original_verdict=gate.verdict.value,
+                            original_unknown_cause=_cause_value(gate),
+                            authorized_by=actor,
+                            reason=override_reason.strip() or _OVERRIDE_REASON,
+                        ),
+                        actor,
+                    )
                 )
         return gate
 
@@ -160,23 +172,28 @@ class DeviceService(BaseService):
 
         with self.transaction() as uow:
             actor = self._actor(uow)
-            self._audit(uow, lambda: for_device_gate_checked(**_gate_details(inspection, gate)), actor)
+            uow.before_commit(
+                self._ledger_hook(lambda: for_device_gate_checked(**_gate_details(inspection, gate)), actor)
+            )
 
-    def _audit(
+    def _ledger_hook(
         self,
-        uow: UnitOfWork,
         build: Callable[[], tuple[AuditAction, Subject, dict[str, Any], Context]],
         actor: str,
-    ) -> None:
-        """Write the ledger row inside the capture transaction [§14.5].
+    ) -> Callable[[Session], None]:
+        """A `before_commit` hook writing one ledger row inside the capture transaction [§14.5].
 
-        A failed audit therefore rolls the observation back: an unledgered fingerprint
-        never exists, which is the whole point of capturing one.
+        A failed audit therefore rolls the observation back: an unledgered fingerprint never
+        exists, which is the whole point of capturing one. Registering through the hook is
+        what §14.5 requires, and it is the same mechanism `CaseService` uses.
         """
         from trace_core.audit.service import AuditService
 
-        action, subject, details, ctx = build()
-        AuditService().record(uow.session, action, subject, actor, details, ctx)
+        def _hook(session: Session) -> None:
+            action, subject, details, ctx = build()
+            AuditService().record(session, action, subject, actor, details, ctx)
+
+        return _hook
 
 
 def _refusal_for(gate: GateCheck, acknowledge_unverified_source: bool) -> WriteProtectionError | None:
@@ -197,7 +214,7 @@ def _refusal_for(gate: GateCheck, acknowledge_unverified_source: bool) -> WriteP
     return None
 
 
-_PD_ALIAS = re.compile(r"(?:physicaldrive|pd)?(\d+)$")
+_PD_ALIAS = re.compile(r"(?:physicaldrive|pd)(\d+)$")
 
 
 def _node_name(node: str) -> str:
@@ -208,7 +225,13 @@ def _node_name(node: str) -> str:
 
 
 def _pd_key(base: str) -> tuple[str, str] | None:
-    """Canonical short identity for `PhysicalDriveN`-style names, case-insensitive."""
+    """Canonical short identity for `PhysicalDriveN`-style names, case-insensitive.
+
+    The prefix is required. The pattern used to make it optional, so any node whose name
+    is bare digits matched: `12`, `pd12` and `PhysicalDrive12` all resolved to the same
+    key, and where only one of them was enumerated `device check pd12` silently selected
+    the wrong device. Leading zeros collapsed too (`007` -> `pd7`).
+    """
     match = _PD_ALIAS.fullmatch(base.strip().lower())
     if match is None:
         return None

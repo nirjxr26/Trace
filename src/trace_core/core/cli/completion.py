@@ -147,7 +147,7 @@ def complete_from_audit(audit_service: Any, limit: int = 8) -> list[tuple[str, s
     """Seq completions with preview, cached 2s, limit 8."""
 
     def _load() -> list[tuple[str, str]]:
-        evts = audit_service.list_events()[:20]
+        evts = audit_service.list_event_summaries()[:20]
         out = []
         for e in evts:
             preview = f"Seq {e.seq} · {e.action.value} · {e.subject_case_number}"
@@ -227,7 +227,7 @@ def complete_actors(audit_service: Any, limit: int = 8) -> list[tuple[str, str]]
     """Actor completions from live ledger."""
 
     def _load() -> list[tuple[str, str]]:
-        evts = audit_service.list_events()[:50]
+        evts = audit_service.list_event_summaries()[:50]
         return _distinct_terms([e.actor for e in evts], "Actor", limit)
 
     return cached_complete("actors", audit_service, _load, limit)

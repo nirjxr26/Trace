@@ -31,10 +31,20 @@ class AuditEventDto(BaseDto):
     signature: str | None = None
 
 
+class AuditEventSummaryDto(BaseDto):
+    seq: int
+    ts: datetime
+    action: AuditAction
+    actor: str
+    subject_case_number: str | None
+
+
 class AuditFilterDto(BaseFilterDto):
     case_number: str | None = None
     action: AuditAction | None = None
     actor: str | None = None
+    before_seq: int | None = Field(default=None, ge=1)
+    after_seq: int | None = Field(default=None, ge=1)
 
 
 _OUTPUT_DESC = "Output table|json"
@@ -44,12 +54,14 @@ AUDIT_SHOW_FLAGS = [
     ("--case", "Filter by case number"),
     ("--action", "Filter by action"),
     ("--actor", "Filter by actor"),
-    ("--search", "Search actor/action/case"),
-    ("-q", "Search actor/action/case"),
+    ("--search", "Search actor/action/case, or exact seq"),
+    ("-q", "Search actor/action/case, or exact seq"),
     ("--output", _OUTPUT_DESC),
     ("-o", _OUTPUT_DESC),
     ("--limit", "Max rows"),
     ("--offset", "Offset"),
+    ("--before-seq", "Keyset cursor: only events older than seq"),
+    ("--after-seq", "Keyset cursor: only events newer than seq"),
 ]
 AUDIT_VERIFY_FLAGS = [("--output", _OUTPUT_DESC), ("-o", _OUTPUT_DESC), ("--anchor", "Anchor JSON to check tail")]
 AUDIT_EXPORT_FLAGS = [

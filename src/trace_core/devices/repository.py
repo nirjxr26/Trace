@@ -20,6 +20,10 @@ from trace_core.devices.domain import (
     DeviceInterface,
     GateCheck,
     ObservedSerial,
+    ProtectionEvidence,
+    StoredObservation,
+    UnknownCause,
+    WpVerdict,
 )
 from trace_core.devices.models import DeviceFingerprintModel, bound_actor
 
@@ -30,6 +34,14 @@ class DeviceRepository(Protocol):
     def latest_for(self, serial: str) -> DeviceFingerprint | None: ...
 
     def history_for(self, serial: str, limit: int = 10) -> list[DeviceFingerprint]: ...
+
+    def latest_observation(self, serial: str) -> StoredObservation | None:
+        """The newest row for one identity, with its verdict and evidence intact."""
+        ...
+
+    def observation_history(self, serial: str, limit: int = 10) -> list[StoredObservation]:
+        """Newest-first rows including the gate outcome of each."""
+        ...
 
 
 class SqlAlchemyDeviceRepository(
@@ -49,6 +61,23 @@ class SqlAlchemyDeviceRepository(
             interface=DeviceInterface(model.interface),
             wwn=model.wwn,
             source=cast(Literal["os", "smartctl", "synthetic"], model.source),
+        )
+
+    def _to_observation(self, model: DeviceFingerprintModel) -> StoredObservation:
+        """Rebuild the full stored row, gate outcome included.
+
+        The verdict, cause and evidence columns were written by `save_observation` and
+        read by nothing; `_to_domain` cannot carry them because `DeviceFingerprint` has no
+        field for them. This is the one read path that keeps them.
+        """
+        return StoredObservation(
+            node=model.node,
+            fingerprint=self._to_domain(model),
+            inspected_at=model.inspected_at,
+            inspected_by=model.inspected_by,
+            verdict=None if model.verdict is None else WpVerdict(model.verdict),
+            unknown_cause=None if model.unknown_cause is None else UnknownCause(model.unknown_cause),
+            evidence=_evidence_from_json(model.evidence),
         )
 
     def _to_model(self, entity: DeviceFingerprint) -> DeviceFingerprintModel:
@@ -97,3 +126,26 @@ class SqlAlchemyDeviceRepository(
         if limit <= 0:
             return []
         return [self._to_domain(row) for row in self.session.scalars(self._observations(serial, limit)).all()]
+
+    def latest_observation(self, serial: str) -> StoredObservation | None:
+        row = self.session.scalars(self._observations(serial, 1)).first()
+        return None if row is None else self._to_observation(row)
+
+    def observation_history(self, serial: str, limit: int = 10) -> list[StoredObservation]:
+        if limit <= 0:
+            return []
+        return [self._to_observation(row) for row in self.session.scalars(self._observations(serial, limit)).all()]
+
+
+def _evidence_from_json(raw: str | None) -> ProtectionEvidence | None:
+    """Parse a stored evidence payload back into the value object.
+
+    Returns None for anything unparseable rather than raising: a row written by an older
+    adapter, or truncated, must not make the whole history unreadable.
+    """
+    if not raw:
+        return None
+    try:
+        return ProtectionEvidence.model_validate_json(raw)
+    except ValueError:
+        return None

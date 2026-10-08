@@ -76,6 +76,78 @@ def test_search_whitespace_normalization(service: CaseService) -> None:
     assert len(results) >= 1
 
 
+def test_the_repository_refuses_to_reopen_a_sealed_case(session_manager, service: CaseService) -> None:
+    """[§14.3] sealed closure holds at the repository, not only in the service and domain.
+
+    A caller can hold an entity the domain would never build; the repository must not be
+    a way around the invariant it persists.
+    """
+    from trace_core.cases.domain import Case, CaseStatus, TransitionError
+    from trace_core.cases.repository import SqlAlchemyCaseRepository
+
+    created = service.create_case(CaseCreateDto(title="Sealed", lead_examiner="Ex"))
+    service.close_case(created.number, reason="Sealed for the record")
+    with session_manager.session() as session:
+        repo = SqlAlchemyCaseRepository(session)
+        stored = repo.get_by_number(created.number)
+        assert stored is not None and stored.status is CaseStatus.CLOSED
+        reopened = Case(
+            id=stored.id,
+            number=stored.number,
+            title=stored.title,
+            lead_examiner=stored.lead_examiner,
+            status=CaseStatus.OPEN,
+            version=stored.version,
+        )
+        with pytest.raises(TransitionError, match="permanently sealed"):
+            repo.update(reopened)
+        session.rollback()
+    assert service.get_case(created.number).status == CaseStatus.CLOSED
+
+
+def test_the_case_repository_port_matches_its_implementation() -> None:
+    """The Protocol omitted `expected_version`, so calling through it always raised ValueError."""
+    import inspect as py_inspect
+
+    from trace_core.cases.repository import CaseRepository, SqlAlchemyCaseRepository
+
+    declared = py_inspect.signature(CaseRepository.delete)
+    actual = py_inspect.signature(SqlAlchemyCaseRepository.delete)
+    assert list(declared.parameters) == list(actual.parameters), (declared, actual)
+
+
+def test_no_generic_repository_can_hard_delete_a_row() -> None:
+    """The generic `delete` discarded its own `purge` flag and the append-only device repo inherited it.
+
+    Structural, not behavioural: the guard is the method's absence, because a test that
+    re-adds the method and calls it would only prove the method works.
+    """
+    from trace_core.core.database.repository import SqlAlchemyBaseRepository
+    from trace_core.devices.repository import SqlAlchemyDeviceRepository
+
+    assert "delete" not in dir(SqlAlchemyBaseRepository)
+    assert "delete" not in dir(SqlAlchemyDeviceRepository), "append-only rows must have no delete path at all"
+    assert not hasattr(SqlAlchemyDeviceRepository, "purge")
+    assert not hasattr(SqlAlchemyDeviceRepository, "soft_delete"), "observations are never archived"
+
+
+def test_a_sealed_case_still_accepts_a_closure_metadata_correction(session_manager, service: CaseService) -> None:
+    """The guard seals the status only; a closed case is otherwise still editable."""
+    from trace_core.cases.domain import CaseStatus
+    from trace_core.cases.repository import SqlAlchemyCaseRepository
+
+    created = service.create_case(CaseCreateDto(title="Sealed", lead_examiner="Ex"))
+    service.close_case(created.number, reason="first reason")
+    with session_manager.session() as session:
+        repo = SqlAlchemyCaseRepository(session)
+        stored = repo.get_by_number(created.number)
+        assert stored is not None
+        stored.notes = "corrected during review"
+        saved = repo.update(stored)
+        assert saved.status is CaseStatus.CLOSED
+        session.rollback()
+
+
 def test_purge_policy_guardrail_prevents_active_case_destruction(service: CaseService) -> None:
     """Verify attempting to permanently purge an active case without archiving raises an error."""
     service.create_case(

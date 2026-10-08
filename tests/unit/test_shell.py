@@ -289,6 +289,82 @@ def test_uninstall_redirects_known_flags_to_standalone() -> None:
     assert handler.execute("", [], None) is True
 
 
+def test_the_root_completer_offers_every_registered_command() -> None:
+    """Root completion is derived from the registry, so a new handler is reachable at once."""
+    from trace_core.cli.shell import InteractiveShell
+    from trace_core.cli.suggest import TraceShellCompleter
+
+    shell = InteractiveShell()
+    offered = {cmd for cmd, _ in TraceShellCompleter._root_options(shell)}
+    assert {h.command_name for h in shell.registry.all_handlers()} <= offered
+    for handler in shell.registry.all_handlers():
+        for alias in handler.aliases:
+            if " " not in alias:
+                assert alias in offered
+
+
+def test_every_console_command_is_reachable_as_a_suggestion() -> None:
+    """`recent`/`recents`/`back`/`b` were accepted but absent from the suggestion list."""
+    from trace_core.cli.shell import _CONSOLE_COMMANDS, _SHORT_ALIASES, InteractiveShell
+
+    shell = InteractiveShell()
+    known = set(shell.registry.known_words()) | set(_CONSOLE_COMMANDS) | set(_SHORT_ALIASES)
+    assert {"recent", "recents", "back", "b", "ls", "sh", "ed"} <= known
+    assert {"device", "audit", "case"} <= set(shell.registry.known_words())
+
+
+def test_every_tab_detail_pane_gets_the_same_width_share() -> None:
+    """`#device-right` was in the border and padding rules but absent from the width rule."""
+    import re
+
+    from trace_core.tui.app import TraceApp
+
+    css = TraceApp.CSS
+    blocks = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+    widthed = {sel.strip() for selectors, body in blocks if "width: 2fr" in body for sel in selectors.split(",")}
+    padded = {sel.strip() for selectors, body in blocks if "padding: 1 2" in body for sel in selectors.split(",")}
+    right_panes = {sel for sel in padded if sel.endswith("-right")}
+    missing = right_panes - widthed
+    assert not missing, f"detail panes with padding but no width: {missing}"
+    assert {"#cases-right", "#device-right"} <= widthed
+
+
+def test_a_multi_word_alias_is_owned_and_completable() -> None:
+    """`owns_text` compared one word, so `list cases ` matched nothing and lost its completions."""
+    from trace_core.cases.shell_handler import CaseShellCommandHandler
+    from trace_core.core.cli.registry import ShellContext
+
+    handler = CaseShellCommandHandler()
+    assert handler.owns_text("list cases ") is True
+    assert handler.owns_text("list cases") is True
+    assert handler.owns_text("list ") is False
+    assert handler.get_completions("list cases ", ShellContext())
+
+
+def test_a_handler_ignores_a_line_it_does_not_own() -> None:
+    from trace_core.audit.shell_handler import AuditShellCommandHandler
+    from trace_core.core.cli.registry import ShellContext
+
+    handler = AuditShellCommandHandler()
+    assert handler.owns_text("audit show") is True
+    assert handler.get_completions("auditor something", ShellContext()) == []
+
+
+def test_the_anchor_notice_names_a_command_that_exists() -> None:
+    """It pointed at an Integrity tab that was merged into Settings, so nobody could act on it."""
+    import inspect as py_inspect
+    import re
+
+    from trace_core.cli.shell import InteractiveShell
+    from trace_core.tui.screens.audit import AuditView
+
+    source = py_inspect.getsource(AuditView.run_command)
+    suggestions = re.findall(r"`([^`]+)`", source)
+    assert suggestions, "the notice must name the real command"
+    root, _, _ = suggestions[0].partition(" ")
+    assert root in {h.command_name for h in InteractiveShell().registry.all_handlers()}
+
+
 def test_repl_keeps_windows_device_nodes_verbatim() -> None:
     from trace_core.cli.shell import _split_line
 

@@ -37,6 +37,8 @@ _AUDIT_VALUE_FLAGS = (
     "-o",
     "--limit",
     "--offset",
+    "--before-seq",
+    "--after-seq",
     "--seq",
     "--anchor",
 )
@@ -63,7 +65,7 @@ class AuditShellCommandHandler(BaseShellHandler):
 
     def get_completions(self, text: str, ctx: ShellContext) -> list[Any]:
         parts = text.split()
-        if not text.startswith("audit"):
+        if not self.owns_text(text):
             return []
         # audit
         if len(parts) == 1 and text.endswith(" "):
@@ -207,13 +209,24 @@ class AuditShellCommandHandler(BaseShellHandler):
         output = parse_output_format(args)
         limit = extract_int_flag(args, 50, "--limit")
         offset = extract_int_flag(args, 0, "--offset")
+        before_seq = extract_int_flag(args, 0, "--before-seq") or None
+        after_seq = extract_int_flag(args, 0, "--after-seq") or None
         act = None
         if action_raw:
             act = parse_enum_value(AuditAction, action_raw)
             if act is None:
                 render_error_card("Unknown Action", f"Unknown action '{action_raw}'.")
                 return
-        f = AuditFilterDto(case_number=case_number, action=act, actor=actor, search=search, limit=limit, offset=offset)
+        f = AuditFilterDto(
+            case_number=case_number,
+            action=act,
+            actor=actor,
+            search=search,
+            limit=limit,
+            offset=offset,
+            before_seq=before_seq,
+            after_seq=after_seq,
+        )
         with capture_cli_errors("Audit Show", exit_on_error=False):
             from trace_core.audit.helpers import do_show_list
 

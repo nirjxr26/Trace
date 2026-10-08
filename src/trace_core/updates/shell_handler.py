@@ -1,12 +1,8 @@
 from trace_core.core.cli.shell_base import BaseShellHandler
-from trace_core.updates.commands import update_app
 
 
 class UpdateShellCommandHandler(BaseShellHandler):
     resource = "Update"
-
-    def __init__(self) -> None:
-        self._app = update_app
 
     @property
     def command_name(self) -> str:
@@ -46,11 +42,7 @@ class UpdateShellCommandHandler(BaseShellHandler):
             render_check_card(cached_check(target, channel), channel)
         return True
 
-    @property
-    def _typer_app(self) -> object:
-        return self._app
-
-    def get_completions(self, text: str, ctx: object) -> list[str]:  # type: ignore[override]
+    def get_completions(self, text: str, ctx: object) -> list[str]:
         """Flag completions shared with case handler pattern. No new completer framework."""
         _ = ctx
         if not self.owns_text(text):

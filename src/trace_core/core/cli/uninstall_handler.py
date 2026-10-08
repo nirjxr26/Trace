@@ -23,12 +23,6 @@ class UninstallShellCommandHandler(BaseShellHandler):
             console.print("[yellow]Run standalone: trace uninstall [--purge-data] [--yes][/yellow]")
         return True
 
-    @property
-    def _typer_app(self) -> object:
-        from trace_core.cli.main import app
-
-        return app
-
     def get_completions(self, text: str, ctx: object) -> list[str]:
         _ = ctx
         if not self.owns_text(text):

@@ -7,7 +7,9 @@ than hanging or exhausting memory. The gate probe never calls these.
 """
 
 import json
+import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Final
 
@@ -15,6 +17,9 @@ from trace_core.devices.domain import DeviceInterface, UnknownCause
 
 STDOUT_CAP: Final[int] = 1 << 20
 TIMEOUT_SECONDS: Final[int] = 15
+READ_CHUNK: Final[int] = 1 << 16
+TERMINATE_GRACE: Final[int] = 5
+VERSION_TIMEOUT: Final[int] = 5
 SYSFS_RO_PATH: Final[str] = "/sys/block"
 MIN_SMARTCTL: Final[tuple[int, ...]] = (5, 16)
 EACCES_DETAIL: Final[str] = "EACCES: access denied; retry from an elevated shell"
@@ -39,25 +44,86 @@ class HelperFailure(Exception):
 def run_capped(argv: list[str], *, timeout: int = TIMEOUT_SECONDS, cap: int = STDOUT_CAP) -> bytes:
     """Run a fixed argv list and return stdout, refusing anything over `cap` bytes.
 
-    stderr is discarded rather than buffered: a hostile tool can flood it, and the
-    caller has no use for it once a non-zero exit has already become a named cause.
+    The cap is enforced *while reading*, not after: `subprocess.run` buffers the whole
+    stream before the caller sees it, so a post-hoc length check rejects the result only
+    after the memory has already been spent. A tool that floods stdout would exhaust the
+    machine mid-acquisition. Reading incrementally and abandoning at `cap` bounds what is
+    ever held.
+
+    stderr is discarded rather than buffered: a hostile tool can flood it, and the caller
+    has no use for it once a non-zero exit has already become a named cause. stdin is
+    closed so a tool that reads it cannot block until the timeout.
     """
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=timeout,
-            check=False,
+            stdin=subprocess.DEVNULL,
             shell=False,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise HelperFailure(UnknownCause.SMARTCTL_TIMEOUT, f"{argv[0]} timed out after {timeout}s") from exc
     except OSError as exc:
         raise HelperFailure(UnknownCause.TOOL_MISSING, f"{argv[0]} could not be executed") from exc
-    if len(proc.stdout) > cap:
+
+    chunks: list[bytes] = []
+    held = 0
+    overflow = False
+    timed_out = threading.Event()
+
+    def _on_timeout() -> None:
+        timed_out.set()
+        _terminate(proc)
+
+    # A read on a pipe blocks until data or EOF, so a child that stalls mid-stream would
+    # hang here indefinitely - the exact failure the timeout exists to prevent. Killing
+    # the child is what unblocks the read; the flag records why it ended.
+    stream = proc.stdout
+    if stream is None:
+        _terminate(proc)
+        raise HelperFailure(UnknownCause.TOOL_MISSING, f"{argv[0]} produced no readable output")
+
+    timer = threading.Timer(timeout, _on_timeout)
+    timer.daemon = True
+    timer.start()
+    try:
+        while True:
+            chunk = stream.read(READ_CHUNK)
+            if not chunk:
+                break
+            held += len(chunk)
+            if held > cap:
+                overflow = True
+                break
+            chunks.append(chunk)
+    except (OSError, ValueError) as exc:
+        _terminate(proc)
+        raise HelperFailure(UnknownCause.TOOL_MISSING, f"{argv[0]} could not be read") from exc
+    finally:
+        timer.cancel()
+        stream.close()
+
+    if timed_out.is_set():
+        raise HelperFailure(UnknownCause.SMARTCTL_TIMEOUT, f"{argv[0]} timed out after {timeout}s")
+    if overflow:
+        _terminate(proc)
         raise HelperFailure(UnknownCause.SMARTCTL_MALFORMED, f"{argv[0]} stdout exceeded {cap} bytes and was discarded")
-    return proc.stdout
+
+    proc.wait(timeout=TERMINATE_GRACE)
+    if proc.returncode != 0:
+        raise HelperFailure(UnknownCause.SMARTCTL_MALFORMED, f"{argv[0]} exited {proc.returncode}")
+    return b"".join(chunks)
+
+
+def _terminate(proc: subprocess.Popen[bytes]) -> None:
+    """Kill and reap, so an abandoned flood leaves no child behind holding a pipe."""
+    try:
+        proc.kill()
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=TERMINATE_GRACE)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def decode_json(raw: bytes, *, tool: str) -> Any:
@@ -77,39 +143,77 @@ def read_sysfs_ro(device_name: str) -> bool | None:
 
 
 def lsblk_json(*, cap: int = STDOUT_CAP) -> Any:
-    """One `lsblk -J` call. Stdout is capped before parse [D21]."""
+    """One `lsblk -J` call. Stdout is capped before parse [D21].
+
+    The cause names the tool that actually failed. `decode_json` reports
+    SMARTCTL_MALFORMED for any unparseable JSON, so an lsblk problem was recorded in the
+    ledger as a SMART problem - `UnknownCause` has no lsblk member, and the wrong tool
+    named to an examiner is worse than none.
+    """
     raw = run_capped(
         ["lsblk", "-J", "-o", "NAME,SIZE,MODEL,SERIAL,TRAN,ROTA,RO,WWN", "--bytes"],
         cap=cap,
     )
-    return decode_json(raw, tool="lsblk")
-
-
-def smartctl_version() -> tuple[int, ...] | None:
-    """Parsed smartctl version, or None when the tool is absent."""
     try:
-        raw = run_capped(["smartctl", "--version"], timeout=5)
-    except HelperFailure:
-        return None
+        return json.loads(raw.decode("utf-8", errors="replace"))
+    except ValueError as exc:
+        raise HelperFailure(UnknownCause.LSBLK_MALFORMED, "lsblk emitted unparseable JSON") from exc
+
+
+def parse_version(raw: bytes) -> tuple[int, ...] | None:
+    """The dotted version from `smartctl --version` output, or None if there is none.
+
+    Distinguishes "printed nothing parseable" from "printed a version": returning None
+    for both is what let `smartctl_readiness` report TOOL_MISSING for a tool that is
+    installed and whose version simply could not be read - telling an examiner to install
+    software they already have.
+    """
     first = raw.decode("utf-8", errors="replace").splitlines()[:1]
-    if not first:
+    if not first or not first[0].strip():
         return None
     numbers = first[0].replace(",", ".").split()
     version = next((part for part in numbers if part[:1].isdigit()), "")
-    parsed = tuple(int(part) for part in version.split(".") if part.isdigit())
-    return parsed or None
+    return tuple(int(part) for part in version.split(".") if part.isdigit()) or None
+
+
+_READINESS_CACHE: dict[str, tuple[Any, UnknownCause | None]] = {}
+
+
+def _readiness_key() -> str:
+    """Cache key for a readiness probe: the resolved executable path."""
+    return shutil.which("smartctl") or "smartctl"
 
 
 def smartctl_readiness() -> UnknownCause | None:
     """None when `smartctl -j` is usable, else the cause to record.
 
-    Single source for the [D22] floor so both OS adapters degrade identically:
-    absent is TOOL_MISSING, present-but-old is TOOL_TOO_OLD. The version is read
-    once; `-j` needs smartctl >= 5.16.
+    Single source for the [D22] floor so both OS adapters degrade identically: absent is
+    TOOL_MISSING, present-but-too-old is TOOL_TOO_OLD, and present-but-unreadable is
+    TOOL_VERSION_UNREADABLE rather than a false TOOL_MISSING. `-j` needs >= 5.16.
+
+    Memoised per resolved executable path. It was called on every inspection, so each
+    device cost an extra `smartctl --version` spawn, and on a hung tool up to the timeout
+    again per device - the previous claim that the version is read once was not true.
+
+    The entry holds the runner it was produced with and only answers for that same
+    object. Keying on `id(run_capped)` instead was unsound: an address is reused once its
+    function is collected, so a later probe could be served a stranger's answer.
     """
-    parsed = smartctl_version()
+    key = _readiness_key()
+    cached = _READINESS_CACHE.get(key)
+    if cached is None or cached[0] is not run_capped:
+        _READINESS_CACHE[key] = (run_capped, _readiness_now())
+    return _READINESS_CACHE[key][1]
+
+
+def _readiness_now() -> UnknownCause | None:
+    try:
+        raw = run_capped(["smartctl", "--version"], timeout=VERSION_TIMEOUT)
+    except HelperFailure as failure:
+        return failure.cause if failure.cause is UnknownCause.SMARTCTL_TIMEOUT else UnknownCause.TOOL_MISSING
+    parsed = parse_version(raw)
     if parsed is None:
-        return UnknownCause.TOOL_MISSING
+        return UnknownCause.TOOL_VERSION_UNREADABLE
     if parsed[: len(MIN_SMARTCTL)] < MIN_SMARTCTL:
         return UnknownCause.TOOL_TOO_OLD
     return None

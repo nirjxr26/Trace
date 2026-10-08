@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlalchemy import text
@@ -87,15 +88,14 @@ def test_device_and_fingerprints_survive_a_json_round_trip(
 def test_the_dto_forbids_an_unknown_field(session_manager: DatabaseSessionManager) -> None:
     from pydantic import ValidationError as PydanticValidationError
 
+    payload: dict[str, Any] = {
+        "node": "/dev/sda",
+        "kind": "FILE",
+        "requires_real_hardware_opt_in": False,
+        "surprise": 1,
+    }
     with pytest.raises(PydanticValidationError, match="surprise"):
-        DeviceInfoDto(
-            **{
-                "node": "/dev/sda",
-                "kind": "FILE",
-                "requires_real_hardware_opt_in": False,
-                "surprise": 1,
-            }
-        )
+        DeviceInfoDto(**payload)
 
 
 def test_do_list_rejects_a_bad_kind(session_manager: DatabaseSessionManager, device_file_env: Path) -> None:

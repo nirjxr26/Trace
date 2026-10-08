@@ -27,6 +27,7 @@ from trace_core.devices.domain import (
     ProtectionEvidence,
     UnknownCause,
     WpVerdict,
+    verdict_for,
 )
 from trace_core.devices.synthetic import absent_serial, synthetic_serial
 
@@ -105,8 +106,18 @@ class FileDevice:
         present = path.exists()
         if not present and self._profile.cause is not UnknownCause.DEVICE_DISAPPEARED:
             raise DeviceGoneError(device.node)
+        try:
+            content_hash = sha256_file(path) if present else None
+        except OSError as exc:
+            # The device can vanish between the existence check and the read. A raw
+            # FileNotFoundError escaped the device taxonomy, so `capture_cli_errors`
+            # mapped it to a generic EXIT_ERROR and the ledger recorded no cause at all,
+            # instead of the DEVICE_DISAPPEARED an operator needs to see.
+            raise DeviceGoneError(device.node) from exc
         fingerprint = DeviceFingerprint(
-            serial=ObservedSerial(value=synthetic_serial(sha256_file(path)) if present else absent_serial(device.node)),
+            serial=ObservedSerial(
+                value=synthetic_serial(content_hash) if content_hash is not None else absent_serial(device.node)
+            ),
             model=device.model_hint or "synthetic",
             capacity_bytes=device.size_bytes or 0,
             firmware=None,
@@ -181,7 +192,10 @@ class FileDevice:
 
 
 def _verdict_for(evidence: ProtectionEvidence) -> WpVerdict:
-    if evidence.unknown_cause is not None:
-        return WpVerdict.UNKNOWN
-    writable = any(c.result == _PARENT_WRITABLE for c in evidence.checks if c.name == _CHECK_PARENT)
-    return WpVerdict.WRITABLE if writable else WpVerdict.READ_ONLY
+    return verdict_for(
+        evidence.checks,
+        read_only_check=_CHECK_PARENT,
+        read_only_result=_PARENT_READ_ONLY,
+        writable_result=_PARENT_WRITABLE,
+        cause=evidence.unknown_cause,
+    )[0]

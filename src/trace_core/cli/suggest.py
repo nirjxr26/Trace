@@ -28,6 +28,11 @@ class TraceAutoSuggest(AutoSuggest):
             "case close",
             "case delete",
             "case restore",
+            "device list",
+            "device inspect",
+            "device check",
+            "audit show",
+            "audit verify",
             "list cases",
             "create case",
             "show case",
@@ -39,7 +44,6 @@ class TraceAutoSuggest(AutoSuggest):
             "exit",
             "update check",
             "update history",
-            "update install",
             "uninstall",
         ]
 
@@ -101,9 +105,7 @@ class TraceShellCompleter(Completer):
     def __init__(self, shell: "InteractiveShell") -> None:
         self.shell = shell
 
-    _ROOT_OPTIONS: list[tuple[str, str]] = [
-        ("case", "Forensic case management commands"),
-        ("audit", "Audit ledger commands"),
+    _ROOT_EXTRAS: list[tuple[str, str]] = [
         ("status", "Display system & database status"),
         ("clear", "Clear screen & re-render banner"),
         ("cls", "Clear screen & re-render banner"),
@@ -111,28 +113,31 @@ class TraceShellCompleter(Completer):
         ("?", _MANUAL_META),
         ("exit", "Exit interactive console"),
         ("quit", "Exit interactive console"),
-        ("list", "List cases (alias: list cases)"),
-        ("create", "Create case (alias: create case)"),
-        ("show", "Show case (alias: show case)"),
         ("select", "Set active case context"),
         ("use", "Set active case context"),
         ("deselect", "Clear active case context"),
         ("unuse", "Clear active case context"),
-        ("edit", "Edit case metadata"),
-        ("close", "Close case"),
-        ("delete", "Delete / purge case"),
-        ("restore", "Restore archived case"),
         ("ls", "List cases (short)"),
         ("sh", "Show case (short)"),
         ("ed", "Edit case (short)"),
         ("recent", "Recent cases"),
         ("back", "Back to general"),
-        ("update", "Update: check / history / install"),
-        ("uninstall", "Uninstall Trace (app and data)"),
-        ("device", "Devices: list / inspect / check write protection"),
-        ("devices", "Devices (alias)"),
-        ("dev", "Devices (short)"),
     ]
+
+    @classmethod
+    def _root_options(cls, shell: "InteractiveShell") -> list[tuple[str, str]]:
+        """Registered command names and their aliases, plus the console-only verbs.
+
+        Derived from the registry so a newly registered handler is completable without
+        a second edit here; the list was previously a hand-copy that had already drifted.
+        """
+        options: list[tuple[str, str]] = []
+        for handler in shell.registry.all_handlers():
+            options.append((handler.command_name, f"{handler.command_name} commands"))
+            for alias in handler.aliases:
+                if " " not in alias:
+                    options.append((alias, f"{alias} (alias)"))
+        return [*options, *cls._ROOT_EXTRAS]
 
     def _root_completions(self, text: str, word: str) -> Any:
         from trace_core.core.cli.completion import filter_completions
@@ -140,7 +145,7 @@ class TraceShellCompleter(Completer):
         # One list always: hiding mutating verbs on empty input hid `case create`
         # exactly when an active case made it most likely. Delegated completions
         # below already stay context-aware.
-        for cmd, meta in filter_completions(self._ROOT_OPTIONS, text.lower(), limit=8):
+        for cmd, meta in filter_completions(self._root_options(self.shell), text.lower(), limit=8):
             yield Completion(cmd, start_position=-len(word), display_meta=meta)
 
     def _delegated_completions(self, text: str, word: str) -> Any:

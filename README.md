@@ -110,7 +110,29 @@ irm https://raw.githubusercontent.com/nirjxr26/Trace/main/install.ps1 | iex
 curl -fsSL https://raw.githubusercontent.com/nirjxr26/Trace/main/install.sh | sh
 ```
 
-Default runs show one live green download block (`Downloading Trace vX.Y.Z...` plus a single 20-cell bar counting 0 to 100 percent in real time with no speed or ETA; long steps keep a pulse so it never stalls). Everything else goes to `~/.trace/install.log`. Success ends in two green lines: `Installation complete` plus `Trace vX.Y.Z installed successfully.`. Failures end in `Install failed at '<step>' - see ~/.trace/install.log`.
+Default runs show a live six-step list — `✓` for finished steps, an animated dots glyph on the step
+currently running, `○` for steps not yet reached, `✗` on failure. There is no progress bar. Everything
+else goes to `~/.trace/install.log`. Success ends in two green lines: `Installation complete` plus
+`Trace vX.Y.Z installed successfully.`. Failures end in `Install failed at '<step>' - see
+~/.trace/install.log`.
+
+```
+  Trace 0.2.11
+
+│ ● Checking Python
+│ ● Downloading
+│ ⠹ Installing
+│ ▲ Finishing setup
+
+✓ Installation complete
+
+Run trace to get started
+```
+
+Four steps, both installers, identical output: `●` finished, animated dots on the running step, `▲`
+not yet reached. `trace update install` uses the same four-step shape. When output is redirected
+(CI logs, `irm | iex`) the animation and colour are dropped and each step prints one plain line as it
+finishes, so piped logs stay clean. `--verbose` prints the numbered step-by-step detail instead.
 
 | Flag | Effect |
 |---|---|

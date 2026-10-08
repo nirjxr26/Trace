@@ -5,9 +5,8 @@ from collections.abc import Sequence
 from rich.text import Text
 from textual.theme import Theme
 
-from trace_core.core.ui.renderers import get_status_style_and_label
+from trace_core.core.ui.renderers import GUTTER, get_status_style_and_label
 from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
-from trace_core.updates.stages import StageStatus
 
 TRACE_THEME = Theme(
     name="trace",
@@ -75,51 +74,13 @@ def update_status_text(kind: str):  # type: ignore[no-untyped-def]
     return dot_line(True, "Up to date")
 
 
-def stage_line(status: StageStatus, label: str):
-    """Single source for install-stage ●/×/◌ lines. Typed on StageStatus."""
-    if status == StageStatus.DONE:
-        return dot_line(True, label)
-    if status == StageStatus.FAILED:
-        return dot_line(False, label)
-    body = Text()
-    body.append("◌ ", style=DOT_INFO)
-    body.append(label)
-    return body
-
-
-GUTTER = "│ "
-
-
-def step_line(status: StageStatus, label: str):
-    """Update-screen step line: left gutter, status glyph, label."""
-    from trace_core.core.ui.theme import THEME_HEX
-    from trace_core.updates.stages import stage_glyph, stage_token
-
-    body = Text()
-    body.append(GUTTER, style=THEME_HEX["muted"])
-    body.append(f"{stage_glyph(status)} ", style=THEME_HEX[stage_token(status)])
-    body.append(label)
-    return body
-
-
 def download_bar(read: int, total: int, width: int = 28):
-    from trace_core.core.ui.theme import THEME_HEX
-
     filled = min(width, read * width // total) if total > 0 else 0
     body = Text()
     body.append(GUTTER, style=THEME_HEX["muted"])
     body.append("[" + "█" * filled + "░" * (width - filled) + "]", style=THEME_HEX["green"])
     if total > 0:
         body.append(f" {read * 100 // total}%  {read / (1 << 20):.1f} / {total / (1 << 20):.1f} MB")
-    return body
-
-
-def done_line():
-    from trace_core.core.ui.theme import THEME_HEX
-
-    body = Text()
-    body.append(GUTTER, style=THEME_HEX["muted"])
-    body.append("Done", style="dim")
     return body
 
 

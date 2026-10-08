@@ -19,11 +19,21 @@ def setup_test_environment(tmp_path_factory: pytest.TempPathFactory) -> None:
     trust_root() derive from storage_root, so every derived root landed in the checkout —
     CI wrote anchors, signing keys, the update lock and the check cache into the repository
     on each run. An absolute per-session tmp directory keeps all of that out of the tree.
+
+    The global `db_manager` is rebound as well, not just the environment variable.
+    `core/database/session.py` builds it at import time, so it captured whatever
+    TRACE_DATABASE_URL the repo `.env` held — the operator's real database. Any test reaching
+    a service with no explicit manager (the device CLI tests do, via `helpers.do_*`) then
+    wrote observations and ledger rows into it. Setting the variable afterwards cannot undo
+    an object that was already constructed, so this rebinds it.
     """
+    from trace_core.core import service as core_service
+
     os.environ["TRACE_DATABASE_URL"] = "sqlite:///:memory:"
     storage_root = tmp_path_factory.mktemp("trace-test-storage") / "storage"
     storage_root.mkdir(parents=True, exist_ok=True)
     os.environ["TRACE_STORAGE_ROOT"] = str(storage_root)
+    core_service.db_manager = DatabaseSessionManager("sqlite:///:memory:")
 
 
 @pytest.fixture
@@ -61,6 +71,22 @@ def session_manager() -> DatabaseSessionManager:
     mgr = DatabaseSessionManager("sqlite:///:memory:")
     mgr.init_schema()
     return mgr
+
+
+@pytest.fixture(autouse=True)
+def tests_never_touch_the_real_database() -> None:
+    """Fail loudly if any test could reach the operator's actual database.
+
+    `db_manager` is constructed at import time and would otherwise carry the repo `.env`
+    URL, so a test reaching a service without an explicit manager writes to the real
+    forensic ledger. That happened: 667 synthetic observations landed in `trace`. The
+    rows cannot be removed — the ledger and the observation store are append-only — so the
+    only available remedy is to stop the next run reaching it, and prove it stopped.
+    """
+    from trace_core.core import service as core_service
+
+    url = str(core_service.db_manager.engine.url)
+    assert "sqlite" in url or "memory" in url, f"tests are bound to a real database: {url}"
 
 
 @pytest.fixture

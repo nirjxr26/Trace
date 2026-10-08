@@ -16,8 +16,11 @@ pytestmark = pytest.mark.unit
         (b"smartctl 5.16 2020-01-01 r5122\n", None),
         (b"smartctl 5.15 2019-01-01 r4882\n", UnknownCause.TOOL_TOO_OLD),
         (b"smartctl 5.16.1 2020-01-01 r5123\n", None),
-        (b"", UnknownCause.TOOL_MISSING),
-        (b"unparseable\n", UnknownCause.TOOL_MISSING),
+        # A tool that is installed but whose version cannot be read is not absent. The
+        # old test asserted TOOL_MISSING here, which tells an examiner to install
+        # software they already have.
+        (b"", UnknownCause.TOOL_VERSION_UNREADABLE),
+        (b"unparseable\n", UnknownCause.TOOL_VERSION_UNREADABLE),
     ],
 )
 def test_smartctl_readiness_names_absence_and_staleness_apart(
@@ -37,11 +40,27 @@ def test_smartctl_readiness_survives_an_unstartable_tool(monkeypatch: pytest.Mon
 
 
 def test_smartctl_readiness_survives_a_hung_version_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hung `--version` is a timeout, and is recorded as one rather than as absence."""
+
     def _hung(argv, **k):
         raise HelperFailure(UnknownCause.SMARTCTL_TIMEOUT, "hung")
 
     monkeypatch.setattr(_subprocess, "run_capped", _hung)
-    assert _subprocess.smartctl_readiness() is UnknownCause.TOOL_MISSING
+    assert _subprocess.smartctl_readiness() is UnknownCause.SMARTCTL_TIMEOUT
+
+
+def test_smartctl_readiness_is_read_once_not_per_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The docstring claimed the version is read once; it was read per inspection."""
+    calls: list[list[str]] = []
+
+    def _counting(argv, **k):
+        calls.append(argv)
+        return b"smartctl 7.4 2023-08-01 r5530\n"
+
+    monkeypatch.setattr(_subprocess, "run_capped", _counting)
+    for _ in range(5):
+        assert _subprocess.smartctl_readiness() is None
+    assert len(calls) == 1, f"spawned {len(calls)} times for 5 readiness checks"
 
 
 def test_the_device_type_map_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
