@@ -5,7 +5,7 @@ import typer
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.exit_codes import EXIT_SUCCESS
 from trace_core.core.cli.output import OUTPUT_HELP
-from trace_core.core.ui.renderers import confirm_typed_number, render_success
+from trace_core.core.ui.renderers import confirm_typed_number, console, render_success
 from trace_core.devices.helpers import do_check, do_inspect, do_list
 from trace_core.devices.renderers import render_devices, render_gate, render_inspection
 
@@ -86,8 +86,10 @@ def check_device(
         )
         render_gate(check, output=output)
         if output.lower() != "json":
-            render_success(
-                f"Source is {check.verdict.value}."
-                if check.verdict.value != "UNKNOWN"
-                else "Source is UNKNOWN — accepted unverified; the override is in the ledger."
-            )
+            if check.verdict.value == "UNKNOWN":
+                console.print(
+                    "[yellow]Source is UNKNOWN - protection could not be confirmed. "
+                    "Accepted unverified; the override is in the ledger.[/yellow]"
+                )
+            else:
+                render_success(f"Source is {check.verdict.value}.")

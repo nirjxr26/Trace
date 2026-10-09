@@ -274,18 +274,23 @@ class SettingsView(Vertical):
         try:
             res = svc.verify()
         except Exception as exc:
-            body.append(f"Version unavailable ({exc})", style="dim")
+            body.append(f"Couldn't check your records ({exc})", style="dim")
             return
         if res.is_valid:
+            if not res.first_seq:
+                # An empty ledger is not a pass. `verify` returns is_valid=True for zero
+                # rows, and a fully truncated ledger looks identical.
+                body.append("⚠ ", style=DOT_BAD)
+                body.append("EMPTY · NOTHING TO VERIFY\n", style="bold")
+                body.append("No audit records are available to verify.\n")
+                body.append("This does not prove the ledger is intact.\n", style="dim")
+                return
             body.append("● ", style=DOT_OK)
             body.append("VALID · VERIFIED\n", style=f"bold {DOT_OK}")
-            if res.first_seq:
-                body.append("Chain Status       VERIFIED\n", style="dim")
-                body.append(f"Events Checked     {res.events_verified}\n")
-                body.append(f"Chain Breaks       {len(res.sequence_gaps)}\n")
-            else:
-                body.append("No audit events found\n", style="dim")
-                return
+            body.append("Chain Status       VERIFIED\n", style="dim")
+            body.append(f"Events Checked     {res.events_verified}\n")
+            body.append(f"Chain Breaks       {len(res.sequence_gaps)}\n")
+            body.append("This does not prove no records are missing.\n", style="dim")
         else:
             body.append("× ", style=DOT_BAD)
             body.append("TAMPER DETECTED\n", style=f"bold {DOT_BAD}")

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from trace_core.core.canonical import canonical_json
 from trace_core.core.database.repository import SqlAlchemyBaseRepository
+from trace_core.core.domain import bound_actor
 from trace_core.devices.domain import (
     DeviceFingerprint,
     DeviceInspection,
@@ -25,7 +26,7 @@ from trace_core.devices.domain import (
     UnknownCause,
     WpVerdict,
 )
-from trace_core.devices.models import DeviceFingerprintModel, bound_actor
+from trace_core.devices.models import DeviceFingerprintModel
 
 
 class DeviceRepository(Protocol):

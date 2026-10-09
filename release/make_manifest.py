@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 
+from trace_core.core.database.migrations import MIGRATIONS
 from trace_core.core.fs import check_contained, ensure_dir, sha256_file
 
 
@@ -60,10 +61,18 @@ def main() -> None:
         "signing_key_id": "",
         "artifacts": artifacts,
     }
-    if min_version is not None:
-        manifest["minimum_supported_version"] = min_version
-    if notes is not None:
-        manifest["notes"] = notes
+    # A release that cannot state its floor must not ship one. The workflow's "fail closed"
+    # assertion could never fire because two shell fallbacks above it guaranteed both
+    # values were non-empty, so a tag push published floor 0.2.5 whatever the real minimum
+    # was. Failing here means a missing floor stops the build instead of silently shipping
+    # a wrong one.
+    missing = [name for name, value in (("min-version", min_version), ("notes", notes)) if not value]
+    if missing:
+        raise SystemExit(f"refusing to publish a release without {' and '.join(missing)}")
+    manifest["minimum_supported_version"] = min_version
+    manifest["notes"] = notes
+    manifest["schema_min"] = 1
+    manifest["schema_target"] = MIGRATIONS[-1][0]
     ensure_dir(out.parent)
     out.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 

@@ -94,13 +94,9 @@ def _record_audit(  # type: ignore[no-untyped-def]
     claimed: str | None = None,
 ):
     from trace_core.audit.service import AuditService
-    from trace_core.core.operators import current_identity
 
     action, subject, details, ctx = builder_tuple
-    actual, _ = current_identity()
-    if claimed and claimed.strip() and claimed.strip() != actual:
-        details = {**details, "claimed_actor": claimed.strip()}
-    return AuditService().record(session, action, subject, actor, details, ctx)
+    return AuditService().record_hook(lambda: (action, subject, details, ctx), actor, claimed)(session)
 
 
 def _audit_hook(

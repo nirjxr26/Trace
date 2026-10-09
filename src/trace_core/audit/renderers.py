@@ -429,16 +429,49 @@ def _what_text(mismatch_type: str | None) -> str:
         return "payload_json edited but payload_hash not updated"
     if mismatch_type == "prev_chain":
         return "prev_chain linkage broken"
+    if mismatch_type == "signing_key":
+        return "verification key is the shipped default, not this ledger's signing key"
     if mismatch_type == "signature":
         return "signature mismatch (event not signed by trusted key)"
     return "chain_hash mismatch"
+
+
+def _render_empty(anchor: str | None = None) -> None:
+    """Zero records is not a pass. `verify_rows` returns is_valid=True for an empty
+    ledger, so without this the headline read "✓ VALID / Ledger intact" for a ledger
+    that may in fact have been fully truncated."""
+    from trace_core.core.ui.renderers import console
+
+    rows: list[tuple[str, Any]] = [
+        ("Checked", "audit_events"),
+        ("Records", "0 available to verify"),
+        (
+            "Result",
+            Text(
+                "⚠ No audit records are available to verify. This does not prove the ledger is intact.",
+                style=THEME_TOKENS["warning"],
+            ),
+        ),
+    ]
+    if anchor:
+        rows.append(
+            ("Anchor", Text(f"{anchor} names records this ledger does not have.", style=THEME_TOKENS["warning"]))
+        )
+    else:
+        rows.append(("Next", "Run `trace doctor` if records were expected."))
+    render_key_value_grid("Audit Verify — ⚠ EMPTY", rows)
+    console.print("")
 
 
 def _render_valid(res: VerifyResultDto, anchor: str | None = None) -> None:
     from trace_core.core.ui.renderers import console
 
     gaps_str = ", ".join(str(g) for g in res.sequence_gaps) if res.sequence_gaps else "None"
-    note = " (rolled-back, not tampering)" if res.sequence_gaps else ""
+    note = (
+        " — absent. The chain links across them, so no record was altered to create the gap."
+        if res.sequence_gaps
+        else ""
+    )
     rows: list[tuple[str, Any]] = [
         ("Chain", "trace-audit-v1 · SHA-256 · trace-canonical-json-v1"),
         (
@@ -461,7 +494,16 @@ def _render_valid(res: VerifyResultDto, anchor: str | None = None) -> None:
                 Text("No anchor checked — tail truncation is undetectable without one.", style=THEME_TOKENS["warning"]),
             )
         )
-    rows.append(("Result", Text(f"{get_success_icon()} No tampering. Ledger intact.", style=THEME_TOKENS["success"])))
+    rows.append(
+        (
+            "Result",
+            Text(
+                f"{get_success_icon()} Every record checked matched. This confirms those records are unaltered; "
+                "it does not prove no records are missing.",
+                style=THEME_TOKENS["success"],
+            ),
+        )
+    )
     render_key_value_grid("Audit Verify — ✓ VALID", rows)
     console.print("[dim]Tip: export with `audit export --out bundle.jsonl` to preserve chain.[/dim]")
     if res.events_verified > 0 and not res.sequence_gaps:
@@ -474,6 +516,32 @@ def _render_valid(res: VerifyResultDto, anchor: str | None = None) -> None:
 
 
 def _render_tamper(res: VerifyResultDto) -> None:
+    if res.mismatch_type == "signing_key":
+        render_key_value_grid(
+            "Audit Verify — ⚠ SIGNING KEY UNAVAILABLE",
+            [
+                ("Where", f"Seq {res.first_mismatch_seq} · signature"),
+                ("What", _what_text(res.mismatch_type)),
+                (
+                    "Chain",
+                    f"payload_hash and chain_hash matched through seq {res.first_mismatch_seq}; only the signature could not be checked",
+                ),
+                ("Gaps", ", ".join(str(g) for g in res.sequence_gaps) if res.sequence_gaps else "None"),
+                (
+                    "Result",
+                    Text(
+                        "⚠ Signatures not verifiable. This is a key problem, NOT evidence of tampering.",
+                        style=THEME_TOKENS["warning"],
+                    ),
+                ),
+                (
+                    "Action",
+                    "→ Set TRACE_SECRET_KEY to the key this ledger was signed with, then re-run. "
+                    "Do not restore from backup on the strength of this message alone.",
+                ),
+            ],
+        )
+        return
     where = f"Seq {res.first_mismatch_seq} · {res.mismatch_type}"
     render_key_value_grid(
         "Audit Verify — ✗ TAMPER DETECTED",
@@ -501,7 +569,10 @@ def _render_tamper(res: VerifyResultDto) -> None:
 
 
 def render_verify_result(res: VerifyResultDto, anchor: str | None = None) -> None:
-    if res.is_valid:
-        _render_valid(res, anchor)
+    if not res.is_valid:
+        _render_tamper(res)
         return
-    _render_tamper(res)
+    if res.events_verified == 0:
+        _render_empty(anchor)
+        return
+    _render_valid(res, anchor)

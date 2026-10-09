@@ -66,12 +66,16 @@ def test_enumeration_survives_a_broken_document(monkeypatch: pytest.MonkeyPatch)
         assert linux.LinuxDevice().list_block_devices() is not None
 
 
-def test_enumeration_is_empty_when_lsblk_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_enumeration_raises_when_lsblk_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Used to return [], which rendered "0 devices" under a green marker — read as
+    "no drive attached" when in fact nothing could be enumerated."""
+
     def _absent(**_k):
         raise HelperFailure(UnknownCause.TOOL_MISSING, "lsblk missing")
 
     monkeypatch.setattr(linux, "lsblk_json", _absent)
-    assert linux.LinuxDevice().list_block_devices() == []
+    with pytest.raises(HelperFailure):
+        linux.LinuxDevice().list_block_devices()
 
 
 def test_enumeration_never_opens_a_device_for_content(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -261,6 +265,14 @@ def test_a_cold_inspect_still_reads_the_row_it_needs(monkeypatch: pytest.MonkeyP
     assert len(calls) == 1
 
 
+def test_enumeration_is_empty_when_lsblk_reports_no_devices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A genuinely empty machine still reports zero devices. Only a *failure* to enumerate
+    differs, and that must not look like the same thing."""
+    monkeypatch.setattr(linux, "lsblk_json", lambda **_k: {"blockdevices": []})
+    adapter = linux.LinuxDevice()
+    assert adapter.list_block_devices() == []
+
+
 def test_enumeration_refreshes_a_stale_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = linux.LinuxDevice()
     first = {"blockdevices": [{"name": "sda", "serial": "OLD"}]}
@@ -273,7 +285,9 @@ def test_enumeration_refreshes_a_stale_cache(monkeypatch: pytest.MonkeyPatch) ->
     assert adapter._rows["sda"]["serial"] == "NEW"
 
 
-def test_enumeration_failure_clears_a_previously_cached_row(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_enumeration_failure_is_raised_not_reported_as_no_devices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Returning [] on a failed lsblk rendered "0 devices" with a green marker, which reads
+    as "no drive attached". The failure now propagates so the caller can say it could not tell."""
     adapter = linux.LinuxDevice()
     monkeypatch.setattr(linux, "lsblk_json", lambda **_k: LSBLK)
     adapter.list_block_devices()
@@ -282,8 +296,9 @@ def test_enumeration_failure_clears_a_previously_cached_row(monkeypatch: pytest.
         raise HelperFailure(UnknownCause.TOOL_MISSING, "lsblk gone")
 
     monkeypatch.setattr(linux, "lsblk_json", _gone)
-    assert adapter.list_block_devices() == []
-    assert adapter._rows == {}
+    with pytest.raises(HelperFailure):
+        adapter.list_block_devices()
+    assert adapter._rows == {}, "a stale row must not survive a failed enumeration"
 
 
 def test_lsblk_row_is_looked_up_by_exact_name(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -427,7 +442,7 @@ def test_probe_reports_read_only_only_when_every_probe_agrees(monkeypatch: pytes
         (True, False, UnknownCause.SYSFS_DISAGREEMENT),
         (False, True, UnknownCause.SYSFS_DISAGREEMENT),
         (None, True, UnknownCause.SYSFS_DISAGREEMENT),
-        (True, None, None),
+        (True, None, UnknownCause.IOCTL_FAILURE),
     ],
 )
 def test_probe_disagreement_is_never_guessed(
@@ -583,3 +598,56 @@ def test_change_token_lists_kernel_block_names_without_a_subprocess(
 def test_change_token_is_empty_when_sysfs_is_unreadable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(linux, "SYSFS_BLOCK", "/nonexistent-sys-block")
     assert linux.LinuxDevice().change_token() == ()
+
+
+def test_a_failed_ioctl_probe_is_never_reported_as_protected() -> None:
+    """Fail-open. `_blkroget` returns None when it cannot determine; `_probe_cause` fell
+    through every guard and returned None, which means "protection confirmed"."""
+    from trace_core.devices.domain import UnknownCause
+    from trace_core.devices.linux import _probe_cause
+
+    for sysfs_ro in (True, False):
+        assert _probe_cause(sysfs_ro, None, False) is not None, (
+            f"a failed ioctl probe was read as confirmed protection (sysfs_ro={sysfs_ro})"
+        )
+    assert _probe_cause(True, None, False) is UnknownCause.IOCTL_FAILURE
+    assert _probe_cause(True, True, False) is None, "an agreeing pair still confirms"
+    assert _probe_cause(False, False, False) is None
+    assert _probe_cause(True, False, False) is UnknownCause.SYSFS_DISAGREEMENT
+
+
+def test_an_unknown_verdict_is_not_rendered_as_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UNKNOWN and confirmed shared one render_success branch, so a source whose
+    protection could not be confirmed got the same green marker as a verified one."""
+    from trace_core.core.clock import now_utc
+    from trace_core.devices import commands
+    from trace_core.devices.domain import UnknownCause, WpVerdict
+    from trace_core.devices.dto import WpCheckDto
+
+    monkeypatch.setattr(commands, "render_gate", lambda *_a, **_k: None)
+    printed: list[str] = []
+    successes: list[str] = []
+    monkeypatch.setattr(commands.console, "print", lambda *a, **k: printed.append(str(a[0]) if a else ""))
+    monkeypatch.setattr(commands, "render_success", lambda m: successes.append(m))
+
+    for verdict in (WpVerdict.UNKNOWN, WpVerdict.READ_ONLY):
+        printed.clear()
+        successes.clear()
+        check = WpCheckDto(
+            verdict=verdict,
+            platform="linux",
+            adapter_version="1",
+            checked_at=now_utc(),
+            unknown_cause=UnknownCause.IOCTL_FAILURE if verdict is WpVerdict.UNKNOWN else None,
+            checks=[],
+        )
+        monkeypatch.setattr(commands, "do_check", lambda *_a, **_k: check)
+        try:
+            commands.check_device("sda", True, False, True, "reason", output="table")
+        except BaseException:
+            pass
+        if verdict is WpVerdict.UNKNOWN:
+            assert successes == [], f"UNKNOWN took the success branch: {successes}"
+            assert any("UNKNOWN" in m for m in printed), printed
+        else:
+            assert successes and "READ_ONLY" in successes[0], successes

@@ -3,11 +3,13 @@
 import hashlib
 import json
 from datetime import datetime
+from typing import cast
 from uuid import UUID
 
 import pytest
 import sqlalchemy
 import sqlalchemy.exc
+from sqlalchemy.engine import Connection
 
 from trace_core.audit.domain import GENESIS_CHAIN, AuditAction, chain_hash
 from trace_core.audit.dto import AuditFilterDto
@@ -17,6 +19,7 @@ from trace_core.audit.service import AuditService
 from trace_core.cases.dto import CaseCreateDto
 from trace_core.cases.service import CaseService
 from trace_core.core.canonical import canonical_json
+from trace_core.core.database.migrations import _install_sqlite_audit_triggers, apply_migrations
 from trace_core.core.database.session import DatabaseSessionManager
 
 pytestmark = pytest.mark.unit
@@ -76,6 +79,31 @@ def _tamper_seq_one(session_manager: DatabaseSessionManager) -> None:
         _enable_audit_triggers(conn)
 
 
+def _restamp_payload_leaving_signature_stale(session_manager: DatabaseSessionManager) -> None:
+    """Edit seq 1's payload and restamp payload_hash and chain_hash to match.
+
+    Every structural link is recomputed, so the only stale field left is the signature.
+    That isolates the signature check from the hash chain, which is the only way to reach it:
+    a verifier stops at the first mismatch, and the hash links are checked first.
+    """
+    with session_manager.engine.begin() as conn:
+        _disable_audit_triggers(conn)
+        row = conn.execute(
+            sqlalchemy.text("SELECT payload_json, prev_chain, seq FROM audit_events WHERE seq=1")
+        ).fetchone()
+        assert row is not None
+        obj = json.loads(row[0])
+        obj["details"]["title"] = "HACKED"
+        new_json = canonical_json(obj).decode("utf-8")
+        new_hash = hashlib.sha256(canonical_json(obj)).hexdigest()
+        new_chain = chain_hash(row[1], new_hash, row[2])
+        conn.execute(
+            sqlalchemy.text("UPDATE audit_events SET payload_json=:j, payload_hash=:h, chain_hash=:c WHERE seq=1"),
+            {"j": new_json, "h": new_hash, "c": new_chain},
+        )
+        _enable_audit_triggers(conn)
+
+
 def test_mutate_payload_json_detected(session_manager: DatabaseSessionManager) -> None:
     CaseService(session_manager).create_case(CaseCreateDto(title="T1", lead_examiner="Ex"))
     with session_manager.engine.begin() as conn:
@@ -93,26 +121,131 @@ def test_mutate_payload_json_detected(session_manager: DatabaseSessionManager) -
 def test_mutate_payload_and_hash_still_chain_fails(session_manager: DatabaseSessionManager) -> None:
     CaseService(session_manager).create_case(CaseCreateDto(title="T1", lead_examiner="Ex"))
     CaseService(session_manager).create_case(CaseCreateDto(title="T2", lead_examiner="Ex"))
-    with session_manager.engine.begin() as conn:
-        _disable_audit_triggers(conn)
-        row = conn.execute(
-            sqlalchemy.text("SELECT payload_json, prev_chain, seq FROM audit_events WHERE seq=1")
-        ).fetchone()
-        assert row is not None
-        obj = json.loads(row[0])
-        obj["details"]["title"] = "HACKED"
-        new_json = canonical_json(obj).decode("utf-8")
-        new_hash = hashlib.sha256(canonical_json(obj)).hexdigest()
-        new_chain = chain_hash(row[1], new_hash, row[2])
-        conn.execute(
-            sqlalchemy.text("UPDATE audit_events SET payload_json=:j, payload_hash=:h, chain_hash=:c WHERE seq=1"),
-            {"j": new_json, "h": new_hash, "c": new_chain},
-        )
-        _enable_audit_triggers(conn)
+    _restamp_payload_leaving_signature_stale(session_manager)
     res = AuditService(session_manager).verify()
     assert res.is_valid is False
     assert res.first_mismatch_seq == 1
     assert res.mismatch_type == "signature"
+
+
+def test_default_key_reports_a_key_problem_not_tampering(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A wrong key must not be reported as an attack, but it must never read as valid.
+
+    Running outside the project directory loses `.env`, so the shipped placeholder key is
+    active and every signature recomputes to a different value. That is a key problem, and
+    the old wording told the operator to restore from backup.
+    """
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="T1", lead_examiner="Ex"))
+    _restamp_payload_leaving_signature_stale(session_manager)
+    monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+    res = AuditService(session_manager).verify()
+    assert res.is_valid is False, "a key problem must never be reported as a valid ledger"
+    assert res.mismatch_type == "signing_key"
+
+
+def test_default_key_still_reports_real_content_tampering_as_tampering(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The key diagnostic must not mask an actual edit to the record.
+
+    payload_hash is computed independently of the signing key, so edited content is still
+    caught with the placeholder active. This is the test that stops the diagnostic from
+    becoming a downgrade.
+    """
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="T1", lead_examiner="Ex"))
+    with session_manager.engine.begin() as conn:
+        _disable_audit_triggers(conn)
+        conn.execute(sqlalchemy.text("UPDATE audit_events SET payload_json=:j WHERE seq=1"), {"j": '{"a":1}'})
+        _enable_audit_triggers(conn)
+    monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+    res = AuditService(session_manager).verify()
+    assert res.is_valid is False
+    assert res.mismatch_type == "payload_hash", "an edited payload must never be excused as a key problem"
+
+
+def test_real_key_signature_tampering_is_still_reported_as_a_signature(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    """With the ledger's own key active, a stale signature stays a signature finding."""
+    CaseService(session_manager).create_case(CaseCreateDto(title="T1", lead_examiner="Ex"))
+    CaseService(session_manager).create_case(CaseCreateDto(title="T2", lead_examiner="Ex"))
+    _restamp_payload_leaving_signature_stale(session_manager)
+    res = AuditService(session_manager).verify()
+    assert res.is_valid is False
+    assert res.mismatch_type == "signature"
+
+
+def test_the_key_problem_says_set_the_key_and_not_restore_from_backup() -> None:
+    """The remedy is the whole point: a phantom incident must not send an operator to restore."""
+    from trace_core.audit.dto import VerifyResultDto
+    from trace_core.audit.renderers import render_verify_result
+    from trace_core.core.ui.renderers import console
+
+    with console.capture() as capture:
+        render_verify_result(
+            VerifyResultDto(is_valid=False, events_verified=0, first_mismatch_seq=1, mismatch_type="signing_key")
+        )
+    out = capture.get()
+    assert "SIGNING KEY UNAVAILABLE" in out
+    assert "TAMPER DETECTED" not in out
+    assert "Restore audit_events from backup" not in out
+    assert "TRACE_SECRET_KEY" in out
+
+
+def test_a_key_problem_does_not_also_report_tampering(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two cards used to print opposite conclusions, the destructive one last.
+
+    The renderer said "NOT evidence of tampering... do not restore from backup", then
+    `do_verify` raised `AuditTamperError` and the error card said "Tamper detected...
+    restore from backup" directly beneath it.
+    """
+    from trace_core.audit.helpers import do_verify
+    from trace_core.core.errors import ApplicationError, AuditTamperError
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="T1", lead_examiner="Ex"))
+    _restamp_payload_leaving_signature_stale(session_manager)
+    monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+    with pytest.raises(ApplicationError) as exc:
+        do_verify(AuditService(session_manager), "json", None)
+    assert not isinstance(exc.value, AuditTamperError)
+    assert "tamper" not in str(exc.value).lower()
+    assert "restore" not in str(exc.value).lower()
+
+
+def test_real_tampering_still_reports_tampering(session_manager: DatabaseSessionManager) -> None:
+    """The narrowing must not weaken the genuine case."""
+    from trace_core.audit.helpers import do_verify
+    from trace_core.core.errors import AuditTamperError
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="T1", lead_examiner="Ex"))
+    CaseService(session_manager).create_case(CaseCreateDto(title="T2", lead_examiner="Ex"))
+    _tamper_seq_one(session_manager)
+    with pytest.raises(AuditTamperError, match="Tamper detected at seq 1"):
+        do_verify(AuditService(session_manager), "json", None)
+
+
+def test_the_tamper_remedy_names_key_rotation_not_only_a_restore(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Rotating TRACE_SECRET_KEY reads as signature tampering; restoring cannot fix that."""
+    import typer
+
+    from trace_core.core.cli.error_handler import capture_cli_errors
+    from trace_core.core.errors import AuditTamperError
+
+    with pytest.raises(typer.Exit), capture_cli_errors("Audit Verify"):
+        raise AuditTamperError("signature mismatch")
+    out = capsys.readouterr().out
+    assert "TRACE_SECRET_KEY" in out, out
 
 
 def test_mutate_chain_hash_detected(session_manager: DatabaseSessionManager) -> None:
@@ -471,3 +604,65 @@ def test_dto_and_export_disagree_only_on_the_three_documented_fields(
     assert isinstance(dto.subject_case_id, UUID)
     assert exported["subject_case_id"] == str(dto.subject_case_id)
     assert set(dto.model_dump()) - set(exported) == {"subject_type"}
+
+
+def _sqlite_trigger_names(session_manager: DatabaseSessionManager) -> set[str]:
+    with session_manager.engine.connect() as c:
+        rows = c.execute(
+            sqlalchemy.text("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='audit_events'")
+        ).fetchall()
+    return {r[0] for r in rows}
+
+
+def test_a_restored_database_regains_append_only_protection_on_startup(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    CaseService(session_manager).create_case(CaseCreateDto(title="Restore", lead_examiner="Ex"))
+    assert _sqlite_trigger_names(session_manager) == {"audit_events_no_update", "audit_events_no_delete"}
+
+    with session_manager.engine.begin() as c:
+        _disable_audit_triggers(c)
+    assert _sqlite_trigger_names(session_manager) == set()
+    with pytest.raises(Exception):
+        with session_manager.session() as s:
+            s.execute(sqlalchemy.text("UPDATE audit_events SET actor='tampered' WHERE seq=1"))
+
+    apply_migrations(session_manager.engine)
+
+    assert _sqlite_trigger_names(session_manager) == {"audit_events_no_update", "audit_events_no_delete"}
+    with pytest.raises(Exception):
+        with session_manager.session() as s:
+            s.execute(sqlalchemy.text("UPDATE audit_events SET actor='tampered' WHERE seq=1"))
+
+
+def test_reasserting_protection_leaves_a_healthy_database_alone(session_manager: DatabaseSessionManager) -> None:
+    from trace_core.core.database.migrations import _reassert_audit_protection
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="Healthy", lead_examiner="Ex"))
+    with session_manager.session() as s:
+        before = s.execute(sqlalchemy.text("SELECT count(*) FROM audit_events")).scalar()
+
+    _reassert_audit_protection(session_manager.engine)
+
+    with session_manager.session() as s:
+        assert s.execute(sqlalchemy.text("SELECT count(*) FROM audit_events")).scalar() == before
+
+
+def test_installing_the_sqlite_triggers_raises_when_one_cannot_be_created(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    class _FailThird:
+        def __init__(self, inner: object) -> None:
+            self._inner = inner
+            self.dialect = inner.dialect  # type: ignore[attr-defined]
+            self._n = 0
+
+        def execute(self, *a: object, **k: object):  # type: ignore[no-untyped-def]
+            self._n += 1
+            if self._n == 3:
+                raise sqlalchemy.exc.OperationalError("CREATE TRIGGER", {}, Exception("disk full"))
+            return self._inner.execute(*a, **k)  # type: ignore[attr-defined]
+
+    with session_manager.engine.connect() as c:
+        with pytest.raises(sqlalchemy.exc.OperationalError):
+            _install_sqlite_audit_triggers(cast(Connection, _FailThird(c)))

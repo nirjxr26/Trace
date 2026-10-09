@@ -190,6 +190,14 @@ def do_verify(svc: AuditService, output: str, anchor: str | None):  # type: igno
     res = svc.verify()
     verify_against_anchor(svc, res, anchor)
     render_verify(res, output, anchor)
+    if res.mismatch_type == "signing_key":
+        # The renderer already said this is a key problem, not tampering, and told the
+        # operator not to restore from backup. Raising AuditTamperError here printed a
+        # second card directly beneath it saying "Tamper detected... restore from
+        # backup" — two adjacent conclusions, opposite advice, the destructive one last.
+        from trace_core.core.errors import ApplicationError
+
+        raise ApplicationError("the signing key for this ledger isn't available, so signatures couldn't be checked")
     if not res.is_valid:
         raise AuditTamperError(f"Tamper detected at seq {res.first_mismatch_seq} ({res.mismatch_type})")
     return res

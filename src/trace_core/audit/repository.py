@@ -4,7 +4,7 @@ import re
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -193,6 +193,11 @@ class SqlAlchemyAuditRepository:
                     | ilike_literal(AuditEventModel.action, term)
                 )
         return stmt.order_by(AuditEventModel.seq.desc())
+
+    def count_events(self, f: AuditFilterDto | None = None) -> int:
+        filt = f or AuditFilterDto()
+        stmt = self._filtered(filt).with_only_columns(func.count(AuditEventModel.seq)).order_by(None)
+        return int(self.session.execute(stmt).scalar_one())
 
     def list_events(self, f: AuditFilterDto | None = None) -> list[AuditEventDto]:
         """Newest-first. Contract: seq/case_number exact, actor/action/search substring."""

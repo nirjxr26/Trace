@@ -44,7 +44,6 @@ class TraceAutoSuggest(AutoSuggest):
             "help",
             "exit",
             "update check",
-            "update history",
             "uninstall",
         ]
 

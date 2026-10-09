@@ -26,6 +26,7 @@ trap {
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
+$UnknownFlags = @()
 foreach ($rawArg in $args) {
     if ($rawArg -match '^--version=(.+)$') {
         $Version = $Matches[1]
@@ -41,7 +42,18 @@ foreach ($rawArg in $args) {
         $VerboseOutput = $true
     } elseif ($rawArg -eq '--help' -or $rawArg -eq '-h') {
         $Help = $true
+    } else {
+        # A typo'd flag used to be ignored, so `--purge-date` installed the default ref and
+        # `--uninstall --purge-data` silently dropped the data removal. install.sh exits 2.
+        $UnknownFlags += $rawArg
     }
+}
+
+if ($UnknownFlags.Count -gt 0 -and -not $Help -and -not $ListVersions) {
+    foreach ($bad in $UnknownFlags) {
+        Write-Host "Unknown flag '$bad'. Run with --help to see the options." -ForegroundColor Red
+    }
+    exit 2
 }
 
 $TraceHomeDir = Join-Path $Home ".trace"
@@ -299,6 +311,11 @@ function Show-Success {
     } else {
         Write-Output "Installation complete"
         Write-Output ("Trace {0} installed successfully." -f $Ver)
+    }
+    # Trace is installed and `trace` is on PATH; a failing doctor is reported separately and
+    # must not be reported as a completed install.
+    if ($script:DoctorFailed) {
+        exit 1
     }
 }
 
@@ -710,8 +727,12 @@ if (-not $SkipDbMigration) {
         Invoke-LiveCommand -Action { param($exe) & $exe doctor } -ActionArgs @($TraceExe)
         Write-Trace "  [OK] Database verified and up to date."
     } catch {
-        Write-Trace "  [!] Database unreachable. Trace will self-initialize on first use once it is reachable."
-        Write-Trace "      Start PostgreSQL or set TRACE_DATABASE_URL in .env, then run 'trace doctor' to verify."
+        # The failure is reported and carried into the exit status. It used to be swallowed
+        # into a log line, so an install onto a host that cannot verify its own records
+        # finished successfully.
+        $script:DoctorFailed = $true
+        Write-Trace "  [!] 'trace doctor' did not pass, so this host is not verified."
+        Write-Trace "      Run 'trace doctor' to see which check failed, fix it, then re-run the installer."
     }
 } else {
     Write-Trace "  Skipping database verification as requested."

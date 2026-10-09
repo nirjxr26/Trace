@@ -21,7 +21,7 @@ from trace_core.tui.widgets import DossierScroll, TablePane
 TABLE_ID = "audit-table"
 AUDIT_HEADER_ID = "audit-header"
 AUDIT_DETAIL_ID = "audit-detail"
-TABLE_COLUMNS = (("Seq", 7), ("Event", 12))
+TABLE_COLUMNS = (("Seq", 7), ("Event", 24))
 PAGE_ROWS = 200
 PREFETCH_LINES = 20
 
@@ -47,6 +47,7 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         self._manager = session_manager
         self._scope: str | None = None
         self._exhausted = False
+        self._total = 0
         self._detail_seq: int | None = None
         self._detail: AuditEventDto | None = None
 
@@ -70,15 +71,19 @@ class AuditView(TablePane[AuditEventSummaryDto]):
             with DossierScroll(id="audit-right"):
                 yield Static("Select an event…", id=AUDIT_DETAIL_ID)
 
-    def _window(self, before_seq: int | None) -> list[AuditEventSummaryDto]:
-        return self._svc.list_event_summaries(
-            AuditFilterDto(
-                case_number=self._scope,
-                search=self.query_one("#audit-search", Input).value.strip() or None,
-                before_seq=before_seq,
-                limit=PAGE_ROWS,
-            )
+    def _filter(self, before_seq: int | None = None, limit: int = PAGE_ROWS) -> AuditFilterDto:
+        return AuditFilterDto(
+            case_number=self._scope,
+            search=self.query_one("#audit-search", Input).value.strip() or None,
+            before_seq=before_seq,
+            limit=limit,
         )
+
+    def _window(self, before_seq: int | None) -> list[AuditEventSummaryDto]:
+        return self._svc.list_event_summaries(self._filter(before_seq))
+
+    def displayed_count(self) -> int:
+        return self._total
 
     def refresh_data(self) -> None:
         """Reload stream + detail. Called on mount, tab switch, and scope change."""
@@ -92,6 +97,15 @@ class AuditView(TablePane[AuditEventSummaryDto]):
             return
         self._exhausted = len(rows) < PAGE_ROWS
         self.fill_table(rows, [str(e.seq) for e in rows])
+        self._total = self._total_ledger()
+        self._update_header()
+
+    def _total_ledger(self) -> int:
+        try:
+            return self._svc.count_events(self._filter())
+        except Exception as exc:  # boundary: the stream still loads, but a wrong total is never silent
+            self.app.notify(f"Audit total unavailable: {exc}", severity="warning")
+            return len(self._items)
 
     def _extend(self) -> None:
         table = self._table()
@@ -139,15 +153,18 @@ class AuditView(TablePane[AuditEventSummaryDto]):
             )
             return
         details = parse_details(e.payload_json)
-        intact = verify_event(
-            e.payload_json,
-            e.payload_hash,
-            e.prev_chain,
-            e.chain_hash,
-            e.seq,
-            signature=e.signature,
-            key_id=e.key_id,
-        )
+        try:
+            intact = verify_event(
+                e.payload_json,
+                e.payload_hash,
+                e.prev_chain,
+                e.chain_hash,
+                e.seq,
+                signature=e.signature,
+                key_id=e.key_id,
+            )
+        except Exception:
+            intact = None
         pane = self.query_one("#audit-right", DossierScroll)
         rule = pane.divider()
         body = Text()
@@ -180,7 +197,7 @@ class AuditView(TablePane[AuditEventSummaryDto]):
                 body.append(f"{sanitize_terminal(format_change_value(after.get(field)))}\n", style=DOT_OK)
         body.append(rule)
         body.append("\nINTEGRITY\n", style=THEME_TOKENS["accent"])
-        body.append_text(integrity_line(intact))
+        body.append_text(integrity_line(intact, 0 if intact is not True else 1))
         body.append("\n")
         self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(body)
 

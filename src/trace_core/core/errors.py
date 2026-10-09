@@ -73,5 +73,15 @@ class AuditTamperError(ApplicationError):
     pass
 
 
+class AnchorVerificationError(AuditTamperError):
+    """Raised when an anchor file cannot be trusted: unsigned, forged, or for another ledger.
+
+    Subclasses AuditTamperError so callers catching a verification failure still catch this,
+    while the CLI can stop prescribing a ledger restore for what is an anchor problem.
+    """
+
+    pass
+
+
 class AuthorizationError(ApplicationError):
     """Raised when an operator lacks the role for an action."""

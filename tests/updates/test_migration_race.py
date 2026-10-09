@@ -28,6 +28,11 @@ def test_updater_migration_clears_marker(session_manager, temp_storage_root):
     assert marker_state() == ("absent", None)
 
 
+def test_no_backup_is_written_when_the_release_declares_no_schema(session_manager, temp_storage_root, tmp_path):
+    result = run_updater_migration(session_manager, "tx-backup-3", backup_dir=tmp_path / "backups")
+    assert result["backup"] is None
+
+
 def test_corrupt_marker_fails_closed(session_manager, temp_storage_root):
     from trace_core.updates.migration import marker_state, migration_marker_path
 

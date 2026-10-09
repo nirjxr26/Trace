@@ -11,7 +11,7 @@ import urllib.request
 import pytest
 
 from trace_core.updates import sources
-from trace_core.updates.errors import UpdateError, UpdateNetworkError
+from trace_core.updates.errors import UpdateError, UpdateNetworkError, UpdateResponseRefused
 
 
 def _response(body: bytes = b"") -> object:
@@ -83,7 +83,7 @@ def test_h10_partial_download_is_removed(tmp_path, monkeypatch) -> None:  # type
 
     monkeypatch.setattr(sources.urllib.request, "build_opener", lambda *_a, **_k: _Opener())
     monkeypatch.setattr(sources, "_validate_manifest_url", lambda _u: None)
-    with pytest.raises(UpdateNetworkError, match="too large"):
+    with pytest.raises(UpdateResponseRefused, match="exceeded"):
         sources.stream_artifact_to_file("https://example.test/base", "a.whl", dest, max_bytes=1 << 20)
     assert not Path(dest).exists(), "partial artifact must not survive a failed download"
 
@@ -304,7 +304,6 @@ def test_h10_urllib_error_still_propagates(tmp_path, monkeypatch) -> None:  # ty
 
     monkeypatch.setattr(sources.urllib.request, "build_opener", lambda *_a, **_k: _Opener())
     monkeypatch.setattr(sources, "_validate_manifest_url", lambda _u: None)
-    from trace_core.updates.errors import UpdateNetworkError
 
     with pytest.raises(UpdateNetworkError, match="boom"):
         sources.stream_artifact_to_file("https://example.test/base", "a.whl", dest, max_bytes=1 << 20)

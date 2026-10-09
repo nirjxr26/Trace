@@ -6,9 +6,17 @@ from contextlib import contextmanager
 import typer
 from pydantic import ValidationError as PydanticValidationError
 
-from trace_core.core.cli.exit_codes import EXIT_CONFLICT, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_USAGE, EXIT_VERIFY_FAILED
-from trace_core.core.domain import DomainError
+from trace_core.core.cli.exit_codes import (
+    EXIT_CONFLICT,
+    EXIT_ERROR,
+    EXIT_LEDGER_BROKEN,
+    EXIT_NOT_FOUND,
+    EXIT_USAGE,
+    EXIT_VERIFY_FAILED,
+)
+from trace_core.core.domain import DomainError, InvariantViolationError
 from trace_core.core.errors import (
+    AnchorVerificationError,
     ApplicationError,
     AuditTamperError,
     ConcurrencyConflictError,
@@ -56,8 +64,20 @@ def _device_error(e: Exception, operation_title: str | None, default_remediation
     verdict the error carries, not on the exception class alone.
     """
     from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SOURCE_WRITABLE, EXIT_UNKNOWN
-    from trace_core.devices.domain import DeviceAccessDeniedError, DeviceNotFoundError, WriteProtectionError
+    from trace_core.devices.domain import (
+        DeviceAccessDeniedError,
+        DeviceEnumerationError,
+        DeviceNotFoundError,
+        WriteProtectionError,
+    )
 
+    if isinstance(e, DeviceEnumerationError):
+        return (
+            operation_title or "Couldn't List Devices",
+            str(e),
+            default_remediation or "Nothing was changed. Check the device tooling is installed, then retry.",
+            EXIT_ERROR,
+        )
     if isinstance(e, DeviceNotFoundError):
         return (
             operation_title or "Device Not Found",
@@ -124,6 +144,7 @@ def _update_error(e: Exception, operation_title: str | None, default_remediation
             RecoveryError,
             UpdateNetworkError,
             UpdatePolicyBlockedError,
+            UpdateResponseRefused,
             UpdateVerificationError,
         )
 
@@ -139,6 +160,13 @@ def _update_error(e: Exception, operation_title: str | None, default_remediation
                 "Update Blocked",
                 "Update deferred by policy. See block reason.",
                 EXIT_UPDATE_BLOCKED,
+            ),
+            (
+                UpdateResponseRefused,
+                "Update Response Refused",
+                "The server answered, but the response was not one Trace will use. Retrying the "
+                "same URL will not change it. Nothing was installed.",
+                EXIT_ERROR,
             ),
             (
                 UpdateNetworkError,
@@ -202,6 +230,15 @@ def _typed_error(e: Exception, operation_title: str | None, default_remediation:
         )
     specs = (
         (
+            # Before DomainError: it is a subclass. Exit 2 tells a script to retry, which can
+            # never help when the rejected value came from stored data rather than the user.
+            InvariantViolationError,
+            "Internal Check Failed",
+            "Trace refused a value it generated or stored. This is not something to correct and "
+            "retry. Run `trace doctor`; your records were not changed.",
+            EXIT_ERROR,
+        ),
+        (
             ConcurrencyConflictError,
             "Concurrency Conflict",
             "Another process modified this record. Reload the latest state before modifying.",
@@ -214,18 +251,27 @@ def _typed_error(e: Exception, operation_title: str | None, default_remediation:
             "Check the record's current state; retry from a state that allows this change.",
             EXIT_ERROR,
         ),
-        (DomainError, "Invalid Input", "Correct the highlighted field and retry.", EXIT_USAGE),
+        (DomainError, "Invalid Input", "Trace refused this value. Correct the input and retry.", EXIT_USAGE),
+        (
+            AnchorVerificationError,
+            "Anchor Not Trusted",
+            "Check the anchor file itself. Verify without --anchor to check this ledger on "
+            "its own; a problem with the anchor says nothing about your records.",
+            EXIT_LEDGER_BROKEN,
+        ),
         (
             AuditTamperError,
             "Audit Verification Failed",
-            "Inspect audit chain for tampered sequence and restore from backup.",
-            EXIT_VERIFY_FAILED,
+            "Find where the records changed. If it's a signing-key rotation rather than an "
+            "edit, set TRACE_SECRET_KEY to the key these records were signed with first.",
+            EXIT_LEDGER_BROKEN,
         ),
     )
     for err_cls, title, remed, code in specs:
-        # Checked before ConflictError: it is a subclass, and a version conflict is a
-        # retry-after-reload condition, not a duplicate record. Both used to report
-        # EXIT_ERROR, which left EXIT_CONFLICT declared but unreachable.
+        # Checked before their own base classes: ConcurrencyConflictError is a ConflictError
+        # and a version conflict is a retry-after-reload condition, not a duplicate record.
+        # AnchorVerificationError is an AuditTamperError and needs its own remedy, because a
+        # restore cannot fix an unsigned, forged or foreign anchor and would drop valid records.
         if (r := _match_typed(e, err_cls, title, remed, code, operation_title, default_remediation)) is not None:
             return r
     if isinstance(e, PydanticValidationError):

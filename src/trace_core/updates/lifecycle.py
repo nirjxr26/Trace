@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, Final
 
 import structlog
 
+from trace_core.core.domain import bound_actor
+from trace_core.core.service import BaseService
 from trace_core.updates.domain import UpdateFailureStage, UpdateResult, UpdateState, assert_transition
 from trace_core.updates.dto import UpdateResultDto
 from trace_core.updates.errors import UpdateError
@@ -80,23 +82,61 @@ class UpdateLifecycle:
         )
         self.state = to
 
-    def _override_note(self, current: str, manifest: ReleaseManifest, allow_minimum_bypass: bool) -> str | None:
+    def _override_parts(
+        self, current: str, manifest: ReleaseManifest, allow_minimum_bypass: bool
+    ) -> list[tuple[str, str, str]]:
         from trace_core.updates.migration import current_schema_version
         from trace_core.updates.policy import minimum_bypass_note
 
-        parts = []
+        parts: list[tuple[str, str, str]] = []
         if allow_minimum_bypass:
             note = minimum_bypass_note(current, manifest)
             if note:
-                parts.append(note)
+                parts.append(("minimum_supported_version", manifest.minimum_supported_version or "", note))
         if manifest.backup_waiver and manifest.schema_target is not None:
             try:
                 if manifest.schema_target > current_schema_version(self.session_manager):
-                    parts.append(f"backup waived: {manifest.backup_waiver}")
+                    parts.append(("backup_waiver", manifest.backup_waiver, f"backup waived: {manifest.backup_waiver}"))
             except Exception as exc:
                 structlog.get_logger().warning("override-note schema check failed", error=str(exc))
-                parts.append("schema check unavailable; see logs")
-        return "; ".join(parts) or None
+                parts.append(("backup_waiver", manifest.backup_waiver, "schema check unavailable; see logs"))
+        return parts
+
+    def _override_note(self, current: str, manifest: ReleaseManifest, allow_minimum_bypass: bool) -> str | None:
+        return "; ".join(text for _, _, text in self._override_parts(current, manifest, allow_minimum_bypass)) or None
+
+    def _ledger_override(
+        self,
+        current: str,
+        manifest: ReleaseManifest,
+        parts: list[tuple[str, str, str]],
+    ) -> None:
+        if not parts:
+            return
+        from trace_core.audit.builder import for_update_policy_override
+        from trace_core.audit.service import AuditService
+        from trace_core.core.operators import current_identity, require_mutator
+
+        gates = ",".join(gate for gate, _, _ in parts)
+        blocked = ",".join(blocked for _, blocked, _ in parts)
+        reason = "; ".join(text for _, _, text in parts)
+        user, host = current_identity()
+        with BaseService(self.session_manager).transaction() as uow:
+            require_mutator(uow.session, action="update policy override")
+            actor = bound_actor(f"{user}@{host}")
+            uow.before_commit(
+                AuditService(self.session_manager).record_hook(
+                    lambda: for_update_policy_override(
+                        from_version=current,
+                        to_version=manifest.version,
+                        authorized_by=actor,
+                        gate=gates,
+                        blocked_reason=blocked,
+                        reason=reason,
+                    ),
+                    actor,
+                )
+            )
 
     def _check_release_health(
         self,
@@ -165,6 +205,9 @@ class UpdateLifecycle:
             update_migration_owner,
         )
 
+        pre_parts = self._override_parts(current, manifest, allow_minimum_bypass)
+        pre_note = "; ".join(text for _, _, text in pre_parts) or None
+        self._ledger_override(current, manifest, pre_parts)
         with update_lock(), update_migration_owner(self.transaction_id):
             begin_update_migration(self.transaction_id)
             try:
@@ -178,6 +221,7 @@ class UpdateLifecycle:
                     started_at,
                     allow_minimum_bypass,
                     progress,
+                    override_note=pre_note,
                 )
             except UpdatePolicyBlockedError:
                 raise
@@ -196,7 +240,7 @@ class UpdateLifecycle:
                         result=UpdateResult.FAILED,
                         failure_stage=failure_stage,
                         failure_reason=str(e),
-                        override_reason=self._override_note(current, manifest, allow_minimum_bypass),
+                        override_reason=pre_note,
                     )
                 except Exception as record_exc:
                     structlog.get_logger().warning("failure history recording failed", error=str(record_exc))
@@ -320,6 +364,7 @@ class UpdateLifecycle:
         started_at: datetime,
         allow_minimum_bypass: bool = False,
         progress: ProgressCallback = SILENT,
+        override_note: str | None = None,
     ) -> UpdateResultDto:
         from trace_core.core.database.health import fetch_db_snapshot
         from trace_core.updates.migration import current_schema_version, run_updater_migration
@@ -341,7 +386,8 @@ class UpdateLifecycle:
                     raise UpdateError("unknown forensic-operation state; failing closed")
 
             ok, reason = is_installable(current, manifest, channel, forensic_active, allow_minimum_bypass)
-            override_note = self._override_note(current, manifest, allow_minimum_bypass) if ok else None
+            if override_note is None:
+                override_note = self._override_note(current, manifest, allow_minimum_bypass) if ok else None
             if not ok:
                 from trace_core.updates.errors import UpdatePolicyBlockedError
 

@@ -41,8 +41,14 @@ _ALLOWED: dict[UpdateState, set[UpdateState]] = {
     UpdateState.MIGRATING: {UpdateState.HEALTH_CHECK, UpdateState.ROLLING_BACK, UpdateState.FAILED},
     UpdateState.HEALTH_CHECK: {UpdateState.COMPLETED, UpdateState.ROLLING_BACK, UpdateState.FAILED},
     UpdateState.ROLLING_BACK: {UpdateState.ROLLED_BACK, UpdateState.RECOVERY_REQUIRED, UpdateState.FAILED},
+    # ROLLED_BACK has no outgoing edge. It is a durable terminal: the rollback already ran
+    # and previous-version now names the release that failed, so re-entering would
+    # re-activate that release. `trace recovery` reads the marker, not this table.
+    UpdateState.ROLLED_BACK: set(),
     UpdateState.FAILED: {UpdateState.IDLE},
-    UpdateState.RECOVERY_REQUIRED: {UpdateState.IDLE},
+    # Not a dead end. RECOVERY_REQUIRED had one outgoing edge and no caller ever took it,
+    # so a user who reached it had no way back. ROLLED_BACK is what recovery records.
+    UpdateState.RECOVERY_REQUIRED: {UpdateState.ROLLED_BACK, UpdateState.IDLE},
 }
 
 

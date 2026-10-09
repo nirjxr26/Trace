@@ -107,6 +107,7 @@ def check_for_update(manifest_path: str | Path, channel: str = "stable", forensi
     installable, reason = is_installable(current, manifest, channel, forensic_active)
     return {
         "current": current,
+        "version_problem": pointer_version()[1],
         "manifest": manifest,
         "available": available,
         "installable": installable if available else False,
@@ -114,20 +115,41 @@ def check_for_update(manifest_path: str | Path, channel: str = "stable", forensi
     }
 
 
-def get_installed_version() -> str:
-    """Single source for installed version. Active pointer wins, else package settings (legacy/source mode)."""
-    from trace_core.core.settings import settings as _settings
+def pointer_version() -> tuple[str | None, str | None]:
+    """(version, problem) from the install pointer.
+
+    An absent pointer is normal — source checkouts and plain `pip install` have none, and
+    the package version is authoritative there. An *unreadable* one is not: the old getter
+    caught OSError and fell through to the package version, so `update install` printed
+    "You're up to date — v0.3.0" and exited 0 on a machine whose real version was unknown.
+
+    version is None when the pointer cannot be trusted; problem names why.
+    """
+    from trace_updater import updater as updater_mod
 
     try:
-        from trace_updater import updater as updater_mod
-
         base = updater_mod.install_root()
+    except OSError as e:
+        return None, f"the install location could not be read ({e})"
+    try:
         active = updater_mod.read_active(base)
-        if active:
-            return active
-    except OSError:
-        pass
-    return _settings.version
+    except (OSError, ValueError) as e:
+        return None, f"the version pointer could not be read ({e})"
+    if not active:
+        return None, None
+    return active, None
+
+
+def get_installed_version() -> str:
+    """Single source for installed version. Active pointer wins, else package settings (legacy/source mode).
+
+    A package-version fallback is not evidence of what is installed. Callers that report
+    status use `pointer_version()` so an unreadable pointer is named rather than papered over.
+    """
+    from trace_core.core.settings import settings as _settings
+
+    version, _problem = pointer_version()
+    return version if version is not None else _settings.version
 
 
 def _cached_check_http(key: str, channel: str, cached: dict[str, Any] | None) -> dict[str, Any]:

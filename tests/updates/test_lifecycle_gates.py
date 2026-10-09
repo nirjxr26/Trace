@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from trace_core.updates.dto import UpdateResultDto
@@ -5,6 +7,10 @@ from trace_core.updates.errors import UpdateNotAvailableError, UpdateVerificatio
 from trace_core.updates.lifecycle import UpdateLifecycle
 
 pytestmark = pytest.mark.unit
+
+
+def _raise_interrupt(*_a: object, **_k: object) -> None:
+    raise KeyboardInterrupt
 
 
 def test_run_rejects_downgrade_directly(session_manager, signed_release):
@@ -21,6 +27,20 @@ def test_run_rejects_same_version(session_manager, signed_release):
         life.run(manifest, art_path)
 
 
+def test_an_interrupt_is_recorded_as_a_failure(session_manager, signed_release, monkeypatch):
+    manifest, _, art_path, _ = signed_release(version="1.5.0")
+    life = UpdateLifecycle("tx-interrupt-1", session_manager)
+    recorded: list[dict] = []
+    monkeypatch.setattr(life, "_record", lambda *a, **k: recorded.append(k))
+    monkeypatch.setattr(life, "_run_locked", _raise_interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        life.run(manifest, art_path)
+
+    assert [str(r["result"]) for r in recorded] == ["FAILED"]
+    assert "KeyboardInterrupt" in recorded[0]["failure_reason"]
+
+
 def test_bypass_override_recorded(session_manager, signed_release, release_keys, monkeypatch, tmp_path):
     from trace_core.core.settings import settings
     from trace_core.updates import signing
@@ -31,6 +51,53 @@ def test_bypass_override_recorded(session_manager, signed_release, release_keys,
     dto = UpdateLifecycle("tx-gate-3", session_manager).run(manifest, art_path, allow_minimum_bypass=True)
     assert dto.override_reason is not None
     assert "9.9.9" in dto.override_reason
+
+
+def test_bypass_is_ledgered_before_any_code_is_replaced(
+    session_manager, signed_release, release_keys, monkeypatch, tmp_path
+):
+    import sqlalchemy
+
+    from trace_core.audit.models import AuditEventModel
+    from trace_core.core.settings import settings
+    from trace_core.updates import signing
+
+    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
+    signing.import_release_pubkey(release_keys["pub_hex"])
+    manifest, _, art_path, _ = signed_release(minimum_supported_version="9.9.9")
+    UpdateLifecycle("tx-gate-ledger", session_manager).run(manifest, art_path, allow_minimum_bypass=True)
+
+    with session_manager.session() as session:
+        rows = list(
+            session.scalars(
+                sqlalchemy.select(AuditEventModel).where(AuditEventModel.action == "UPDATE_POLICY_OVERRIDE")
+            )
+        )
+    assert len(rows) == 1, rows
+    details = json.loads(rows[0].payload_json)["details"]
+    assert details["gate"] == "minimum_supported_version"
+    assert details["blocked_reason"] == "9.9.9"
+    assert "9.9.9" in details["reason"]
+    assert details["authorized_by"]
+    assert rows[0].actor
+
+
+def test_an_unwaived_gate_writes_no_override_row(session_manager, signed_release, monkeypatch, tmp_path):
+    import sqlalchemy
+
+    from trace_core.audit.models import AuditEventModel
+    from trace_core.core.settings import settings
+
+    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
+    manifest, _, art_path, _ = signed_release()
+    UpdateLifecycle("tx-gate-nooverride", session_manager).run(manifest, art_path)
+
+    with session_manager.session() as session:
+        assert not list(
+            session.scalars(
+                sqlalchemy.select(AuditEventModel).where(AuditEventModel.action == "UPDATE_POLICY_OVERRIDE")
+            )
+        )
 
 
 def test_staged_reverify_failure(session_manager, signed_release, release_keys, monkeypatch, tmp_path):

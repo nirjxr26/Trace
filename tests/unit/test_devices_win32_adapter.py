@@ -3,6 +3,7 @@
 import ctypes
 import json
 import pathlib
+import sys
 from pathlib import Path
 from typing import cast
 
@@ -629,6 +630,27 @@ def test_wmi_enrichment_degrades_to_nothing(monkeypatch: pytest.MonkeyPatch) -> 
     assert win32.Win32Device()._wmi() == {}
     monkeypatch.setattr(win32, "run_capped", lambda argv, **k: b"{not json")
     assert win32.Win32Device()._wmi() == {}
+
+
+def test_the_invalid_handle_sentinel_is_the_value_ctypes_actually_returns() -> None:
+    assert win32.INVALID_HANDLE_VALUE == ctypes.wintypes.HANDLE(-1).value
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="needs the Win32 device namespace")
+def test_a_physical_drive_that_does_not_exist_yields_no_handle() -> None:
+    handle, error = win32._try_open(r"\\.\PhysicalDrive4242")
+    assert handle is None
+    assert error != 0
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="needs the Win32 device namespace")
+def test_enumeration_reports_only_drives_that_exist() -> None:
+    found = win32.Win32Device().list_block_devices()
+    indices = [i for i in (win32._index_of(d.node) for d in found) if i is not None]
+    assert len(indices) == len(found)
+    assert indices == list(range(len(indices)))
+    without_capacity = [d.node for d in found if not d.size_bytes]
+    assert not without_capacity, f"listed as devices but reported no capacity: {without_capacity}"
 
 
 def test_wmi_enrichment_is_skipped_off_platform(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -123,6 +123,57 @@ def test_checker_accepts_http_url(serve, manifest_bytes, temp_storage_root):
     assert res["installable"] is True
 
 
+def _etag_handler(body, etag):
+    class _H(BaseHTTPRequestHandler):
+        seen: list[str | None] = []
+
+        def do_GET(self):
+            _H.seen.append(self.headers.get("If-None-Match"))
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.end_headers()
+                return
+            raw = body
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("ETag", etag)
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *a):
+            pass
+
+    _H.seen = []
+    return _H
+
+
+def test_a_repeat_check_revalidates_by_etag_and_serves_the_cache(serve, manifest_bytes, temp_storage_root):
+    from trace_core.updates import cache as check_cache
+    from trace_core.updates.checker import cached_check
+
+    handler = _etag_handler(manifest_bytes, '"abc123"')
+    base = serve(handler)
+    first = cached_check(f"{base}/stable.json", "stable")
+    assert first["target"] == "1.5.0"
+
+    second = cached_check(f"{base}/stable.json", "stable")
+    assert second["target"] == "1.5.0"
+    assert handler.seen[0] is None
+    assert handler.seen[1] == '"abc123"'
+    assert check_cache.read_check_cache() is not None
+
+
+def test_a_304_with_no_cache_falls_through_to_a_full_fetch(serve, manifest_bytes):
+    from trace_core.updates.checker import _cached_check_http
+
+    handler = _etag_handler(manifest_bytes, '"abc123"')
+    base = serve(handler)
+    payload = _cached_check_http(f"{base}/stable.json", "stable", None)
+    assert payload["target"] == "1.5.0"
+    assert handler.seen == [None]
+
+
 def test_ensure_artifact_path_downloads_fresh_and_verifies(serve, signed_release, temp_storage_root):
     from trace_core.updates.checker import ensure_artifact_path
     from trace_core.updates.manifest import load_manifest_bytes

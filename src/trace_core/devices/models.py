@@ -8,15 +8,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from trace_core.core.clock import now_utc
 from trace_core.core.database.base import Base, UTCDateTime
-from trace_core.core.domain import strip_controls
+from trace_core.core.domain import MAX_ACTOR
 from trace_core.devices.domain import MAX_DEVICE_STRING, MAX_NODE_LENGTH
-
-MAX_ACTOR = 255
-
-
-def bound_actor(value: str) -> str:
-    """Operator identity as stored. Single source for the column width both writers share."""
-    return strip_controls(value)[:MAX_ACTOR]
 
 
 class DeviceFingerprintModel(Base):

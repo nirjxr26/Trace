@@ -21,7 +21,8 @@ def test_pg_backup_invocation(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_run)
     mgr = DatabaseSessionManager("postgresql+psycopg://u:p@127.0.0.1:1/trace")
     out = backup_database(mgr, tmp_path / "backups")
-    assert out.name == "trace-backup.sql"
+    assert out.name.startswith("trace-backup-")
+    assert out.suffix == ".sql"
     assert seen["argv"][0] == "pg_dump"
     assert seen["argv"][1] == "postgresql://u@127.0.0.1:1/trace"
     assert ":p@" not in seen["argv"][1]

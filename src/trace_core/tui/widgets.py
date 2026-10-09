@@ -139,10 +139,13 @@ class TablePane[T](Vertical):
     def focus_default(self) -> None:
         self._table().focus()
 
+    def displayed_count(self) -> int:
+        return len(self._items)
+
     def _update_header(self) -> None:
         from trace_core.tui.theme import header_with_count
 
-        self.query_one(f"#{self.HEADER_ID}", Static).update(header_with_count(self.COLUMNS, len(self._items)))
+        self.query_one(f"#{self.HEADER_ID}", Static).update(header_with_count(self.COLUMNS, self.displayed_count()))
 
     def fill_table(self, rows: Sequence[T], keys: Sequence[str]) -> None:
         """Replace the table body and restore the cursor onto the same row index."""

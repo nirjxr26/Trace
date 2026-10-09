@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from trace_core.core.database.migrations import MIGRATIONS
+
 pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -29,9 +31,14 @@ def _run_manifest(
     for name, data in dist_files.items():
         (dist / name).write_bytes(data)
     env = {**os.environ, "PYTHONPATH": str(REPO_ROOT / "src")}
+    env.pop("TRACE_MANIFEST_MIN_VERSION", None)
+    env.pop("TRACE_MANIFEST_NOTES", None)
     if extra_env:
         env.update(extra_env)
-    cmd = [sys.executable, str(SCRIPT), "v9.9.9", "stable", "r9", "out.json"] + (extra_args or [])
+    # A release must state its floor, so the default is a valid one. `[]` means "no floor
+    # supplied at all", which must be refused.
+    args = extra_args if extra_args is not None else ["--min-version", "0.2.3", "--notes", "migration notes"]
+    cmd = [sys.executable, str(SCRIPT), "v9.9.9", "stable", "r9", "out.json"] + args
     return subprocess.run(
         cmd,
         cwd=tmp_path,
@@ -75,12 +82,32 @@ def test_manifest_refuses_two_wheels(tmp_path: Path) -> None:
     assert proc.returncode != 0
 
 
-def test_manifest_omits_optional_fields_by_default(tmp_path: Path) -> None:
-    proc = _run_manifest(tmp_path, {"trace-9.9.9-py3-none-any.whl": b"wheel-bytes"})
-    assert proc.returncode == 0, proc.stderr
-    manifest = _read_manifest(tmp_path)
-    assert "minimum_supported_version" not in manifest
-    assert "notes" not in manifest
+def test_a_release_without_a_floor_is_refused(tmp_path: Path) -> None:
+    """The workflow's "fail closed" step could never fire: two shell fallbacks above it
+    guaranteed both values were non-empty, so every tag push published floor 0.2.5 whatever
+    the real minimum was. The refusal now lives where the value is produced."""
+    proc = _run_manifest(tmp_path, {"trace-9.9.9-py3-none-any.whl": b"wheel-bytes"}, extra_args=[])
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "min-version" in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+    assert not (tmp_path / "out.json").exists(), "no manifest may be written without a floor"
+
+
+def test_a_release_with_notes_but_no_floor_is_still_refused(tmp_path: Path) -> None:
+    proc = _run_manifest(
+        tmp_path,
+        {"trace-9.9.9-py3-none-any.whl": b"wheel-bytes"},
+        extra_args=["--notes", "migration notes"],
+    )
+    assert proc.returncode != 0
+    assert "min-version" in (proc.stdout + proc.stderr)
+
+
+def test_the_workflow_has_no_fallback_that_defeats_its_own_assertion() -> None:
+    """`MIN_VER="${VAR:-0.2.5}"` is what made the floor assertion unfailable."""
+    workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "MANIFEST_MIN_VERSION:-" not in workflow, "a shell fallback defeats the floor assertion"
+    assert "MANIFEST_NOTES:-" not in workflow, "a shell fallback defeats the notes assertion"
+    assert ":-0.2.5" not in workflow, "the floor must not be hardcoded in the workflow"
 
 
 def test_manifest_includes_min_version_and_notes_via_flags(tmp_path: Path) -> None:
@@ -99,12 +126,21 @@ def test_manifest_includes_min_version_and_notes_via_env(tmp_path: Path) -> None
     proc = _run_manifest(
         tmp_path,
         {"trace-9.9.9-py3-none-any.whl": b"wheel-bytes"},
+        extra_args=[],
         extra_env={"TRACE_MANIFEST_MIN_VERSION": "0.2.3", "TRACE_MANIFEST_NOTES": "env notes"},
     )
     assert proc.returncode == 0, proc.stderr
     manifest = _read_manifest(tmp_path)
     assert manifest["minimum_supported_version"] == "0.2.3"
     assert manifest["notes"] == "env notes"
+
+
+def test_manifest_declares_the_schema_range_it_migrates_to(tmp_path: Path) -> None:
+    proc = _run_manifest(tmp_path, {"trace-9.9.9-py3-none-any.whl": b"wheel-bytes"})
+    assert proc.returncode == 0, proc.stderr
+    manifest = _read_manifest(tmp_path)
+    assert manifest["schema_target"] == MIGRATIONS[-1][0]
+    assert manifest["schema_min"] == 1
 
 
 def test_manifest_rejects_dangling_flag(tmp_path: Path) -> None:

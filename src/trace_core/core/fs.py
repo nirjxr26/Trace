@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 from collections.abc import Callable, Iterable
+from enum import StrEnum
 from pathlib import Path
 from typing import IO, Any
 
@@ -171,6 +172,32 @@ def fsync_dir(path: str | Path) -> None:
         pass
     finally:
         os.close(fd)
+
+
+class JsonFileVerdict(StrEnum):
+    OK = "ok"
+    CORRUPT = "corrupt"
+    UNREADABLE = "unreadable"
+
+
+def classify_json_file(path: str | Path) -> tuple[JsonFileVerdict, dict[str, Any] | None]:
+    target = Path(path)
+    try:
+        raw = target.read_text(encoding="utf-8")
+    except OSError:
+        return JsonFileVerdict.UNREADABLE, None
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return JsonFileVerdict.CORRUPT, None
+    if not isinstance(data, dict):
+        return JsonFileVerdict.CORRUPT, None
+    return JsonFileVerdict.OK, data
+
+
+def sqlite_sidecars(path: str | Path) -> tuple[Path, Path]:
+    base = Path(path)
+    return Path(f"{base}-wal"), Path(f"{base}-shm")
 
 
 def read_json_record(path: str | Path) -> dict[str, Any] | None:

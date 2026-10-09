@@ -46,31 +46,49 @@ def _triage_update_marker() -> None:
     with try_update_lock() as held:
         if not held:
             raise RecoveryBlockedError("a live updater owns migration; retry after it finishes")
+    if state == "unreadable":
+        # Holding the lock proves no updater is running. It does not prove this marker is
+        # stale, and it is the only record that an update owned migrations. Deleting it
+        # would destroy evidence the operator needs, so it stays.
+        raise RecoveryError(
+            "could not read the update marker, so it could not be cleared. It was left in place. "
+            "Close anything using this install and retry, or inspect the marker file."
+        )
     if state == "active":
-        tx = (active or {}).get("transaction_id", "unknown")
+        tx = (active or {}).get("transaction_id")
+        if not tx:
+            raise RecoveryError("update marker names no transaction; left in place for inspection")
         finish_update_migration(tx)
-    else:
-        tx = _corrupt_marker_id()
-        _clear_corrupt_marker()
-    console.print(f"[yellow]Cleared stale {state} update marker (transaction {tx}).[/yellow]")
-
-
-def _corrupt_marker_id() -> str:
-    import hashlib
-
-    from trace_core.updates.migration import migration_marker_path
-
-    try:
-        digest = hashlib.sha256(migration_marker_path().read_bytes()).hexdigest()[:12]
-    except OSError:
-        return "corrupt-unknown"
-    return f"corrupt-{digest}"
+        console.print(f"[yellow]Cleared the unfinished update marker for transaction {tx}.[/yellow]")
+        return
+    _clear_corrupt_marker()
+    console.print(
+        "[yellow]Cleared a corrupt update marker. Its contents could not be read, so it carried "
+        "no recoverable transaction id.[/yellow]"
+    )
 
 
 def _clear_corrupt_marker() -> None:
     from trace_core.updates.migration import migration_marker_path
 
     migration_marker_path().unlink(missing_ok=True)
+
+
+def _mark_rolled_back(marker: dict) -> None:
+    """Discharge the marker after a successful rollback.
+
+    `trace recovery` never wrote an outcome, so the marker stayed on the state that sent
+    it here — still RECOVERY_REQUIRED, still in _ROLLBACK_WORTHY_STATES. A second run
+    rolled back again, and `_advance_previous` had by then pointed previous-version at the
+    release that just failed, so it re-activated the bad release and reported success.
+    """
+    from trace_core.updates.domain import UpdateState
+    from trace_core.updates.marker import write_marker
+
+    try:
+        write_marker({**marker, "state": UpdateState.ROLLED_BACK.value, "rollback": True})
+    except Exception as exc:  # the rollback already happened; this only stops a repeat
+        console.print(f"[yellow]Could not record the rollback ({exc}). Re-running recovery may repeat it.[/yellow]")
 
 
 def _recover() -> None:
@@ -104,6 +122,7 @@ def _recover() -> None:
             from trace_core.updates.migration import rollback_release
 
             restored = rollback_release(base, mgr, marker.get("backup_path"))
+            _mark_rolled_back(marker)
             console.print(f"[green]Restored previous release {restored}.[/green]")
             return
         if state in _TERMINAL_STATES:

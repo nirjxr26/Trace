@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from trace_core.audit.domain import AuditAction
 from trace_core.audit.events import Context, Subject
 from trace_core.core.database.session import DatabaseSessionManager
+from trace_core.core.domain import bound_actor
 from trace_core.core.errors import AuthorizationError, ValidationError
 from trace_core.core.operators import current_identity, require_mutator
 from trace_core.core.service import BaseService, UnitOfWork
@@ -30,7 +31,6 @@ from trace_core.devices.domain import (
     WpVerdict,
     WriteProtectionError,
 )
-from trace_core.devices.models import bound_actor
 from trace_core.devices.ports import DeviceAdapter, DeviceEnumerator, DeviceInspector, WriteBlockerProbe
 from trace_core.devices.repository import SqlAlchemyDeviceRepository
 
@@ -53,7 +53,17 @@ class DeviceService(BaseService):
 
     def list_devices(self, kind: str = KIND_ALL) -> list[DeviceInfo]:
         """Zero persistence, zero audit events, zero evidentiary reads [D10], [D23]."""
-        devices = self.enumerator.list_block_devices()
+        try:
+            devices = self.enumerator.list_block_devices()
+        except Exception as exc:
+            from trace_core.devices._subprocess import HelperFailure
+            from trace_core.devices.domain import DeviceEnumerationError
+
+            if not isinstance(exc, HelperFailure):
+                raise
+            raise DeviceEnumerationError(
+                f"Could not list devices: {exc.detail}. This is not the same as finding none."
+            ) from exc
         if str(kind).strip().lower() == KIND_ALL:
             return devices
         wanted = _kind_or_error(kind)
@@ -189,11 +199,7 @@ class DeviceService(BaseService):
         """
         from trace_core.audit.service import AuditService
 
-        def _hook(session: Session) -> None:
-            action, subject, details, ctx = build()
-            AuditService().record(session, action, subject, actor, details, ctx)
-
-        return _hook
+        return AuditService().record_hook(build, actor)
 
 
 def _refusal_for(gate: GateCheck, acknowledge_unverified_source: bool) -> WriteProtectionError | None:

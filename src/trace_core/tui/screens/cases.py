@@ -54,6 +54,7 @@ class CasesView(TablePane[CaseResponseDto]):
         self._recent = False
         self._cases: list[CaseResponseDto] = []
         self._event_cache: dict[str, list] = {}
+        self._event_total: dict[str, int] = {}
 
     @property
     def _cases_svc(self) -> CaseService:
@@ -79,6 +80,7 @@ class CasesView(TablePane[CaseResponseDto]):
     def refresh_data(self) -> None:
         """Reload table + dossier. Called on mount, tab switch, and after every mutation."""
         self._event_cache.clear()
+        self._event_total.clear()
         try:
             self._cases = self._query()
         except Exception as exc:  # boundary: every service failure becomes a toast, never a crash
@@ -113,34 +115,35 @@ class CasesView(TablePane[CaseResponseDto]):
             body, case, rule, status_label(case.status, case.is_deleted), status_style(case.status, case.is_deleted)
         )
         self._append_meta(body, case, rule)
-        self._append_integrity(body, events, rule)
+        self._append_integrity(body, events, rule, case.number)
         self._append_history(body, case, events)
         self.query_one("#case-dossier", Static).update(body)
 
-    def _append_integrity(self, body, events, rule) -> None:  # type: ignore[no-untyped-def]
+    def _append_integrity(self, body, events, rule, case_number) -> None:  # type: ignore[no-untyped-def]
         from trace_core.audit.verifier import verify_event
         from trace_core.tui.theme import integrity_line
 
-        verified = True
-        for e in events:
-            try:
-                if not verify_event(
-                    e.payload_json,
-                    e.payload_hash,
-                    e.prev_chain,
-                    e.chain_hash,
-                    e.seq,
-                    signature=e.signature,
-                    key_id=e.key_id,
-                ):
+        verified: bool | None = None if events is None else True
+        if events:
+            for e in events:
+                try:
+                    if not verify_event(
+                        e.payload_json,
+                        e.payload_hash,
+                        e.prev_chain,
+                        e.chain_hash,
+                        e.seq,
+                        signature=e.signature,
+                        key_id=e.key_id,
+                    ):
+                        verified = False
+                        break
+                except Exception:
                     verified = False
                     break
-            except Exception:
-                verified = False
-                break
         body.append(rule)
         body.append("\nINTEGRITY\n", style=THEME_TOKENS["accent"])
-        body.append_text(integrity_line(verified))
+        body.append_text(integrity_line(verified, len(events or ()), sampled=self._dossier_total(case_number)))
         body.append("\n")
         body.append(rule)
         body.append("\n")
@@ -188,18 +191,36 @@ class CasesView(TablePane[CaseResponseDto]):
 
     def _dossier_events(self, case):  # type: ignore[no-untyped-def]
         # Recent audit events for the dossier, cached per case. Cleared on refresh.
-        # Empty on ledger errors.
+        # None means the ledger could not be read, which is not the same as no records.
         if case.number not in self._event_cache:
             try:
                 self._event_cache[case.number] = AuditService(self._manager).list_events(
                     AuditFilterDto(case_number=case.number, limit=6)
                 )
             except ApplicationError:
-                return []
+                return None
         return self._event_cache[case.number]
+
+    def _dossier_total(self, case_number: str) -> int | None:  # type: ignore[no-untyped-def]
+        # Total records for this case, so the integrity line can name its window instead of
+        # implying the whole history was checked. None when the count is unavailable.
+        cached = self._event_total.get(case_number)
+        if cached is not None:
+            return cached
+        try:
+            total = AuditService(self._manager).count_events(AuditFilterDto(case_number=case_number))
+        except ApplicationError:
+            return None
+        self._event_total[case_number] = total
+        return total
 
     def _append_history(self, body, case, events) -> None:  # type: ignore[no-untyped-def]
         # HISTORY proof block shared by dossier renders.
+        if events is None:
+            body.append("\nHISTORY\n", style=THEME_TOKENS["accent"])
+            body.append("Couldn't read the ledger for this case.\n")
+            body.append("\n")
+            return
         if not events:
             return
         from trace_core.audit.renderers import short_action_label

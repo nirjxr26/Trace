@@ -90,11 +90,13 @@ def verify_event(
 def _signature_mismatch(m: AuditEventModel) -> tuple[str, str] | None:
     if m.signature is None:
         return None
-    from trace_core.audit.signing import expected_signature, verify_bytes
+    from trace_core.audit.signing import expected_signature, is_default_key, verify_bytes
 
     raw = m.payload_json.encode("utf-8")
     if verify_bytes(m.key_id, raw, m.signature):
         return None
+    if is_default_key():
+        return "signing_key", m.signature
     return expected_signature(m.key_id, raw) or f"key:{m.key_id}", m.signature
 
 
@@ -110,6 +112,8 @@ def _row_mismatch(m: AuditEventModel, prev_chain: str) -> tuple[str, str, str] |
     signature = _signature_mismatch(m)
     if signature is not None:
         expected_s, actual_s = signature
+        if expected_s == "signing_key":
+            return "signing_key", "", actual_s
         return "signature", expected_s, actual_s
     return None
 

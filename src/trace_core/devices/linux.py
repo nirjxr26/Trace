@@ -88,11 +88,10 @@ class LinuxDevice:
         self._rows: dict[str, dict[str, Any]] = {}
 
     def list_block_devices(self) -> list[DeviceInfo]:
-        try:
-            document = lsblk_json()
-        except HelperFailure:
-            self._rows = {}
-            return []
+        # Cleared first so a failed enumeration cannot leave a previous run's rows behind
+        # for `inspect` to read as current evidence.
+        self._rows = {}
+        document = lsblk_json()
         self._rows = rows = _rows_by_name(document)
         return [info for info in (self._info(row) for _, row in sorted(rows.items())) if info is not None]
 
@@ -292,6 +291,8 @@ def _probe_cause(sysfs_ro: bool | None, ioctl: bool | OSError | None, exclusive:
             return UnknownCause.IOCTL_FAILURE
     if sysfs_ro is None:
         return UnknownCause.SYSFS_DISAGREEMENT
+    if ioctl is None:
+        return UnknownCause.IOCTL_FAILURE
     if isinstance(ioctl, bool) and ioctl is not sysfs_ro:
         return UnknownCause.SYSFS_DISAGREEMENT
     return None

@@ -1,4 +1,5 @@
 import json
+import sys
 
 import pytest
 from typer.testing import CliRunner
@@ -22,6 +23,12 @@ def test_cache_invalidates_on_content_change(signed_release, temp_storage_root, 
     second = runner.invoke(app, ["update", "check", "--output", "json"])
     assert second.exit_code == 0
     assert json.loads(second.stdout)["target"] == "1.6.0"
+
+
+def test_structlog_is_bound_to_stderr_not_stdout() -> None:
+    import structlog
+
+    assert structlog.get_config()["logger_factory"]._file is sys.stderr
 
 
 def test_stale_cache_not_served_for_changed_file(signed_release, temp_storage_root, monkeypatch):

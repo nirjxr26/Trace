@@ -28,6 +28,7 @@ class AuditAction(StrEnum):
     DEVICE_INSPECTED = "DEVICE_INSPECTED"
     DEVICE_GATE_CHECKED = "DEVICE_GATE_CHECKED"
     DEVICE_OVERRIDE = "DEVICE_OVERRIDE"
+    UPDATE_POLICY_OVERRIDE = "UPDATE_POLICY_OVERRIDE"
 
 
 ACTION_TITLES: Final[dict[str, str]] = {
@@ -40,6 +41,7 @@ ACTION_TITLES: Final[dict[str, str]] = {
     "DEVICE_INSPECTED": "Device inspected",
     "DEVICE_GATE_CHECKED": "Device write-protection checked",
     "DEVICE_OVERRIDE": "Device check overridden",
+    "UPDATE_POLICY_OVERRIDE": "Update policy overridden",
 }
 
 
