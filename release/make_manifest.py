@@ -21,7 +21,10 @@ def _release_policy(path: str | Path) -> dict[str, str]:
     not publish at all. The floor is a property of the release, so it belongs in the repo
     where a reviewer can see and change it in the same diff as the code.
     """
-    target = Path(path)
+    try:
+        target = check_contained(Path(path), Path(__file__).resolve().parent)
+    except ValueError:
+        raise SystemExit("refusing release policy outside the release directory") from None
     try:
         policy = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:

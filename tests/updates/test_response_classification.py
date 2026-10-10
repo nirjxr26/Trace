@@ -52,8 +52,9 @@ def test_an_oversized_manifest_is_refused_not_a_network_error() -> None:
 
     from trace_core.updates.errors import UpdateNetworkError, UpdateResponseRefused
 
+    response = _Response()
     with pytest.raises(UpdateResponseRefused):
-        sources._read_manifest_response(_Response(), 10)
+        sources._read_manifest_response(response, 10)
     assert not issubclass(UpdateResponseRefused, UpdateNetworkError)
 
 
@@ -74,8 +75,9 @@ def test_a_wrong_content_type_is_refused_with_a_reason() -> None:
         def __exit__(self, *_a):  # type: ignore[no-untyped-def]
             return False
 
+    response = _Response()
     with pytest.raises(UpdateResponseRefused, match="not JSON"):
-        sources._read_manifest_response(_Response(), 1 << 20)
+        sources._read_manifest_response(response, 1 << 20)
 
 
 def test_a_normal_manifest_still_reads() -> None:

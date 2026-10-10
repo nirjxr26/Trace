@@ -4204,3 +4204,33 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
   `changelog/nirjxr26/changelog.md`.
 - Verification: 14 release-manifest tests pass. Falsified: reintroducing the required
   dispatch input fails 1; hardcoding the floor instead of reading the policy fails 2.
+
+## 2026-10-10
+- Summary: closed the SonarQube backlog on release/v0.3.2. Two findings, one of them a
+  security hole I introduced earlier the same day.
+- Security: `--policy` was read straight off the command line with no containment, while
+  the output path beside it was already contained. Its contents become
+  `minimum_supported_version` and `notes`, which `sign_release.py` signs and users are
+  shown during updates, so `--policy` pointing anywhere on disk injects arbitrary text
+  into a signed artifact. Now contained against the release tooling directory, the same
+  root `POLICY_PATH` already resolves from and the same helper `sign_release.py` and
+  `verify_release.py` use for every other CLI path.
+- Corrected during this work: my first attempt contained against `Path.cwd()`, which
+  broke 9 tests, because the test harness runs the script from a temp directory while CI
+  runs it from the checkout. The root is the release directory, not the working
+  directory. Caught by running the tests, not by reading them.
+- Test harness change: `_run_manifest` now copies the script and the policy into the
+  temp directory, so the release directory is a scratch dir. Previously three tests wrote
+  a deliberately broken policy into `tmp_path`; without the copy, asserting the
+  containment rule would have meant writing into the repository during a test run.
+- Maintainability: 7 `pytest.raises` blocks each contained a constructor inlined as an
+  argument, so a failure in the constructor would have satisfied the assertion for the
+  wrong reason. Constructor hoisted out in each. One shape, seven sites; ruff's PT012
+  counts statements and passed, while SonarQube's S1720 counts invocations and did not.
+- Files: `release/make_manifest.py`, `tests/unit/test_release_manifest.py`,
+  `tests/unit/test_devices_service.py`, `tests/unit/test_devices_win32_adapter.py`,
+  `tests/updates/test_response_classification.py`, `changelog/nirjxr26/changelog.md`.
+- Verification: 178 tests across the four touched files pass. Falsified: removing the
+  containment check fails both new tests; with it, all 16 release-manifest tests pass.
+  Replayed the exact command `release.yml` runs on a tag push, from a scratch checkout
+  with a real `dist/`: returncode 0, floor and notes both read from the committed policy.

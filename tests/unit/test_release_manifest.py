@@ -18,6 +18,7 @@ pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "release" / "make_manifest.py"
+POLICY = REPO_ROOT / "release" / "release_policy.json"
 
 
 def _run_manifest(
@@ -30,6 +31,12 @@ def _run_manifest(
     dist.mkdir()
     for name, data in dist_files.items():
         (dist / name).write_bytes(data)
+    # `--policy` is contained against the directory holding this script, so run a copy
+    # beside tmp_path. That makes the release directory a scratch dir no test has to write
+    # into the repository to reach.
+    script = tmp_path / "make_manifest.py"
+    script.write_bytes(SCRIPT.read_bytes())
+    (tmp_path / POLICY.name).write_bytes(POLICY.read_bytes())
     env = {**os.environ, "PYTHONPATH": str(REPO_ROOT / "src")}
     env.pop("TRACE_MANIFEST_MIN_VERSION", None)
     env.pop("TRACE_MANIFEST_NOTES", None)
@@ -38,7 +45,7 @@ def _run_manifest(
     # A release must state its floor, so the default is a valid one. `[]` means "no floor
     # supplied at all", which must be refused.
     args = extra_args if extra_args is not None else ["--min-version", "0.2.3", "--notes", "migration notes"]
-    cmd = [sys.executable, str(SCRIPT), "v9.9.9", "stable", "r9", "out.json"] + args
+    cmd = [sys.executable, str(script), "v9.9.9", "stable", "r9", "out.json"] + args
     return subprocess.run(
         cmd,
         cwd=tmp_path,
@@ -150,6 +157,42 @@ def test_an_absent_policy_file_is_refused(tmp_path: Path) -> None:
     )
     assert proc.returncode != 0
     assert "cannot read release policy" in (proc.stdout + proc.stderr)
+
+
+def test_a_policy_outside_the_release_directory_is_refused(tmp_path: Path) -> None:
+    """`--policy` is signed into the published manifest, so a path outside the release
+    directory would inject arbitrary text into a signed artifact. `out` is already
+    contained against the same root; the policy path was not."""
+    outside = tmp_path.parent / "outside_policy.json"
+    outside.write_text(json.dumps({"minimum_supported_version": "9.9.9", "notes": "injected"}), encoding="utf-8")
+    try:
+        proc = _run_manifest(
+            tmp_path,
+            {"trace-9.9.9-py3-none-any.whl": b"wheel-bytes"},
+            extra_args=["--policy", str(outside)],
+        )
+    finally:
+        outside.unlink()
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "refusing release policy outside the release directory" in (proc.stdout + proc.stderr), (
+        proc.stdout + proc.stderr
+    )
+    assert not (tmp_path / "out.json").exists(), (
+        "no manifest may be written from a policy outside the release directory"
+    )
+
+
+def test_a_traversing_policy_path_is_refused(tmp_path: Path) -> None:
+    """`..` must not be a way around the containment check."""
+    proc = _run_manifest(
+        tmp_path,
+        {"trace-9.9.9-py3-none-any.whl": b"wheel-bytes"},
+        extra_args=["--policy", "../release_policy.json"],
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "refusing release policy outside the release directory" in (proc.stdout + proc.stderr), (
+        proc.stdout + proc.stderr
+    )
 
 
 def test_the_workflow_has_no_fallback_that_defeats_its_own_assertion() -> None:

@@ -69,8 +69,9 @@ def test_update_paths_are_refused(session_manager) -> None:
 
     with session_manager.session() as session:
         repo = SqlAlchemyDeviceRepository(session)
+        model = DeviceFingerprintModel()
         with pytest.raises(NotImplementedError, match="append-only"):
-            repo._update_model(DeviceFingerprintModel(), None)  # type: ignore[arg-type]
+            repo._update_model(model, None)  # type: ignore[arg-type]
 
 
 def test_the_repository_implementation_matches_its_protocol() -> None:
