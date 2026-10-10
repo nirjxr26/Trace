@@ -378,9 +378,15 @@ class InteractiveShell:
         """Display frameless system and connection diagnostics."""
         try:
             self._ensure_service()
-            db_status = Text("Connected · Operational", style=THEME_TOKENS["success"])
-        except Exception:
-            db_status = Text("Disconnected", style=THEME_TOKENS["danger"])
+            from trace_core.core.database.health import fetch_db_snapshot
+
+            snap = fetch_db_snapshot(self._session_manager)
+            if snap.healthy:
+                db_status = Text(f"Connected · {snap.message}", style=THEME_TOKENS["success"])
+            else:
+                db_status = Text(f"Can't reach it · {snap.message}", style=THEME_TOKENS["danger"])
+        except Exception as exc:
+            db_status = Text(f"Can't reach it · {exc}", style=THEME_TOKENS["danger"])
 
         active_str = _format_active_case(self.active_case, "None (No active case selected)")
 
@@ -392,7 +398,6 @@ class InteractiveShell:
                 ("Active Case", active_str),
                 ("Version", settings.version),
                 ("Diagnostics", Text("Run `trace doctor` for full checks", style=THEME_TOKENS["muted"])),
-                ("Compliance", "UTC · Parameterized SQL · ISO 17025 Ready"),
             ],
         )
 

@@ -88,11 +88,10 @@ class LinuxDevice:
         self._rows: dict[str, dict[str, Any]] = {}
 
     def list_block_devices(self) -> list[DeviceInfo]:
-        try:
-            document = lsblk_json()
-        except HelperFailure:
-            self._rows = {}
-            return []
+        # Cleared first so a failed enumeration cannot leave a previous run's rows behind
+        # for `inspect` to read as current evidence.
+        self._rows = {}
+        document = lsblk_json()
         self._rows = rows = _rows_by_name(document)
         return [info for info in (self._info(row) for _, row in sorted(rows.items())) if info is not None]
 
@@ -277,7 +276,8 @@ class LinuxDevice:
         return ctypes.c_int.from_buffer(buffer).value == 1
 
 
-def _probe_cause(sysfs_ro: bool | None, ioctl: bool | OSError | None, exclusive: bool | OSError) -> UnknownCause | None:
+def _error_cause(ioctl: bool | OSError | None, exclusive: bool | OSError) -> UnknownCause | None:
+    """First errno that names a specific cause, else a generic IOCTL_FAILURE."""
     for outcome in (ioctl, exclusive):
         if isinstance(outcome, OSError) and outcome.errno == errno.EACCES:
             return UnknownCause.EACCES
@@ -290,8 +290,17 @@ def _probe_cause(sysfs_ro: bool | None, ioctl: bool | OSError | None, exclusive:
     for outcome in (ioctl, exclusive):
         if isinstance(outcome, OSError) and outcome.errno != errno.ENOSYS:
             return UnknownCause.IOCTL_FAILURE
+    return None
+
+
+def _probe_cause(sysfs_ro: bool | None, ioctl: bool | OSError | None, exclusive: bool | OSError) -> UnknownCause | None:
+    cause = _error_cause(ioctl, exclusive)
+    if cause is not None:
+        return cause
     if sysfs_ro is None:
         return UnknownCause.SYSFS_DISAGREEMENT
+    if ioctl is None:
+        return UnknownCause.IOCTL_FAILURE
     if isinstance(ioctl, bool) and ioctl is not sysfs_ro:
         return UnknownCause.SYSFS_DISAGREEMENT
     return None

@@ -372,10 +372,9 @@ def _install_sqlite_audit_triggers(conn: Connection) -> None:
         "CREATE TRIGGER audit_events_no_update BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END",
         "CREATE TRIGGER audit_events_no_delete BEFORE DELETE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END",
     ):
-        try:
-            conn.execute(text(ddl))
-        except Exception:
-            pass
+        conn.execute(text(ddl))
+    if not _verify_008_audit_protection(conn):
+        raise RuntimeError("sqlite append-only triggers did not install; refusing to continue")
 
 
 def _migration_checksum(version: int, name: str) -> str:
@@ -535,6 +534,20 @@ def _file_lock(path: str):  # type: ignore[no-untyped-def]
         yield
 
 
+def _reassert_audit_protection(engine: Engine) -> None:
+    with engine.begin() as conn:
+        if "audit_events" not in inspect(conn).get_table_names():
+            return
+        if _verify_008_audit_protection(conn):
+            return
+        _install_pg_audit_trigger(conn)
+        _install_sqlite_audit_triggers(conn)
+        if not _verify_008_audit_protection(conn):
+            raise RuntimeError(
+                "audit_events append-only protection is missing and could not be reinstalled; refusing to start"
+            )
+
+
 def apply_migrations(engine: Engine) -> list[str]:
     """Apply all pending migrations sequentially within transaction boundaries."""
     with _migration_lock(engine):
@@ -562,6 +575,7 @@ def apply_migrations(engine: Engine) -> list[str]:
                     conn.execute(schema_migrations.insert().values(**values))
                 applied_names.append(name)
 
+        _reassert_audit_protection(engine)
         return applied_names
 
 

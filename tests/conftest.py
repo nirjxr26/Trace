@@ -5,6 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
 from trace_core.cases.dto import CaseCreateDto, CaseResponseDto
 from trace_core.cases.service import CaseService
@@ -34,6 +35,21 @@ def setup_test_environment(tmp_path_factory: pytest.TempPathFactory) -> None:
     storage_root.mkdir(parents=True, exist_ok=True)
     os.environ["TRACE_STORAGE_ROOT"] = str(storage_root)
     core_service.db_manager = DatabaseSessionManager("sqlite:///:memory:")
+    # A fixed non-placeholder signing key for the whole session. Without this the suite
+    # inherits whatever the machine has: the repo `.env` or a real TRACE_SECRET_KEY
+    # locally, and the shipped placeholder on CI. `is_default_key()` then differs per
+    # machine, so every signature mismatch is reported as `signing_key` on CI and as
+    # `signature` locally — nine failures that only exist on the runner. Tests must assert
+    # one behaviour, not the operator's environment.
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    os.environ["TRACE_SECRET_KEY"] = "trace-test-key-not-a-real-secret-0123456789abcdef"
+    settings.secret_key = SecretStr(os.environ["TRACE_SECRET_KEY"])
+    if settings.secret_key.get_secret_value() == DEV_SECRET_SENTINEL:
+        raise RuntimeError(
+            "the suite is running on the shipped placeholder key; every signature check "
+            "would report signing_key instead of the failure under test"
+        )
 
 
 @pytest.fixture

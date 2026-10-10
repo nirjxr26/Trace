@@ -14,7 +14,9 @@ from trace_core.audit import signing as audit_signing
 from trace_core.audit import verifier as audit_verifier
 from trace_core.cases import domain as cases_domain
 from trace_core.cases import service as cases_service
+from trace_core.core.cli.exit_codes import EXIT_ERROR
 from trace_core.core.domain import InvariantViolationError
+from trace_core.core.ui.renderers import console
 from trace_core.tui import widgets as tui_widgets
 from trace_core.tui.screens import audit as audit_screen
 from trace_core.tui.screens import cases as cases_screen
@@ -77,8 +79,9 @@ def test_update_lifecycle_record_fills_the_invariant_fields() -> None:
 
 def test_case_service_audit_hooks_are_built_by_one_factory() -> None:
     src = _source(cases_service)
-    assert src.count("_audit_hook(") == 6, "5 builder sites plus the factory definition"
-    assert src.count("def _audit_hook(") == 1
+    assert src.count("_audit_hook(") == 8, "5 builder sites plus 3 uses inside the two factories"
+    assert src.count("def _audit_hook(") == 1, "exactly one factory definition"
+    assert src.count("def _close_audit_hook(") == 1, "the close hook factory is defined once"
     built: tuple[Any, Any, dict[str, Any], Any] = ("ACTION", object(), {}, object())
     hook = cases_service._audit_hook(lambda: built, "actor", claimed="claimed")
     assert callable(hook)
@@ -296,3 +299,66 @@ def test_uninstall_prompts_only_when_both_streams_are_terminals(monkeypatch) -> 
     monkeypatch.setattr(uninstall, "run_uninstall", _must_not_run)
     res = CliRunner().invoke(app, ["uninstall"], input="n\n")
     assert res.exit_code == 0
+
+
+def test_the_prompt_names_backups_because_install_holds_them(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The confirm said "storage and database are kept" while `install`, which holds
+    releases/ and backups/, was deleted. The prompt must name what is actually lost."""
+    from typer.testing import CliRunner
+
+    from trace_core.cli.main import app
+    from trace_core.core.cli import uninstall
+
+    monkeypatch.setattr(uninstall, "interactive_terminal", lambda: True)
+    monkeypatch.setattr(uninstall, "run_uninstall", lambda purge: 0)
+    res = CliRunner().invoke(app, ["uninstall"], input="n\n")
+    out = res.stdout + str(res.output)
+    assert "backup" in out.lower(), out
+    assert "kept" in out.lower(), out
+
+
+def test_uninstall_removes_the_launcher_last_so_a_failure_leaves_trace_usable(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A partial uninstall must not remove the only tool the operator has to fix it."""
+    from trace_core.core.cli import uninstall
+
+    home = tmp_path / "home"
+    (home / ".trace" / "install" / "backups").mkdir(parents=True)
+    (home / ".trace" / "install" / "backups" / "trace-backup.db").write_bytes(b"x")
+    (home / ".trace" / "app").mkdir(parents=True)
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    shim = bin_dir / "trace"
+    shim.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(uninstall, "_trace_root", lambda: home / ".trace")
+    monkeypatch.setattr(uninstall, "_shim_paths", lambda: [shim])
+
+    def _blocked(path):
+        raise OSError("folder is in use")
+
+    monkeypatch.setattr(uninstall.shutil, "rmtree", _blocked)
+    code = uninstall.run_uninstall(purge_data=False)
+    assert code == EXIT_ERROR, "a failed removal must not report success"
+    assert shim.exists(), "the launcher must survive a failed uninstall"
+    assert (home / ".trace" / "app").exists(), "the app must survive so trace still runs"
+
+
+def test_uninstall_reports_a_failure_instead_of_printing_nothing(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Silent failure was the original defect: nothing was printed for a partial delete."""
+    from trace_core.core.cli import uninstall
+
+    home = tmp_path / "home"
+    (home / ".trace" / "install").mkdir(parents=True)
+    (home / ".trace" / "app").mkdir(parents=True)
+    monkeypatch.setattr(uninstall, "_trace_root", lambda: home / ".trace")
+    monkeypatch.setattr(uninstall, "_shim_paths", lambda: [])
+
+    def _blocked(path):
+        raise OSError("folder is in use")
+
+    monkeypatch.setattr(uninstall.shutil, "rmtree", _blocked)
+    with console.capture() as capture:
+        code = uninstall.run_uninstall(purge_data=False)
+    out = capture.get()
+    assert code == EXIT_ERROR
+    assert "Couldn't remove" in out, out
+    assert "install" in out, out

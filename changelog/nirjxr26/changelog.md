@@ -1,4 +1,4 @@
-# Trace — Project Development Log
+﻿# Trace — Project Development Log
 
 > Maintained by: **Nirjar Goswami**
 > Scope: Core Architecture, Database, Presentation Layer & Forensic TUI
@@ -3863,3 +3863,322 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Verification: `check-pr.ps1` passes end to end, 1028 passed / 19 skipped. `test_version_single_sourced` and `test_cli_version` pass; `trace --version` reports v0.3.0.
 - Files: `pyproject.toml`, `src/trace_core/__init__.py`, `src/trace_core/core/settings.py`, `README.md`, `docs/STATUS.md`, this changelog.
 - Out of scope, observed: `tests/updates/test_update_e2e_local.py` is the only end-to-end update test file and every one of its 8 tests skips unless `TRACE_E2E_WHEELS` points at two built wheels, so the full upgrade-from-older-version path is never exercised by the suite or by CI. Not changed here.
+## 2026-10-08
+- Summary: Windows drive enumeration reported 64 devices on a machine that has one. `INVALID_HANDLE_VALUE` was declared as the signed `-1`, but `CreateFileW` is declared with an `HANDLE` restype, so ctypes returns the sentinel unsigned as 18446744073709551615. The comparison at the failure check could never be true, every failed open was treated as a success, and the error code was discarded because the failure branch returned before reading `GetLastError`. The sentinel is now taken from ctypes itself, and last-error is cleared before the call so a failed open reports its real cause.
+- Summary: the same defect disabled the access-denied path, which is why the real drive was also not recognised. The one genuine drive on the test machine fails `CreateFile` with ERROR_ACCESS_DENIED for an unelevated process, but Trace read that as success, so it never reached the CIM fallback that supplies model and capacity, and it issued `DeviceIoControl` against an invalid handle. The message telling an operator to re-run from an elevated Administrator shell was unreachable on real hardware. Enumeration now reports one device with its capacity and model.
+- Summary: three regression tests, two of them exercising the real Win32 device namespace rather than a stub. Every existing Windows device test stubbed `_try_open` and `_device_ioctl`, which is why this shipped: the sentinel comparison was never executed against a value ctypes actually produced.
+- Files: `src/trace_core/devices/win32.py`, `tests/unit/test_devices_win32_adapter.py`, this changelog.
+- Verification: the three new tests fail when the old sentinel is restored and pass with the fix. `device list` reports 1 device (476.9 GB, NVMe Micron_2400) instead of 64. `ruff check`, `ruff format --check` and `mypy src tests` clean.
+- Out of scope, observed: `_probe` compares an ioctl outcome against ERROR_ACCESS_DENIED and inherits the same blindness while `_try_open` is stubbed, so the write-blocker verdict has no test that reaches a real handle.
+## 2026-10-08
+- Summary: the release manifest never declared a schema range, which made the database restore path unreachable. `needs_backup` is computed from `would_advance`, which requires `schema_target` to be declared and greater than the current schema; every published manifest carried `schema_target: null`, so it resolved to False, no backup was written, and `migration["backup"]` was None at all five `rollback_release` call sites. The schema advanced anyway, because `apply_migrations` runs unconditionally. `make_manifest.py` now derives `schema_target` from the migration head. Both keys are emitted because `verify_compatibility` refuses a manifest declaring one without the other.
+- Summary: structlog was never configured, so all twelve call sites wrote to stdout. Any warning therefore corrupted machine-readable output; it stayed invisible because the one routine that logged on a normal path, `heal_schema_drift`, sat behind an `except Exception: pass`. Emitting the warning instead of discarding it immediately broke `test_cache_invalidates_on_content_change`, which is how the stdout defect surfaced. structlog is now bound to stderr at package import.
+- Summary: `heal_schema_drift` swallowed every failure, so a database whose schema had drifted could not report that its repair had failed. It logs now, and its repair branch has three tests: a recorded migration whose verifier fails is re-applied, a repair that does not take effect is rolled back rather than left half-applied, and a verified migration is left alone.
+- Summary: the update REPL handler was registered and never dispatched. Seven tests now cover it: help, check, the install refusal that points at the standalone CLI, an unknown action, completions, and the shared help grid.
+- Summary: no test raised KeyboardInterrupt anywhere in the repository, so the `except BaseException` branch that records a Ctrl-C during an install as a failure had never run. It is now covered, and narrowing it to any other exception type makes the test fail.
+- Summary: the ETag revalidation path had no test, and it is the ordinary case for a repeated `update check`. Two tests drive a real local server that answers 304: a repeat check revalidates by ETag and serves the cache, and a 304 answered with no cache falls through to a full fetch. Removing the 304 short-circuit makes the first fail.
+- Summary: `docs/STATUS.md` pointed at `findings/LEDGER.md`, which does not exist in this repository. It points at the changelog instead.
+- Files: `release/make_manifest.py`, `src/trace_core/__init__.py`, `src/trace_core/updates/selfheal.py`, `tests/updates/test_migration_race.py`, `tests/updates/test_cache_invalidate.py`, `tests/updates/test_selfheal`'s sibling `tests/unit/test_selfheal.py`, `tests/updates/test_lifecycle_gates.py`, `tests/updates/test_http_source.py`, `tests/unit/test_release_manifest.py`, `tests/unit/test_update_shell_handler.py`, `docs/STATUS.md`, this changelog.
+- Verified: every added test was checked by reverting the fix it covers and confirming it fails. `ruff check`, `ruff format --check` and `mypy src tests` clean; full suite run recorded below.
+- Not verified: no fix here has run against a live PostgreSQL instance or a real signed release manifest; the manifest change was verified by generating one and reading the emitted keys, not by a release job.
+- Open, deliberately not fixed: `--bypass-minimum` advertises "Override minimum-supported-version with audit" and writes no audit. Closing it needs a decision this author could not make alone, because the update path has no actor resolution, no unit of work, and no existing audit plumbing, and a mandatory audit written at the end of an install cannot roll the install back the way 14.5 protects a fingerprint capture. Recorded in the final report for the owner to choose between writing the intent before the install and writing the outcome after it.
+## 2026-10-08
+- Summary: `--bypass-minimum` now writes the audit it promises. Two near-identical `before_commit` hook builders already existed, `cases/service.py:_audit_hook` and `devices/service.py:_ledger_hook`, the second claiming to be the same mechanism as the first while implementing it separately. Both delegate to a new `AuditService.record_hook`, which is the single source for builder plus actor to hook. The one class-level `AuditService` stub in the suite moved to the same seam.
+- Summary: the override row is written before any code is replaced, because after the pointer moves and the previous release is pruned nothing else can show the floor was waived. The note is snapshotted once at `run()` entry: opening any session applies pending migrations, so recomputing later reads a post-migration schema and a backup waiver silently vanishes. That exact regression was observed through the waiver test, which failed until the snapshot, and passes with it.
+- Summary: `bound_actor` moved from `devices/models.py` to `core/domain.py` next to `strip_controls`, so `updates` does not depend on `devices` for a column-width rule. Both existing importers were repointed. No migration was needed: `action` is `String(50)` with no CHECK, and the `system` subject was already declared but never emitted.
+- Files: `src/trace_core/audit/service.py`, `src/trace_core/audit/builder.py`, `src/trace_core/audit/domain.py`, `src/trace_core/cases/service.py`, `src/trace_core/devices/service.py`, `src/trace_core/devices/models.py`, `src/trace_core/devices/repository.py`, `src/trace_core/core/domain.py`, `src/trace_core/updates/lifecycle.py`, `tests/unit/test_case_service.py`, `tests/updates/test_lifecycle_gates.py`, this changelog.
+- Verification: disabling the ledger write makes the new ledger test fail and nothing else; removing the `claimed_actor` branch makes the existing security regression fail. `ruff check`, `ruff format --check`, `mypy src tests` clean.
+- Correction: the previous entry listed `policy.py:91` as a blanket catch. It is not; it is `return universal[0]`, and the module's only `try/except` is a narrow `InvalidVersion` to `ValueError` re-raise. Only `selfheal.py:164` was a real swallow.
+- Correction: the previous entry claimed `migrate_database` was untested. Its real name is `run_updater_migration` and its backup decision has four passing tests. The gap was that production never exercised the tested path, because every published manifest left `schema_target` null.
+## 2026-10-09
+- Summary: the SQLite append-only triggers were installed inside a bare except-and-pass, so a failed CREATE left the forensic ledger editable with no error anywhere. The installer raises, and confirms protection with the migration 008 verifier before returning. Verified by a wrapper whose third statement fails, which now propagates the error.
+- Summary: migration 008 records itself once, so a database that lost its triggers kept every version marked applied and never re-ran it. Its verifier already reported the loss, but nothing called it once migrations were recorded, so a database restored from a backup that predated the triggers was permanently editable. Every apply_migrations now re-asserts append-only protection when the verifier reports it missing, and refuses to start if it cannot be reinstalled. Proven end to end: triggers dropped, ledger confirmed mutable, apply_migrations reinstalled them, UPDATE refused again.
+- Summary: the migration is deliberately fail-safe rather than fail-closed. Raising inside the trigger installer would abort an in-flight migration on a locked file, and migration 008 itself already rolls back when its verifier fails; the startup re-assert is the layer that must refuse, because by then no migration is half-applied.
+- Files: src/trace_core/core/database/migrations.py, 	ests/unit/test_audit_ledger.py, docs/STATUS.md, this changelog.
+- Verification: three new tests, each falsified by reverting the fix. Restoring the swallow fails the installer test. Removing the startup re-assert fails the restored-database test and leaves the healthy-database test passing, so the two cover distinct behaviour. 27 audit ledger tests pass; SQLite suite 1049 passed / 19 skipped; PostgreSQL 16 integration 11 passed.
+- Summary: the audit sidebar truncated every device and update event at 12 columns, so `Device_Gate_Checked` rendered as `Device_Gate_`. The widest label across `AuditAction` is `Update_Policy_Override` at 22 characters; the column is now 24 and a test asserts every enum member fits, so the next new action cannot silently truncate.
+- Summary: the sidebar count reported the loaded window, so the header read 200 on a ledger of any size. It now reports the real total under the active filter. `SqlAlchemyAuditRepository.count_events` reuses the same `_filtered` path as the listing, so the count cannot drift from what the window shows; `_filtered` with no cursor bounds over the whole ledger. `TablePane` gained `displayed_count`, defaulting to the loaded rows so every other tab is unchanged, and `AuditView` overrides it with the true total.
+- Summary: the first implementation counted 1 row on a 3-row ledger. `with_only_columns(func.count())` has no column to anchor the table, so SQLAlchemy emitted `SELECT count(*)` with no `FROM`. It is `func.count(AuditEventModel.seq)`.
+- Summary: a count failure falls back to the loaded row count but announces itself in a toast rather than showing a wrong total silently. This is the fail-safe-not-silent rule applied to a display path.
+- Files: `src/trace_core/audit/repository.py`, `src/trace_core/audit/service.py`, `src/trace_core/tui/screens/audit.py`, `src/trace_core/tui/widgets.py`, `tests/unit/test_audit_pagination.py`, this changelog.
+- Verification: four new tests, each falsified by reverting its own fix. Un-anchoring the count fails the three `count_events` tests and the header test. Narrowing the column to 12 fails the label test with `DEVICE_INSPECTED renders as 'Device_Inspected', column is 12`. Reverting the header to `len(self._items)` fails the header test. Removing the failure toast fails the announced-count test. The first falsification attempt for that last one used a regex that silently matched nothing, so it reported a pass against unchanged code; it was redone with a direct edit and then failed as it should.
+- Verification: `check-pr.ps1` green, 1058 passed / 19 skipped, coverage 80.23%, ruff and mypy clean on 196 files. PostgreSQL 16 integration 11 passed against a clean `trace_test`. `count_events` was compared against hand-written SQL on both engines and matched on total, scoped and no-match. On the first PostgreSQL probe the scoped comparison disagreed, and the cause was the probe, not the code: it had taken a `system`-subject row whose `subject_case_number` is NULL, so `case_number=None` meant "no filter" while the comparison SQL matched nothing. A `TRUNCATE` attempted during that probe was refused by the append-only trigger, which is 14.7 behaving correctly.
+- Correction: the narrow-terminal behaviour was checked rather than assumed. At a 60-column terminal the sidebar is 15 wide, and both the old 12 and the new 24 column clip to `Creat`, so the widening is not a regression at any terminal size. Two existing tests asserted the old contract and were updated: the header test now asserts the whole matching ledger rather than the loaded window, and the query-capture helper ignores aggregates so it keeps measuring row fetches rather than counting the new count query.
+- Open, deliberately not fixed: at terminal widths below about 90 columns the Event column still clips, because Seq plus a full event name does not fit a 1fr sidebar beside a 2fr dossier. Fixing that needs a responsive column policy, which is a larger change than the defect reported.
+- Summary: the PostgreSQL integration suite ran against whatever database `TRACE_TEST_POSTGRES_URL` named. These tests create, close, archive and permanently purge cases, so pointing the variable at a real database destroys data. That is how the local `postgres` database ended up carrying probe rows and a missing chain head. H-76 had already removed the fallback to `TRACE_DATABASE_URL` but never constrained the target, so the opt-in was the remaining hole.
+- Summary: the variable is now only a bootstrap connection. Its database component is replaced with a uniquely named `trace_itest_<pid>_<rand>` that the fixture creates before the test and drops in teardown, so the target no longer depends on how the variable was set. Running the whole destructive suite pointed straight at `postgres` leaves it at 0 events, and no disposable database survives the run.
+- Summary: `str(URL)` masks the password as `***`. Returning that string to the engine authenticated as the literal password `***`, every connection failed, and all seven PostgreSQL tests skipped instead of running while the run still reported success. The URL is rendered with `hide_password=False`. The masked output was visible in the derived URL and was misread as normal masking before it was traced to the skips.
+- Summary: `test_postgres_migration_017_preserves_append_only_trigger` tampered at `seq = 1` without creating anything, so it depended on whichever test had previously left rows in the shared database. Against a fresh empty database the UPDATE matched zero rows, raised nothing, and the test failed with `DID NOT RAISE DBAPIError`. Isolation exposed a latent false pass; the row is now created by the test through a shared `_seed_ledger_row` helper that the append-only test also uses.
+- Summary: the local `postgres` database was dropped and rebuilt through the real migration path. It had 26 events with `max_seq` 10000 and no chain head, and it was missing `update_history` entirely despite all 18 migrations recorded. It now holds 9 tables, 18 migrations, both append-only triggers, and a zeroed ledger. `trace` (713 rows, contiguous, chain intact) and the other projects' `auuth*` and `bastion` databases were not touched.
+- Summary: `update_history` is absent from a fresh install by design. Migration 014 reads "The update_history model is gone... A fresh install never creates it", so 9 tables is correct and `trace`'s tenth table is a legacy artifact of a database that predates the model removal. The health check initially expected 10 and was wrong.
+- Files: `tests/integration/test_postgres.py`, this changelog.
+- Verification: the tamper test was falsified by removing protection. With both triggers installed `_verify_008_audit_protection` is True and the UPDATE is refused; after dropping `audit_events_no_update_delete` and `audit_events_no_truncate` the verifier reports False and the ledger becomes editable, so the test detects its absence. An earlier falsification attempt dropped a trigger named `audit_events_block_write`, which is the function name and not a trigger, and `IF EXISTS` swallowed the miss so the probe proved nothing. `check-pr.ps1` with `TRACE_TEST_POSTGRES_URL` set: 1065 passed / 12 skipped, coverage 80.56%, ruff and mypy clean on 196 files. Skips fell from 19 to 12 because the seven PostgreSQL tests that previously skipped now run.
+- Removed while reviewing the new code: an `is_disposable` helper added to `test_postgres.py` and never called.
+- Note: `docs/STATUS.md` was updated to the new counts, but `/docs` is ignored by `.gitignore` line 6 as "Internal Documentation & Process Artifacts" and no file under it is tracked, so that correction is local only and will not ship. Earlier entries in this changelog list `docs/STATUS.md` in their Files lines, which overstates what those changes contained.
+- Summary: `TRACE_SECRET_KEY` lived only in the repo `.env`, which is found relative to the working directory. `audit verify` run from any other directory fell back to the shipped placeholder key, every signature recomputed differently, and the ledger was reported as `TAMPER DETECTED` with `Restore audit_events from backup` as the remedy. The ledger was intact; an operator would have gone looking for an incident that never happened.
+- Summary: the key is now set as a user environment variable so it resolves from any directory. The value was never written to a command line, log, or transcript: it was read from `.env` into a shell variable and passed to `setx`, and only its length and a truncated SHA-256 were printed.
+- Summary: a signature mismatch while the shipped placeholder key is active now reports `SIGNING KEY UNAVAILABLE` and directs the operator to set `TRACE_SECRET_KEY`, instead of naming tampering and recommending a restore. `is_valid` remains False on that path, so a key problem is never presented as a valid ledger; only the reason and the remedy change.
+- Summary: the diagnostic is deliberately narrow. It keys off the exact placeholder constant, not a heuristic about how many signatures failed. `payload_hash` and `chain_hash` are computed independently of the signing key, so an edited payload is still reported as `payload_hash` with the placeholder active. Two tests pin both halves: real content tampering is never excused as a key problem, and a signature finding under the ledger's own key is still a signature finding.
+- Files: `src/trace_core/audit/signing.py`, `src/trace_core/audit/verifier.py`, `src/trace_core/audit/renderers.py`, `tests/unit/test_audit_ledger.py`, this changelog.
+- Verification: removing the `is_default_key` branch fails `test_default_key_reports_a_key_problem_not_tampering`; removing the renderer branch fails `test_the_key_problem_says_set_the_key_and_not_restore_from_backup`. Both paths were reproduced against the live database: from a directory without `.env` the output is the new key warning, and with the stored key it is `VALID, 16 verified`. The five pre-existing tests asserting `mismatch_type == "signature"` were re-checked rather than assumed: the suite loads `.env`, so the real key is active and they were unaffected.
+- Reuse: the payload-restamp sequence that isolates the signature check already existed inline in `test_mutate_payload_and_hash_still_chain_fails`. It is now `_restamp_payload_leaving_signature_stale` and is used by that test and the two new ones, rather than a third copy of the same SQL.
+- Not verified: the user environment variable takes effect for processes started after this session. It was read back from the registry, confirmed to be a plain `REG_SZ` string of 64 characters containing no `%` (so the `setx` expansion bug does not apply), and confirmed to make verification pass when supplied to a process; a freshly launched terminal was not exercised.
+- Verification: `check-pr.ps1` with `TRACE_TEST_POSTGRES_URL` set: 1069 passed / 12 skipped, coverage 80.59%, ruff and mypy clean on 196 files.
+- Summary: five user-facing defects fixed. Each was proven by reverting the change and confirming the test goes red.
+- Summary: an anchor is now compared against the ledger hash **at the anchor's own sequence**, not the tip. `verify_against_anchor` fetches that row through the existing `AuditService.get_by_seq`. An anchor records one case's close, so comparing it to the tip meant any later event — another case, a device check — was reported as tampering with a restore-from-backup remedy, on an intact ledger. An anchor whose sequence is ahead of the ledger is now reported as belonging to another ledger rather than as a tail mismatch.
+- Summary: REPL `status` now calls `fetch_db_snapshot` before claiming anything, and shows the snapshot message: `Connected · <what was checked>` or `Can't reach it · <reason>`. It previously printed a fixed `Connected · Operational` after only constructing a service object. The unconditional `Compliance: UTC · Parameterized SQL · ISO 17025 Ready` row is gone; no code path evaluated it.
+- Summary: `tui/theme.integrity_line` is now three-state. It is the single source shared by the Cases dossier and the Audit detail, so extending it removed the need for a parallel helper. `verified=None` means the check could not run and renders `Couldn't verify · ledger unavailable`; a zero-event case renders `No records to verify`; otherwise `Verified · N records`. The dossier's event fetch returns `None` rather than `[]` on failure, so an unreadable ledger no longer leaves the flag True, and the HISTORY block now renders `Couldn't read the ledger for this case` instead of disappearing.
+- Summary: backup filenames are timestamped and disambiguated. A fixed `trace-backup.db` plus `VACUUM INTO`, which refuses an existing target, made the second and every later schema-advancing update fail with `OperationalError`, which is not an `UpdateError` and so missed the typed-error table entirely — the user saw "An unexpected operational error occurred. Run with TRACE_DEBUG=1". Verified through `run_updater_migration`, not by calling the backup function directly: five consecutive updates now all succeed. A second-resolution timestamp alone was not enough, because two updates inside one second reused the name; `_unique_stamp` adds a numeric suffix.
+- Summary: `sanitized_db_url` no longer returns the raw URL on any path. Three exits did: no hostname, no username (so query masking was never reached), and any parse error. `sslpassword`, `sslkey`, `sslcert`, `api_key`, `access_token` and similar were added to the query mask set. An unparseable URL now renders as `<unparseable database url>` rather than being echoed.
+- Files: `src/trace_core/audit/anchor.py`, `src/trace_core/cli/shell.py`,
+  `src/trace_core/tui/theme.py`, `src/trace_core/tui/screens/cases.py`,
+  `src/trace_core/updates/migration.py`, `src/trace_core/core/database/session.py`,
+  `tests/unit/test_security_regressions.py`, `tests/unit/test_doctor.py`.
+- Verification: eight new tests. Anchor restored to a tip comparison fails two. `integrity_line` reduced to two states fails one. The pre-fix `show_status` restored fails the status tests. A fixed backup filename fails the end-to-end two-backup test.
+- Correction: two of those falsifications initially did not fail, and the causes were mine. One tested `_unique_stamp` directly, so a caller that stopped using it would have passed — rewritten to call `backup_database` twice. The status test only exercised the failure branch, so its "Connected" assertion passed trivially — a reachable-branch test was added. A `git checkout` used during a falsification also reverted a real fix, which the failing test then exposed.
+- Not fixed: the remaining findings in sections G-J, including the self-heal deletion of an unreadable state file, and the forensic-operation gate that is a permanent no-op.
+
+## 2026-10-09
+
+- Summary: an empty ledger is no longer reported as `✓ VALID` / "No tampering. Ledger
+  intact." `verify_rows` returns `is_valid=True` for zero rows, and a fully truncated ledger
+  is indistinguishable from one that never had records, so `render_verify_result` now has
+  three states and prints `Audit Verify — ⚠ EMPTY` with "This does not prove the ledger is
+  intact" and a pointer to `trace doctor`. The TUI Integrity panel had the same hole and now
+  says `EMPTY · NOTHING TO VERIFY`.
+- Summary: the success card no longer claims completeness. `verify_event`'s own docstring
+  says it cannot detect deletion, and that was never surfaced on any of its three surfaces.
+  The result line now reads "Every record checked matched... it does not prove no records are
+  missing", and a sequence gap is described as observed ("absent; the chain links across them")
+  instead of asserting the cause — "(rolled-back, not tampering)" claimed a cause nothing in
+  the schema records, and a gap is equally consistent with a deleted row.
+- Summary: `integrity_line` names its window. The dossier checks the newest 6 events, so
+  "Verified" implied a whole-history verdict; it now renders `6 newest records of 140
+  checked · all matched`. The Audit detail pane passed `checked=0` for a single verified row
+  and rendered "No records to verify", and an exception from `verify_event` escaped
+  uncaught. Both fixed.
+- Summary: four anchor conditions no longer share one remedy. `AnchorVerificationError`
+  (a subclass of `AuditTamperError`, so existing catches still work) covers unsigned,
+  forged and foreign anchors, and says to check the anchor file rather than restore the
+  ledger. Only a broken chain at the anchored position stays an `AuditTamperError` and keeps
+  the restore advice — `test_real_tampering_still_reports_tampering` pins that. Three holes
+  that let a truncated ledger pass an anchor are closed: an empty ledger skipped the tip
+  comparison entirely (`last_seq is None`), a deleted anchored row skipped the tail
+  comparison (`anchored_chain` None), and a valid-JSON-non-dict anchor file raised
+  `AttributeError` into the unexpected-error card.
+- Summary: self-heal no longer deletes a file it merely could not read. `_reset_corrupt_json`
+  returned `True` for `OSError`, so a locked marker was classified corrupt, unlinked, and
+  reported as `repaired=True` — and `_maybe_heal` discarded the result entirely, so it was
+  invisible. Replaced with a three-way verdict reusing the rule `selfheal` already had.
+  Unreadable is never removed; the check now says what was checked, what was found, and that
+  the file was left in place. `_maybe_heal` logs every failed check.
+- Summary: one marker classifier instead of three. `marker_state` returned "corrupt" for an
+  `OSError`, `marker.py` reported the identical condition as "corrupt update marker",
+  `session.py` called it "unreadable", and `recovery.py` printed a SHA-256 of the corrupt
+  file as though it were a transaction id (`transaction corrupt-9f2a…`) while asserting
+  staleness it had only proven was unlocked. Four states now: absent · active · corrupt ·
+  unreadable. An unreadable marker is never deleted — it is the only record that an update
+  owned migrations. The fabricated id is gone.
+- Summary: `trace recovery` records a successful rollback. It never wrote an outcome, so the
+  marker stayed on the state that sent it there — still in `_ROLLBACK_WORTHY_STATES` — and a
+  second run rolled back again. `_advance_previous` had by then pointed `previous-version` at
+  the release that just failed, so the second rollback re-activated it and printed
+  "Restored previous release <failed>". `ROLLED_BACK` is now durable-terminal and
+  `RECOVERY_REQUIRED` gained a real exit edge; neither had one that any caller took.
+- Summary: update failure output no longer states something unverified. "Still on v{current}"
+  and "Current version: v{current}" echoed the version captured *before* the update ran, so
+  after `activate` flipped the pointer the message named a release that was no longer
+  active. Both now read the install pointer and say when it cannot be read. The
+  "Run `trace recovery`" hint was dead code — `UpdateFailureStage.RECOVERY` is never produced
+  by any code path, while both `RECOVERY_REQUIRED` exits record HEALTH or ACTIVATION, so the
+  user who most needed it was never told.
+- Summary: an unreadable version pointer is no longer papered over. `get_installed_version`
+  caught `OSError` and fell through to the package version, so `update install` printed
+  "You're up to date — v0.3.0" and exited 0 on a machine whose real version was unknown —
+  and a fallback newer than the manifest would have offered a downgrade. `pointer_version`
+  now distinguishes absent (normal: source checkouts have no pointer) from unreadable, and
+  install refuses rather than guessing. `trace doctor` reads it instead of printing the
+  hardcoded package version.
+- Summary: SQLite restore is safe. Trace sets `journal_mode=WAL` on every connection, so
+  committed rows can live only in `trace.db-wal`; the old restore copied the backup over
+  `trace.db`, left the old WAL beside it, disposed only one manager's engine, and verified
+  nothing — a corrupt backup would overwrite a healthy evidence database. Now: checkpoint,
+  copy to a staging file, verify it opens as a real database, then swap, and remove the
+  sidecars. A failed restore leaves the current database in place and says so. Zero tests
+  covered this branch, because every test used `:memory:`, for which it is unreachable.
+- Summary: device enumeration failure is no longer "0 devices". `list_block_devices` swallowed
+  every `HelperFailure` and returned `[]`, which rendered under a green marker and reads as
+  "no drive attached". The adapter now propagates, the service raises
+  `DeviceEnumerationError` ("This is not the same as finding none"), and a genuinely empty
+  machine still reports zero.
+- Summary: the failed write-protection probe is fail-closed. `_blkroget` returns `None` when
+  it cannot determine, and `_probe_cause` fell through every guard to `return None` — which
+  means protection confirmed. A forensic safety gate was treating "I don't know" as "it's
+  safe". Both None cases now yield `IOCTL_FAILURE`, and UNKNOWN no longer takes the
+  `render_success` branch, so it gets a warning rather than a green marker.
+- Summary: a refused response is not blamed on the network. Manifest and artifact size caps
+  raised `UpdateNetworkError`, whose remedy is "check your connectivity and retry" —
+  impossible advice, since the next response is the same size. New `UpdateResponseRefused`,
+  also used for an unexpected content type, which previously fell through to "Application
+  Error" with no remediation. The same logical condition was exit 11 on the file path and
+  exit 1 on the HTTP path.
+- Summary: exit codes can be told apart. Ledger tamper and update-artifact verification both
+  exited 11, so a script could not distinguish "your records broke" from "the download isn't
+  trusted". Added `EXIT_LEDGER_BROKEN = 17` (additive; no existing code changes meaning).
+  `InvariantViolationError` was rendering as "Invalid Input — correct the highlighted field"
+  with exit 2, which sends a retrying script into a loop when the rejected value came from
+  stored data; it now has its own spec ahead of `DomainError`. A path-traversal refusal
+  raised `SystemExit(str)`, echoing the attacker's filename to stderr and exiting 1 instead
+  of the trust-failure code.
+- Summary: both installers propagate a failing `trace doctor`. Each swallowed it into a log
+  line and exited 0, so an install onto a host that cannot verify its own records reported
+  success — flattening the semantic codes 9, 10 and 12 on the procedure most likely to run
+  unattended. They also claimed "Database unreachable", a cause doctor never reports. Both now
+  say the check did not pass and exit non-zero. `install.ps1` silently ignored unrecognised
+  flags, so `--purge-date` installed the default ref and `--uninstall --purge-data` dropped
+  the data removal; it now names the flag and exits 2, matching `install.sh`.
+- Summary: the release "fail closed" step can now fail. Two shell fallbacks above it
+  guaranteed both values were non-empty, so the assertion could never fire and every tag push
+  published floor 0.2.5 regardless of the real minimum. The fallbacks are gone and
+  `make_manifest.py` refuses to write a manifest without a floor.
+- Files: `src/trace_core/audit/{renderers,anchor}.py`, `src/trace_core/core/{errors,domain}.py`,
+  `src/trace_core/core/cli/{error_handler,doctor,recovery,exit_codes}.py`,
+  `src/trace_core/core/database/session.py`, `src/trace_core/tui/theme.py`,
+  `src/trace_core/tui/screens/{cases,audit,settings}.py`,
+  `src/trace_core/devices/{linux,domain,service,commands}.py`,
+  `src/trace_core/updates/{selfheal,migration,marker,renderers,commands,checker,domain,errors,sources,verifier}.py`,
+  `src/trace_core/updates/recovery.py`, `release/make_manifest.py`,
+  `.github/workflows/release.yml`, `install.ps1`, `install.sh`,
+  `tests/unit/test_verify_messages.py`, `tests/unit/test_anchor_remedies.py`,
+  `tests/unit/test_anchor_verification.py`, `tests/unit/test_device_enumeration_truth.py`,
+  `tests/unit/test_exit_code_contract.py`, `tests/unit/test_installer_contract.py`,
+  `tests/updates/test_recovery_truth.py`, `tests/updates/test_restore_safety.py`,
+  `tests/updates/test_version_pointer.py`, `tests/updates/test_response_classification.py`,
+  `tests/unit/test_doctor.py`, `tests/unit/test_ui_renderers.py`,
+  `tests/unit/test_selfheal.py`, `tests/unit/test_devices_linux_adapter.py`,
+  `tests/unit/test_release_manifest.py`, `tests/updates/test_state_machine.py`,
+  `tests/updates/test_update_progress.py`, `tests/updates/test_h06_h20_h10_h12.py`,
+  `changelog/nirjxr26/changelog.md`.
+- Verification: 45 new tests, each falsified by reverting its own change. Three existing
+  tests pinned the defects and were updated deliberately: `test_probe_disagreement_is_never_guessed`
+  asserted `(True, None, None)` — that a failed probe means confirmed;
+  `test_domain_violation_is_reported_as_usage_error` asserted the exit-2 rendering; and
+  `test_h10_partial_download_is_removed` asserted `UpdateNetworkError` for an oversized
+  artifact.
+- Correction: eight of my own falsifications initially did not bite, and every cause was a
+  weak test rather than a wrong fix. Two asserted on a helper instead of the caller. Two
+  inspected source text instead of behaviour. One asserted only that a message was absent.
+  One built a DTO by hand and broke on every field change. One could not reach its branch
+  because the default `output` is `json`. One found the wrong substring — a planted
+  `-wal`/`-shm` pair is removed by SQLite on the last connection close, so removing my
+  explicit unlink changed nothing. All rewritten against real behaviour.
+- Out of scope, not fixed: `docs/` is still gitignored, so none of this ships in git
+  history. `trace recovery` and `doctor` remain unavailable inside the REPL. `H-42`–`H-77`
+  engineering findings are untouched.
+
+## 2026-10-09
+- Summary: one JSON file classifier instead of three copies. `selfheal._classify_state_file`
+  (own `StateFileVerdict` enum), `migration.marker_state` (inline read/parse) and
+  `marker.read_marker` (inline read/parse with a third verdict wording) each reimplemented
+  read-text plus json-loads plus dict-check with slightly different OSError handling.
+  They now share `core/fs.classify_json_file` returning `(JsonFileVerdict, data)`, next to
+  the existing `read_json_record`. Net deletion: the local enum and two inline parsers are
+  gone. One message change: `read_marker` no longer interpolates the raw OSError text, so a
+  locked marker reports the same "could not read, left in place" wording self-heal uses.
+- Summary: one SQLite sidecar helper. `_restore_sqlite` spelled the `-wal`/`-shm` pair
+  twice in one function; both sites now use `core/fs.sqlite_sidecars`. No behaviour change.
+- Files: `src/trace_core/core/fs.py`, `src/trace_core/updates/selfheal.py`,
+  `src/trace_core/updates/migration.py`, `src/trace_core/updates/marker.py`,
+  `tests/updates/test_recovery_truth.py`, `changelog/nirjxr26/changelog.md`.
+- Verification: targeted suites green (77 passed across recovery-truth, restore-safety,
+  selfheal, migration-race, marker-schema, phase-c, phase-b, state-machine). Falsified:
+  classifier returning CORRUPT for unreadable fails 5; classifier passing corrupt as OK
+  fails 4; renamed sidecar suffixes fail the restore test. First full gate failed on
+  `test_bad_anchor_path_notifies`, which still asserted the pre-A5 empty-ledger wording
+  ("No audit events found"); it failed identically with this pass stashed, so the failure
+  predates it. Updated that test to accept the current empty-state wording and re-ran the gate.
+
+## 2026-10-09
+- Summary: version bump to 0.3.1 across the documented triple: `pyproject.toml`,
+  `trace_core.__version__` and `Settings.version`, plus the `README.md` install sample and
+  the `docs/STATUS.md` product line. `test_version_single_sourced` now pins all three
+  instead of two; `__version__` was previously checked by nothing.
+- Files: `pyproject.toml`, `src/trace_core/__init__.py`, `src/trace_core/core/settings.py`,
+  `README.md`, `docs/STATUS.md`, `tests/unit/test_database_migrations_and_lifecycle.py`,
+  `changelog/nirjxr26/changelog.md`.
+- Verification: version tests green (8 passed incl. `test_cli_version` and pointer tests).
+  Falsified: settings reverted to 0.3.0 fails `test_version_single_sourced`. Full gate on
+  the final tree: passed, 1159 passed / 12 skipped, 81.25%, ruff + mypy clean (206 files).
+
+## 2026-10-09
+- Summary: SonarQube backlog closed and gated against reopening. Ruff now selects `C901`
+  and `PT` with `max-complexity = 15`, so cognitive-complexity ceilings and the pytest
+  anti-patterns that produced the backlog fail the pre-PR gate instead of drifting back.
+  `fixture-parentheses = false` keeps the SonarQube syntax rule from firing again.
+- Source: `doctor.py` `run_doctor` split into `_Results`/`_database_results`/`_render_header`
+  and the repeated "Records protected" literal replaced by `PROTECTED_NAME`;
+  `uninstall.py` `run_uninstall` split into `_remove_targets`/`_remove_shims`/`_report_kept`/
+  `_report_failures`; `devices/linux.py` `_probe_cause` split with a new `_error_cause`;
+  `updates/selfheal.py` `check_state_json` split with a new `_state_file_verdict`.
+  Two functions over the limit that were not on the list also fixed: `cases/service.py`
+  `close_case` (nested hooks lifted to `_close_audit_hook`/`_close_anchor_hook`) and
+  `devices/_subprocess.py` `run_capped` (Popen lifted to `_start`).
+- `devices/win32.py`: `_dos_device_names` returned `set[LiteralString]` where `set[str]` was
+  declared. Same values, same empty-string filter; now a comprehension with an annotated
+  local so the return type is genuinely `set[str]`.
+- Tests: 14 `pytest.raises` blocks reduced to a single statement, `Exception` narrowed to
+  `IntegrityError` and `DeviceEnumerationError` in four places, six composite assertions
+  split, three `@pytest.fixture()` empty parens removed, `match=` added to every broad
+  `raises`.
+- Correction: the first round of `match=` patterns was written without reading the actual
+  exception text. Seven of them did not match and the tests failed — the intended message
+  was "Refusing device that does not exist", not "escaping the trusted device root", and
+  likewise for canonical-JSON, version parsing and shell splitting. Every pattern was then
+  probed against the real raise and corrected. A specific assertion with an invented
+  pattern is worse than a broad one.
+- Correction: `test_case_service_audit_hooks_are_built_by_one_factory` pinned a call count of
+  6, which the `close_case` split changed. Raised to 8 and a second assertion added for the
+  new factory, rather than reverting the split.
+- Files: `pyproject.toml`, `src/trace_core/{core/cli/doctor,core/cli/uninstall,cases/service,devices/_subprocess,devices/linux,devices/win32,updates/selfheal}.py`,
+  `tests/unit/test_audit_ledger.py`, `tests/unit/test_anchor_verification.py`,
+  `tests/unit/test_case_entity.py`, `tests/unit/test_device_containment.py`,
+  `tests/unit/test_device_enumeration_truth.py`, `tests/unit/test_devices_cli.py`,
+  `tests/unit/test_devices_linux_adapter.py`, `tests/unit/test_doctor.py`,
+  `tests/unit/test_installer_contract.py`, `tests/unit/test_security_regressions.py`,
+  `tests/unit/test_shared_helpers.py`, `tests/unit/test_shell.py`,
+  `tests/updates/test_phase_c_durable.py`, `tests/updates/test_policy_versions.py`,
+  `tests/updates/test_response_classification.py`, `tests/updates/test_restore_safety.py`,
+  `tests/updates/test_state_machine.py`, `changelog/nirjxr26/changelog.md`.
+- CI fix, root cause mine: the suite was environment-dependent. It inherited whatever signing
+  key the machine had — the repo `.env` or a real `TRACE_SECRET_KEY` locally, the shipped
+  placeholder on the runner — so `is_default_key()` differed per machine and `audit/verifier.py`
+  reported every signature mismatch as `signing_key` rather than `signature`. Nine failures
+  on CI that could not exist locally. `tests/conftest.py` now forces a fixed non-placeholder
+  key for the session and rebinds `settings.secret_key` (pydantic-settings resolves the value
+  at construction, so setting the variable alone is not enough), raising rather than running if
+  it does not take effect. Verified green under a placeholder key, a real operator key, and no
+  key at all. Two doctor tests and the structlog self-heal test were downstream of the same key.
+- Second pass on the S5778 findings: the first fix reduced each block to one statement but
+  left a second call nested in the argument list, which is the other half of the same rule.
+  `AuditService(session_manager)`, `_FailThird(c)`, `_signed(...)`, `_Svc()`,
+  `svc.verify()`, `str(...)`, `LinuxDevice()`, `float("nan")` are all now built before the
+  `with`, leaving exactly one invocation inside it. Verified by an AST walk over the three
+  flagged files: 22 `pytest.raises` blocks, 0 with a nested call.
+- Verification: `ruff check src tests` clean including `C901`; `mypy src tests` clean on 206
+  files; unit + updates suites green (1148 passed, 12 skipped). Full pre-PR gate on the final
+  tree: passed, 1159 passed / 12 skipped, 81.28% coverage.
+
+## 2026-10-10
+- Summary: CI fix, second root cause of mine. `test_self_heal_failures_reach_the_log` passed
+  for months only because the machine it was written on had been up longer than the
+  five-minute self-heal interval. `time.monotonic()` returns seconds since an unspecified
+  origin and starts near zero on a freshly booted runner, so `_maybe_heal` took its
+  throttle branch and logged nothing — the exact regression the test exists to catch,
+  reported as passing. The test now stubs `time.monotonic` past the interval.
+  Falsified in both directions under a simulated 45-second uptime: without the stub it
+  fails, with the stub it passes.
+- Root cause of the class: this suite had two tests whose outcome depended on ambient
+  machine state rather than the code. Both are now pinned. Worth watching for the same
+  shape — a test that passes because of wall-clock uptime, elapsed real time, or an
+  operator's `.env` is a test that reports nothing.
+- Files: `tests/unit/test_selfheal.py`, `changelog/nirjxr26/changelog.md`.

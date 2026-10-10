@@ -84,9 +84,24 @@ def download_bar(read: int, total: int, width: int = 28):
     return body
 
 
-def integrity_line(verified: bool):  # type: ignore[no-untyped-def]
-    """Single source for Cases/Audit integrity summary. Hashes live in Integrity tab only."""
-    return dot_line(verified, "Verified" if verified else "Mismatch")
+def integrity_line(verified: bool | None, checked: int = 0, *, sampled: int | None = None):  # type: ignore[no-untyped-def]
+    """Single source for Cases/Audit integrity summary. Hashes live in Integrity tab only.
+
+    `verified=None` means the check could not run at all. It must not render as Verified:
+    an unreadable ledger and an empty loop both used to leave the flag True, so a total
+    outage showed a green tick.
+
+    `sampled` is the total the check drew from when `checked` is a subset. The line then
+    names the window instead of implying the whole history was covered.
+    """
+    if verified is None:
+        return dot_line(False, "Couldn't verify · ledger unavailable")
+    if not verified:
+        return dot_line(False, "Mismatch")
+    if checked == 0:
+        return dot_line(True, "No records to verify")
+    scope = f" of {sampled}" if sampled is not None and sampled > checked else ""
+    return dot_line(True, f"{checked} newest record{'' if checked == 1 else 's'}{scope} checked · all matched")
 
 
 def append_kv(body: Text, label: str, value: str) -> None:

@@ -1,9 +1,10 @@
-import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from trace_core.core.fs import ensure_dir
+import structlog
+
+from trace_core.core.fs import JsonFileVerdict, classify_json_file, ensure_dir
 
 TRUST_ANCHOR_NAME = "trust anchor"
 STATE_FILES_NAME = "state files"
@@ -22,14 +23,6 @@ def _guard(name: str, fn) -> SelfCheck:  # type: ignore[no-untyped-def]
         return fn()
     except Exception as exc:
         return SelfCheck(name, False, str(exc))
-
-
-def _reset_corrupt_json(path: Path) -> bool:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return not isinstance(data, dict)
-    except (OSError, ValueError, TypeError):
-        return True
 
 
 def _remove(path: Path) -> bool:
@@ -83,16 +76,35 @@ def check_trust_dirs() -> SelfCheck:
     return _guard("trust dirs", run)
 
 
+def _state_file_verdict(path: Path) -> tuple[SelfCheck | None, bool]:
+    """One state file: (failure to stop on, whether it was repaired)."""
+    if not path.exists():
+        return None, False
+    verdict, _data = classify_json_file(path)
+    if verdict is JsonFileVerdict.UNREADABLE:
+        return (
+            SelfCheck(
+                STATE_FILES_NAME,
+                False,
+                f"could not read {path.name} - left in place, run `trace recovery`",
+            ),
+            False,
+        )
+    if verdict is JsonFileVerdict.CORRUPT:
+        if not _remove(path):
+            return SelfCheck(STATE_FILES_NAME, False, f"cannot remove corrupt {path.name}"), False
+        return None, True
+    return None, False
+
+
 def check_state_json() -> SelfCheck:
     def run() -> SelfCheck:
         repaired = False
         for path in state_file_paths():
-            if not path.exists():
-                continue
-            if _reset_corrupt_json(path):
-                if not _remove(path):
-                    return SelfCheck(STATE_FILES_NAME, False, f"cannot remove corrupt {path.name}")
-                repaired = True
+            failure, was_repaired = _state_file_verdict(path)
+            if failure is not None:
+                return failure
+            repaired = repaired or was_repaired
         return SelfCheck(STATE_FILES_NAME, True, "reset" if repaired else "ok", repaired=repaired)
 
     return _guard(STATE_FILES_NAME, run)
@@ -158,11 +170,14 @@ def _maybe_heal() -> None:
     if now - _LAST_HEAL < _HEAL_INTERVAL:
         return
     _LAST_HEAL = now
-    run_self_heal()
+    log = structlog.get_logger()
+    for result in run_self_heal():
+        if not result.ok:
+            log.warning("self-heal check failed", check=result.name, detail=result.detail)
     try:
         heal_schema_drift()
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("schema drift self-heal failed", error=str(exc))
 
 
 def run_self_heal() -> list[SelfCheck]:

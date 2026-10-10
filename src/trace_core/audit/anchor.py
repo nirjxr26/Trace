@@ -60,42 +60,63 @@ def latest_anchor_for(case_number: str) -> Path | None:
     return max(matches, key=_seq_of) if matches else None
 
 
-def check_anchor_match(res, data: dict, latest_chain: str) -> None:  # type: ignore[no-untyped-def]
-    """Pure anchor comparison. Raises AuditTamperError; performs no printing or exiting."""
-    from trace_core.core.errors import AuditTamperError
+def check_anchor_match(res, data: dict, anchored_chain: str | None) -> None:  # type: ignore[no-untyped-def]
+    """Pure anchor comparison. Raises AuditTamperError; performs no printing or exiting.
+
+    `anchored_chain` is the ledger's chain hash at the anchor's own sequence, not the tip.
+    Comparing against the tip made every later event read as tampering, so simply doing
+    more work after closing a case produced "restore from backup" on an intact ledger.
+
+    Only a broken chain at the anchored position says the *ledger* was edited, so only that
+    condition is an AuditTamperError. An unsigned, forged, or foreign anchor is an
+    AnchorVerificationError: the ledger may be perfectly intact, and prescribing a restore
+    would destroy newer valid records.
+    """
+    from trace_core.core.errors import AnchorVerificationError, AuditTamperError
 
     if not res.is_valid:
         return
     exp_seq = data.get("last_seq")
     exp_chain = data.get("last_chain")
-    if res.last_seq != exp_seq:
-        raise AuditTamperError(f"Anchor tail mismatch: DB last_seq {res.last_seq} != anchor {exp_seq}")
-    if exp_chain and latest_chain != exp_chain:
-        raise AuditTamperError("Anchor chain mismatch")
+    tip = res.last_seq or 0
+    if exp_seq is not None and exp_seq > tip:
+        raise AnchorVerificationError(
+            f"anchor is for record {exp_seq}, but this ledger stops at {tip} - another ledger"
+        )
+    if exp_chain and anchored_chain and exp_chain != anchored_chain:
+        raise AuditTamperError(f"record {exp_seq} no longer matches the point this anchor saved")
     signature = data.get("signature")
     key_id = data.get("key_id")
     if not (signature and key_id):
-        raise AuditTamperError("Anchor is unsigned; refusing to trust an unverifiable envelope")
+        raise AnchorVerificationError("Anchor is unsigned; refusing to trust an unverifiable envelope")
     from trace_core.audit.signing import verify_bytes
     from trace_core.core.canonical import canonical_json
 
     unsigned = {k: v for k, v in data.items() if k not in ("key_id", "signature")}
     if not verify_bytes(key_id, canonical_json(unsigned), signature):
-        raise AuditTamperError("Anchor signature invalid")
+        raise AnchorVerificationError("Anchor signature invalid - the file was altered, or signed with a different key")
 
 
 def verify_against_anchor(svc, res, anchor: str | None) -> None:  # type: ignore[no-untyped-def]
     """Compare a verify result against an anchor file. Raises typed errors, never exits."""
     if not anchor:
         return
-    from trace_core.core.errors import ValidationError
+    from trace_core.core.errors import AnchorVerificationError, ValidationError
 
     try:
         data = read_anchor(anchor)
     except Exception as e:
         raise ValidationError(f"Unreadable anchor file: {anchor} ({e})") from e
-    _, latest = svc.head()
-    check_anchor_match(res, data, latest)
+    if not isinstance(data, dict):
+        raise ValidationError(f"Anchor file {anchor} is not an anchor: expected a JSON object.")
+    exp_seq = data.get("last_seq")
+    anchored_chain = None
+    if isinstance(exp_seq, int):
+        row = svc.get_by_seq(exp_seq)
+        if row is None and res.last_seq is not None and exp_seq <= res.last_seq:
+            raise AnchorVerificationError(f"record {exp_seq}, the point this anchor saved, is no longer in the ledger")
+        anchored_chain = row.chain_hash if row is not None else None
+    check_anchor_match(res, data, anchored_chain)
 
 
 def record_anchor_intent(session, case_number: str, case_id, seq: int, chain_hash: str) -> None:  # type: ignore[no-untyped-def]

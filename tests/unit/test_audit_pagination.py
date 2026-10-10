@@ -45,7 +45,7 @@ def _selects(session_manager: DatabaseSessionManager) -> Generator[list[str], No
         if params:
             for value in list(params) if isinstance(params, (list, tuple)) else [params]:
                 flat = flat.replace("?", repr(value), 1)
-        if "audit_events" in flat:
+        if "audit_events" in flat and "FROM audit_events" in flat and "count(" not in flat:
             seen.append(flat)
 
     sa_event.listen(session_manager.engine, "before_cursor_execute", handler)
@@ -386,7 +386,7 @@ def test_cli_after_seq_pages_upward(session_manager: DatabaseSessionManager, mon
 
 @pytest.mark.unit
 @pytest.mark.anyio
-async def test_audit_header_count_tracks_every_loaded_row(
+async def test_audit_header_reports_the_whole_matching_ledger_not_the_window(
     session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from textual.widgets import Static
@@ -400,8 +400,10 @@ async def test_audit_header_count_tracks_every_loaded_row(
         await pilot.press("3")
         await pilot.pause()
         header = str(app.query_one(f"#{AUDIT_HEADER_ID}", Static).render())
-        assert header.rstrip().endswith(f"· {PAGE_ROWS}")
+        assert header.rstrip().endswith(f"· {len(seqs)}")
+        assert not header.rstrip().endswith(f"· {PAGE_ROWS}")
         table = app.query_one("#audit-table", DataTable)
+        assert table.row_count == PAGE_ROWS
         table.scroll_to(y=table.max_scroll_y, animate=False)
         await pilot.pause()
         assert table.row_count == len(seqs)
@@ -465,3 +467,70 @@ async def test_audit_view_detail_is_not_refetched_when_the_tab_is_revisited(
             assert app.query_one("#audit-table", DataTable).row_count == 5
             assert len([s for s in seen if "payload_json" in s]) == 0
             assert len([s for s in seen if "payload_json" not in s]) == 2
+
+
+def test_count_events_totals_the_whole_ledger(session_manager: DatabaseSessionManager) -> None:
+    _seed(session_manager, 7)
+    assert AuditService(session_manager).count_events(AuditFilterDto()) == 7
+
+
+def test_count_events_follows_the_active_filter(session_manager: DatabaseSessionManager) -> None:
+    _seed(session_manager, 4, actor="agent7")
+    _seed(session_manager, 3, actor="someone")
+    svc = AuditService(session_manager)
+    assert svc.count_events(AuditFilterDto()) == 7
+    assert svc.count_events(AuditFilterDto(search="agent7")) == 4
+    assert svc.count_events(AuditFilterDto(search="nobody")) == 0
+
+
+def test_count_events_respects_the_keyset_bounds(session_manager: DatabaseSessionManager) -> None:
+    seqs = _seed(session_manager, 6)
+    svc = AuditService(session_manager)
+    assert svc.count_events(AuditFilterDto()) == 6
+    assert svc.count_events(AuditFilterDto(before_seq=seqs[3])) == 3
+    assert svc.count_events(AuditFilterDto(after_seq=seqs[2])) == 3
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_a_failing_count_is_announced_and_never_shown_as_a_wrong_total(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from textual.widgets import Static
+
+    from trace_core.tui.screens.audit import AUDIT_HEADER_ID
+
+    monkeypatch.setattr("trace_core.core.service.db_manager", session_manager)
+    _seed(session_manager, 12)
+
+    def _broken(*_args: object, **_kwargs: object) -> int:
+        raise RuntimeError("count unavailable")
+
+    monkeypatch.setattr("trace_core.audit.service.AuditService.count_events", _broken)
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(110, 40)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        messages = [n.message for n in app._notifications]
+        header = str(app.query_one(f"#{AUDIT_HEADER_ID}", Static).render())
+        table = app.query_one("#audit-table", DataTable)
+    assert any("count unavailable" in m for m in messages)
+    assert table.row_count == 12
+    assert header.rstrip().endswith("· 12")
+
+
+def test_the_event_column_fits_every_action_label() -> None:
+    from trace_core.audit.renderers import short_action_label
+    from trace_core.tui.screens import audit as audit_screen
+
+    width = dict(audit_screen.TABLE_COLUMNS)["Event"]
+    for action in AuditAction:
+        label = short_action_label(action.value)
+        assert len(label) <= width, f"{action.value} renders as {label!r}, column is {width}"
+
+
+def test_the_pane_reports_a_total_separate_from_the_loaded_window() -> None:
+    from trace_core.tui.widgets import TablePane
+
+    assert hasattr(TablePane, "displayed_count")
+    assert TablePane.displayed_count is not TablePane._update_header

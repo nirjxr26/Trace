@@ -62,6 +62,17 @@ class DeviceError(ApplicationError):
     """Base for device-domain failures."""
 
 
+class DeviceEnumerationError(DeviceError):
+    """Raised when devices could not be listed at all.
+
+    Distinct from an empty list. `list_block_devices` used to swallow every
+    `HelperFailure` and return `[]`, so a missing or broken `lsblk` rendered as
+    "0 devices" with a green marker — an operator reads that as "no drive attached".
+    The TUI keeps the last good list and shows this, rather than replacing it with an
+    empty one.
+    """
+
+
 class DeviceNotFoundError(DeviceError):
     """Raised when a requested device node is not present."""
 

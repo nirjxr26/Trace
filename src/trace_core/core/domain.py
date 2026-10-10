@@ -4,6 +4,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -14,11 +15,13 @@ __all__ = [
     "BaseEntity",
     "DomainError",
     "InvariantViolationError",
+    "MAX_ACTOR",
     "is_naive",
     "now_utc",
     "parse_enum_value",
     "require_utc",
     "strip_controls",
+    "bound_actor",
 ]
 
 _CONTROLS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -28,6 +31,13 @@ def strip_controls(value: str, multiline: bool = False) -> str:
     """Remove terminal control characters. Newlines survive only when multiline."""
     text = _CONTROLS_RE.sub("", value).replace("\r", "")
     return text if multiline else text.replace("\n", "")
+
+
+MAX_ACTOR: Final[int] = 255
+
+
+def bound_actor(value: str) -> str:
+    return strip_controls(value)[:MAX_ACTOR]
 
 
 def require_utc(dt: datetime | None) -> datetime | None:

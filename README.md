@@ -117,7 +117,7 @@ else goes to `~/.trace/install.log`. Success ends in two green lines: `Installat
 ~/.trace/install.log`.
 
 ```
-  Trace 0.3.0
+  Trace 0.3.1
 
 │ ● Verifying
 │ ● Downloading

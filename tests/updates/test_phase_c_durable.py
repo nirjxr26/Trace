@@ -26,7 +26,7 @@ def test_transition_failure_keeps_state(session_manager, temp_storage_root, monk
 
     monkeypatch.setattr(marker_mod, "write_marker", _boom)
     life = UpdateLifecycle("tx-c-state")
-    with pytest.raises(OSError):
+    with pytest.raises(OSError, match="disk full"):
         life.transition(UpdateState.CHECKING)
     assert life.state == UpdateState.IDLE
 
@@ -47,9 +47,9 @@ def test_pre_mutation_failure_cleans_backup(temp_storage_root, tmp_path):
     mgr = DatabaseSessionManager(f"sqlite:///{tmp_path}/orphan-src.db")
     mgr.init_schema()
     backup_dir = tmp_path / "backups"
-    with pytest.raises(MigrationCompatibilityError):
-        from trace_core.updates.migration import run_updater_migration
+    from trace_core.updates.migration import run_updater_migration
 
+    with pytest.raises(MigrationCompatibilityError):
         run_updater_migration(mgr, "tx-orphan-1", schema_min=9999, backup_dir=backup_dir)
     assert not (backup_dir / "trace-backup.db").exists()
     assert marker_state() == ("absent", None)

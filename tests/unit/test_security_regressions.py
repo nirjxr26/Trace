@@ -51,7 +51,7 @@ def test_number_grammar_rejects_hostile() -> None:
 def test_anchor_path_contained() -> None:
     from trace_core.audit.anchor import anchor_path
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="escaping"):
         anchor_path("../../../../etc", 1)
 
 
@@ -799,8 +799,57 @@ def test_anchor_mismatch_pure(session_manager: DatabaseSessionManager) -> None:
     good = {"last_seq": seq, "last_chain": chain}
     check_anchor_match(res, _signed_anchor(good), chain)
     forged = _signed_anchor({**good, "last_seq": seq + 100})
-    with pytest.raises(AuditTamperError, match="tail mismatch"):
+    with pytest.raises(AuditTamperError, match="another ledger"):
         check_anchor_match(res, forged, chain)
+
+
+def test_an_anchor_stays_valid_after_the_ledger_grows(session_manager: DatabaseSessionManager) -> None:
+    """The false positive that made anchors unusable.
+
+    An anchor records one case's close. Comparing it to the ledger tip meant any later
+    event - another case, a device check - was reported as tampering, with a restore-from-
+    backup remedy, on an intact ledger.
+    """
+    from trace_core.audit.anchor import check_anchor_match
+    from trace_core.audit.service import AuditService
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="First", lead_examiner="Ex"))
+    svc = AuditService(session_manager)
+    seq, chain = svc.head()
+    anchored = _signed_anchor({"last_seq": seq, "last_chain": chain})
+
+    for _ in range(3):
+        CaseService(session_manager).create_case(CaseCreateDto(title="Later", lead_examiner="Ex"))
+
+    res = svc.verify()
+    later_seq, later_chain = svc.head()
+    assert later_seq > seq, "the ledger must have advanced for this to test anything"
+    anchored_row = svc.get_by_seq(seq)
+    assert anchored_row is not None
+    check_anchor_match(res, anchored, anchored_row.chain_hash)
+    assert later_chain != chain
+
+
+def test_a_changed_record_at_the_anchored_position_is_still_caught(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    """Advancing the ledger must not become a way to skip the check."""
+    from trace_core.audit.anchor import check_anchor_match
+    from trace_core.audit.service import AuditService
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+    from trace_core.core.errors import AuditTamperError
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="First", lead_examiner="Ex"))
+    svc = AuditService(session_manager)
+    seq, chain = svc.head()
+    anchored = _signed_anchor({"last_seq": seq, "last_chain": chain})
+    CaseService(session_manager).create_case(CaseCreateDto(title="Later", lead_examiner="Ex"))
+    res = svc.verify()
+    with pytest.raises(AuditTamperError, match="no longer matches"):
+        check_anchor_match(res, anchored, "f" * 64)
 
 
 def test_anchor_forged_signature_is_rejected(session_manager: DatabaseSessionManager) -> None:
@@ -890,13 +939,13 @@ async def test_bad_anchor_path_notifies(session_manager: DatabaseSessionManager)
         for _ in range(5):
             body_now = app.query_one("#settings-detail", Static).render()
             text_now = body_now.plain if isinstance(body_now, Text) else str(body_now)
-            if "Chain Status" in text_now or "No audit events found" in text_now:
+            if "Chain Status" in text_now or "NOTHING TO VERIFY" in text_now or "No audit" in text_now:
                 break
             await pilot.press("down")
             await pilot.pause()
         rendered = app.query_one("#settings-detail", Static).render()
         body = rendered.plain if isinstance(rendered, Text) else str(rendered)
-        assert "Chain Status" in body or "No audit events found" in body
+        assert "Chain Status" in body or "NOTHING TO VERIFY" in body or "No audit" in body
         # Service-level typed error for the bad anchor path itself.
         from trace_core.audit.anchor import verify_against_anchor
         from trace_core.audit.service import AuditService
@@ -904,12 +953,9 @@ async def test_bad_anchor_path_notifies(session_manager: DatabaseSessionManager)
 
         svc = AuditService(session_manager)
         res = svc.verify()
-        try:
-            verify_against_anchor(svc, res, "/no/such/anchor.json")
-        except ValidationError as exc:
-            assert "Unreadable anchor" in str(exc)
-        except Exception:
-            pass  # empty ledger: nothing to anchor-check, app already stayed alive
+        if res.events_verified:
+            with pytest.raises(ValidationError, match="Unreadable anchor"):
+                verify_against_anchor(svc, res, "/no/such/anchor.json")
 
 
 @pytest.mark.anyio

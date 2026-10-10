@@ -76,7 +76,7 @@ def test_check_reports_read_only_and_exits_zero(device_file_env: Path) -> None:
     assert _payload(result.stdout)["verdict"] == "READ_ONLY"
 
 
-@pytest.mark.parametrize("argv", (["list"], ["list", "--kind", "file"]))
+@pytest.mark.parametrize("argv", [["list"], ["list", "--kind", "file"]])
 def test_json_output_is_the_only_thing_on_stdout(device_file_env: Path, argv: list[str]) -> None:
     """A trailing confirmation line makes `--output json` unparseable for an examiner."""
     result = runner.invoke(app, ["device", *argv, "--output", "json"])
@@ -212,7 +212,8 @@ def test_the_shell_also_requires_the_typed_token(monkeypatch, device_box: Path) 
 
     monkeypatch.setattr("trace_core.devices.commands.confirm_typed_number", lambda *a, **k: True)
     assert handler.execute("check", ["--ack-unverified", node], None) is True
-    assert reached and reached[0]["acknowledge_unverified_source"] is True
+    assert reached, "the override must reach the service"
+    assert reached[0]["acknowledge_unverified_source"] is True
 
 
 def test_yes_skips_the_acknowledgement_prompt(device_file_env: Path) -> None:
@@ -244,7 +245,8 @@ def test_the_key_reference_documents_every_tab_and_device_keys() -> None:
     from trace_core.tui.screens.devices import DevicesView
 
     rendered = " ".join(f"{key} {desc}" for _, items in KeysModal.GROUPS for key, desc in items)
-    assert str(len(_TAB_ORDER)) in rendered and "Devices" in rendered
+    assert str(len(_TAB_ORDER)) in rendered
+    assert "Devices" in rendered
     for binding in DevicesView.BINDINGS:
         if not isinstance(binding, Binding):
             continue

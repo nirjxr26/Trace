@@ -18,11 +18,19 @@ def assert_safe_filename(name: str) -> str:
 
 
 def safe_filename_or_exit(name: str) -> str:
-    """Release-script variant: a refused filename becomes a clean SystemExit, not a traceback."""
+    """Release-script variant: a refused filename becomes a clean non-zero exit.
+
+    The name is not echoed back. It came from an untrusted manifest, and a traversal
+    payload reprinted on stderr is exactly the string an operator would paste into a bug
+    report. The refusal is a trust failure, so it exits 11 like every other one.
+    """
+    from trace_core.core.cli.exit_codes import EXIT_VERIFY_FAILED
+
     try:
         return assert_safe_filename(name)
-    except Exception as e:
-        raise SystemExit(f"refusing unsafe artifact filename: {name!r} ({e})") from None
+    except UpdateVerificationError:
+        print("refusing unsafe artifact filename: the manifest names a path outside the download directory")
+        raise SystemExit(EXIT_VERIFY_FAILED) from None
 
 
 def verify_artifact_content(path: Path, artifact: ManifestArtifact) -> None:

@@ -14,13 +14,21 @@ ARTIFACT_PATH_HELP = "Artifact file (default: auto-download from manifest)"
 
 
 def load_update(manifest: str | None, artifact: str | None) -> tuple[ReleaseManifest, str, str, ManifestArtifact]:
-    from trace_core.updates.checker import get_installed_version, load_manifest_auto, resolve_channel
+    from trace_core.updates.checker import get_installed_version, load_manifest_auto, pointer_version, resolve_channel
     from trace_core.updates.policy import is_update_available, select_artifact
     from trace_core.updates.verifier import resolve_artifact
 
     channel = resolve_channel(None)
     m, target = load_manifest_auto(manifest, channel)
     current = get_installed_version()
+    _version, pointer_problem = pointer_version()
+    if pointer_problem is not None:
+        # Without the pointer we cannot tell whether an update is needed. Exiting 0 here
+        # told the user they were current when their actual version was unknown, and a
+        # fallback value newer than the manifest would have offered a downgrade.
+        from trace_core.updates.errors import UpdateError
+
+        raise UpdateError(f"cannot tell which version is installed - {pointer_problem}. Run `trace recovery`.")
     if not is_update_available(current, m):
         # Same wording as the check card: "install" with nothing new is not a failure.
         from trace_core.updates.renderers import render_up_to_date

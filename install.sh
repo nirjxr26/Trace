@@ -292,6 +292,11 @@ trace_success() {
     printf '%s\n' "Installation complete"
     printf '%s\n' "Trace $TRACE_VER installed successfully."
   fi
+  # Installed and on PATH. A failing doctor is reported separately and must not be
+  # reported as a completed install.
+  if [ "${DOCTOR_FAILED:-0}" = "1" ]; then
+    exit 1
+  fi
 }
 
 trace_check_version() {
@@ -722,13 +727,17 @@ else
     trace_say "  [OK] Forensic storage directory exists."
 fi
 
+DOCTOR_FAILED=0
 if [ "${SKIP_DB_MIGRATION:-0}" != "1" ]; then
     trace_resolve_venv || trace_fail "config"
     if trace_run_live "$TRACE_BIN" doctor; then
         trace_say "  [OK] Database verified and up to date."
     else
-        trace_say "  [!] Database unreachable. Trace will self-initialize on first use once it is reachable."
-        trace_say "      Start PostgreSQL or set TRACE_DATABASE_URL in .env, then run 'trace doctor' to verify."
+        # Reported and carried into the exit status. It used to be swallowed into a log
+        # line, so an install onto a host that cannot verify its own records looked clean.
+        DOCTOR_FAILED=1
+        trace_say "  [!] 'trace doctor' did not pass, so this host is not verified."
+        trace_say "      Run 'trace doctor' to see which check failed, fix it, then re-run the installer."
     fi
 else
     trace_say "  Skipping database verification as requested."

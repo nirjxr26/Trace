@@ -14,10 +14,11 @@ acquisition control. The three ingredients here are resolve-against-enumerated-s
 real-hardware opt-in flag, and serial echo. Drive mapping is deliberately absent.
 """
 
+import ctypes.wintypes as wintypes
 import json
 import sys
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from trace_core.core.clock import now_utc
 from trace_core.devices._subprocess import (
@@ -69,7 +70,7 @@ FILE_SHARE_WRITE: Final[int] = 0x00000002
 FILE_SHARE_DELETE: Final[int] = 0x00000004
 SHARE_MODE: Final[int] = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
 OPEN_EXISTING: Final[int] = 3
-INVALID_HANDLE_VALUE: Final[int] = -1
+INVALID_HANDLE_VALUE: Final[int] = cast(int, wintypes.HANDLE(-1).value)
 ERROR_ACCESS_DENIED: Final[int] = 5
 ERROR_INSUFFICIENT_BUFFER: Final[int] = 122
 ERROR_MORE_DATA: Final[int] = 234
@@ -324,7 +325,7 @@ def _query_dos_devices() -> set[str]:
         buffer = ctypes.create_unicode_buffer(size)
         needed = kernel.QueryDosDeviceW(None, buffer, size)
         if needed:
-            return set("".join(buffer[:needed]).split("\x00")) - {""}
+            return {name for name in "".join(buffer[:needed]).split("\x00") if name}
         if kernel.GetLastError() not in (ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA) or size >= MAX_DOS_DEVICE_BUFFER:
             return set()
         size *= 2
@@ -344,6 +345,7 @@ def _try_open(node: str) -> tuple[int | None, int]:
 
     create_file = kernel.CreateFileW
     create_file.restype = wintypes.HANDLE
+    kernel.SetLastError(0)
     handle = create_file(
         ctypes.c_wchar_p(node),
         GENERIC_READ,

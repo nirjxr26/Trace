@@ -96,15 +96,24 @@ class DatabaseSessionManager:
         from trace_core.updates.migration import is_owner, marker_state
 
         state, active = marker_state()
+        if state == "unreadable":
+            from trace_core.updates.errors import UpdateInProgressError
+
+            raise UpdateInProgressError(
+                "could not read the update marker, so an unfinished update cannot be ruled out. "
+                "It was left in place. Run `trace recovery` once nothing else is using this install."
+            )
         if state == "corrupt":
             from trace_core.updates.errors import UpdateInProgressError
 
-            raise UpdateInProgressError("update marker unreadable; run trace recovery before starting")
+            raise UpdateInProgressError("update marker is corrupt; run trace recovery before starting")
         if state == "active" and active is not None and not is_owner(str(active.get("transaction_id"))):
             from trace_core.updates.errors import UpdateInProgressError
 
             raise UpdateInProgressError(
-                f"update transaction {active.get('transaction_id')} owns migration; normal startup deferred"
+                "an update didn't finish on this computer. Run `trace recovery` to put things back. "
+                "An update may have changed the database or the active release, so recovery will "
+                "report what it can confirm rather than promise your records are untouched."
             )
         memory = ":memory:" in self._url
         # _READY_CACHE is a best-effort fast path; correctness relies on
@@ -156,7 +165,26 @@ def sanitized_db_identity(url: str) -> str:
         return "unknown"
 
 
-_CREDENTIAL_QUERY_KEYS = frozenset({"password", "passwd", "pwd", "authtoken", "auth_token", "token", "secret"})
+_CREDENTIAL_QUERY_KEYS = frozenset(
+    {
+        "password",
+        "passwd",
+        "pwd",
+        "authtoken",
+        "auth_token",
+        "token",
+        "secret",
+        "sslpassword",
+        "sslkey",
+        "sslcert",
+        "sslrootcert",
+        "api_key",
+        "apikey",
+        "access_token",
+        "private_key",
+        "key",
+    }
+)
 
 
 def _masked_query(query: str) -> str:
@@ -171,22 +199,33 @@ def _masked_query(query: str) -> str:
 
 
 def sanitized_db_url(url: str) -> str:
-    """Full database URL with the password masked. Single source for display."""
+    """Full database URL with every credential masked. Single source for display.
+
+    Every exit returns a masked URL. Returning `url` on any failure path put a plaintext
+    password into `doctor` and the settings panel: once when there was no username (so the
+    `_masked_query` call below was never reached), and once on any parse error. An
+    unparseable URL is now replaced outright rather than echoed.
+    """
     from urllib.parse import urlunsplit
 
     try:
         parts, hostport = _split_safe(url)
-        if not parts.hostname:
-            return url
+        if not parts.scheme:
+            return "<unparseable database url>"
         if parts.username and parts.password:
             netloc = f"{parts.username}:*****@{hostport}"
         elif parts.username:
             netloc = f"*****@{hostport}"
         else:
-            return url
+            netloc = hostport
+        if not netloc:
+            # urlunsplit collapses the empty authority, turning sqlite:///trace.db into
+            # sqlite:/trace.db. A hostless URL keeps its slashes.
+            masked = _masked_query(parts.query)
+            return f"{parts.scheme}://{parts.path}" + (f"?{masked}" if masked else "")
         return urlunsplit((parts.scheme, netloc, parts.path, _masked_query(parts.query), parts.fragment))
     except Exception:
-        return url
+        return "<unparseable database url>"
 
 
 def sqlite_file_path(url: str) -> Path | None:

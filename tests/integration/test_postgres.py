@@ -3,10 +3,13 @@
 import json
 import os
 import uuid
+from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from sqlalchemy import inspect, text
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import DBAPIError
 
 from trace_core.audit.domain import GENESIS_CHAIN, chain_hash, payload_hash
@@ -23,14 +26,19 @@ from trace_core.core.database.session import DatabaseSessionManager
 
 pytestmark = pytest.mark.integration
 
+DISPOSABLE_PREFIX = "trace_itest_"
+
 
 def get_postgres_url() -> str | None:
-    """PostgreSQL test URL, from the dedicated opt-in variable only.
+    """PostgreSQL bootstrap URL, from the dedicated opt-in variable only.
 
     H-76: this fell back to TRACE_DATABASE_URL, so a developer with a production URL in
     their shell ran this suite against production — and these tests create, close, archive
     and permanently purge cases. There is no fallback; the suite refuses to start unless
     TRACE_TEST_POSTGRES_URL is set explicitly.
+
+    The database named here is never the target. It only supplies the server, port and
+    credentials; `disposable_url` replaces the database with one this suite owns and drops.
     """
     url = os.environ.get("TRACE_TEST_POSTGRES_URL")
     if url and "postgres" in url.lower():
@@ -38,28 +46,66 @@ def get_postgres_url() -> str | None:
     return None
 
 
+def disposable_url(bootstrap_url: str, name: str) -> str:
+    """The bootstrap connection retargeted at a database this suite owns.
+
+    H-74: the suite ran against whatever database the opt-in URL named, so pointing it at
+    `postgres` or at the operator's `trace` let destructive tests purge real cases and left
+    the ledger with rows the suite never wrote. The database component is replaced, which
+    makes the target independent of how the variable was set.
+
+    `hide_password=False` is required, not cosmetic: `str(URL)` masks the password as
+    `***`, and handing that string back to the engine authenticates as the literal password
+    `***`, which fails and made every test skip instead of run.
+    """
+    return make_url(bootstrap_url).set(database=name).render_as_string(hide_password=False)
+
+
+def _dispose(engine: Engine, name: str) -> None:
+    engine.dispose()
+    with create_engine(engine.url.set(database="postgres"), isolation_level="AUTOCOMMIT").connect() as conn:
+        conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))  # noqa: S608 - name is suite-generated
+
+
+def _create(engine: Engine, name: str) -> None:
+    with create_engine(engine.url.set(database="postgres"), isolation_level="AUTOCOMMIT").connect() as conn:
+        conn.execute(text(f'CREATE DATABASE "{name}"'))  # noqa: S608 - name is suite-generated
+
+
 @pytest.fixture
-def pg_session_manager() -> DatabaseSessionManager:
-    """Provide a DatabaseSessionManager connected to PostgreSQL, or skip if unavailable."""
+def pg_session_manager() -> Generator[DatabaseSessionManager, None, None]:
+    """A PostgreSQL database created and dropped by this suite, or skip if unavailable."""
     pg_url = get_postgres_url()
     if not pg_url:
         pytest.skip("PostgreSQL environment not configured (set TRACE_TEST_POSTGRES_URL)")
 
-    mgr = DatabaseSessionManager(pg_url)
-    is_healthy, _ = mgr.check_connection()
-    if not is_healthy:
-        pytest.skip("Cannot reach configured PostgreSQL service")
+    name = f"{DISPOSABLE_PREFIX}{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    admin = create_engine(pg_url, isolation_level="AUTOCOMMIT")
+    try:
+        admin.connect().close()
+    except Exception as exc:
+        admin.dispose()
+        pytest.skip(f"Cannot reach configured PostgreSQL service: {exc}")
 
-    # Assert dialect is genuinely PostgreSQL, failing loudly if an unexpected fallback occurred
-    assert mgr.engine.dialect.name == "postgresql", f"Expected postgresql dialect, got {mgr.engine.dialect.name}"
+    _create(admin, name)
+    mgr = DatabaseSessionManager(disposable_url(pg_url, name))
+    try:
+        is_healthy, _ = mgr.check_connection()
+        if not is_healthy:
+            pytest.skip("Disposable PostgreSQL database did not come up")
 
-    with mgr.engine.connect() as conn:
-        db_version = conn.execute(text("SELECT version();")).scalar()
-        assert db_version is not None
-        assert "postgresql" in str(db_version).lower()
+        # Assert dialect is genuinely PostgreSQL, failing loudly if an unexpected fallback occurred
+        assert mgr.engine.dialect.name == "postgresql", f"Expected postgresql dialect, got {mgr.engine.dialect.name}"
 
-    mgr.init_schema()
-    return mgr
+        with mgr.engine.connect() as conn:
+            db_version = conn.execute(text("SELECT version();")).scalar()
+            assert db_version is not None
+            assert "postgresql" in str(db_version).lower()
+
+        mgr.init_schema()
+        yield mgr
+    finally:
+        _dispose(admin, name)
 
 
 def test_postgres_integration_lifecycle(pg_session_manager: DatabaseSessionManager) -> None:
@@ -113,6 +159,16 @@ def _attempt_tamper_write(session, stmt: str) -> None:  # type: ignore[no-untype
     session.flush()
 
 
+def _seed_ledger_row(mgr: DatabaseSessionManager, label: str) -> str:
+    """Create the case whose ledger row a tamper test needs. A tamper at a seq that does
+    not exist updates zero rows and raises nothing, so the row must be created here rather
+    than left behind by whichever test happened to run first against a shared database."""
+    service = CaseService(mgr)
+    return service.create_case(
+        CaseCreateDto(title=f"{label} {uuid.uuid4().hex[:6]}", lead_examiner="Agent Mulder")
+    ).number
+
+
 def test_postgres_audit_append_only(pg_session_manager: DatabaseSessionManager) -> None:
     """Verify the 008 trigger rejects ledger UPDATE/DELETE on PostgreSQL (parity row 1)."""
     from trace_core.core.database.migrations import get_applied_migrations
@@ -122,8 +178,7 @@ def test_postgres_audit_append_only(pg_session_manager: DatabaseSessionManager) 
     )
 
     service = CaseService(pg_session_manager)
-    uid = uuid.uuid4().hex[:6]
-    created = service.create_case(CaseCreateDto(title=f"AppendOnly {uid}", lead_examiner="Agent Mulder"))
+    created = _seed_ledger_row(pg_session_manager, "AppendOnly")
     try:
         with pg_session_manager.session() as session:
             for stmt in ("UPDATE audit_events SET actor = 'mallory'", "DELETE FROM audit_events"):
@@ -131,8 +186,8 @@ def test_postgres_audit_append_only(pg_session_manager: DatabaseSessionManager) 
                     _attempt_tamper_write(session, stmt)
                 session.rollback()
     finally:
-        service.delete_case(created.number, purge=False)
-        service.delete_case(created.number, purge=True)
+        service.delete_case(created, purge=False)
+        service.delete_case(created, purge=True)
 
 
 def test_postgres_concurrent_sequence_allocation(pg_session_manager: DatabaseSessionManager) -> None:
@@ -198,12 +253,12 @@ def test_postgres_migration_017_preserves_append_only_trigger(
     with pg_session_manager.engine.connect() as conn:
         assert _verify_008_audit_protection(conn) is True
 
-    def _tamper() -> None:
-        with pg_session_manager.engine.begin() as conn:
-            conn.execute(text("UPDATE audit_events SET actor = 'tampered' WHERE seq = 1"))
+    _seed_ledger_row(pg_session_manager, "Migration017")
 
-    with pytest.raises(DBAPIError):
-        _tamper()
+    with pg_session_manager.session() as session:
+        with pytest.raises(DBAPIError):
+            _attempt_tamper_write(session, "UPDATE audit_events SET actor = 'tampered' WHERE seq = 1")
+        session.rollback()
 
 
 def test_postgres_migration_017_accepts_a_null_case_row(

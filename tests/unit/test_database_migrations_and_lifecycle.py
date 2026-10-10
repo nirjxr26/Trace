@@ -278,10 +278,12 @@ def test_version_single_sourced() -> None:
     import tomllib
     from pathlib import Path
 
+    import trace_core
     from trace_core.core.settings import settings
 
     pyproject = tomllib.loads((Path(__file__).parents[2] / "pyproject.toml").read_bytes().decode("utf-8"))
     assert settings.version == pyproject["project"]["version"]
+    assert trace_core.__version__ == pyproject["project"]["version"]
 
 
 def test_update_channel_literal_matches_update_channel_enum() -> None:

@@ -6,11 +6,16 @@ from pathlib import Path
 import typer
 
 from trace_core.core.cli.args import interactive_terminal
-from trace_core.core.cli.exit_codes import EXIT_SUCCESS
+from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_SUCCESS
 from trace_core.core.ui.renderers import CLOSING_INDENT, console, done_line, step_line
 from trace_core.updates.stages import StageStatus
 
-_ALWAYS = ("app", "install")
+_APP = "app"
+_INSTALL = "install"
+_RELEASES = "releases"
+_BACKUPS = "backups"
+# app last: if anything above fails, the `trace` command is still there to fix it with.
+_ALWAYS = (_RELEASES, _BACKUPS, _INSTALL, _APP)
 _PURGE_ONLY = ("storage", "trust")
 
 
@@ -24,51 +29,101 @@ def _trace_root() -> Path:
 
 
 def _remove(path: Path) -> bool:
+    """Remove a path, returning whether it is gone.
+
+    `ignore_errors` is deliberately not used: it hides a partial delete behind a
+    success-looking result, which is how an evidence tree ends up half removed
+    with the uninstaller reporting success.
+    """
     if not path.exists():
         return False
-    try:
-        if path.is_dir():
-            shutil.rmtree(path, ignore_errors=True)
-        else:
-            path.unlink(missing_ok=True)
-        return not path.exists()
-    except OSError:
-        return False
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+    return not path.exists()
 
 
 def _step(ok: bool, label: str) -> None:
     console.print(step_line(StageStatus.DONE if ok else StageStatus.FAILED, label))
 
 
-def run_uninstall(purge_data: bool) -> int:
-    console.print("Uninstalling Trace\n")
-    removed_any = False
-    for shim in _shim_paths():
-        if _remove(shim):
-            _step(True, f"Removed launcher {shim.name}")
-            removed_any = True
-    targets = list(_ALWAYS) + (list(_PURGE_ONLY) if purge_data else [])
+def _remove_targets(targets: tuple[str, ...]) -> list[Path]:
+    """Remove each target, reporting per step. Returns the ones that survived."""
+    failures: list[Path] = []
     for target in targets:
-        if _remove(_trace_root() / target):
-            _step(True, f"Removed ~/.trace/{target}")
-            removed_any = True
-    if not removed_any:
-        _step(False, "Nothing found to remove.")
-    console.print(done_line())
-    console.print("")
+        path = _trace_root() / target
+        if not path.exists():
+            continue
+        try:
+            done = _remove(path)
+        except OSError as exc:
+            done = False
+            console.print(f"[dim]  {exc}[/dim]")
+        _step(done, f"Removed ~/.trace/{target}" if done else f"Couldn't remove ~/.trace/{target}")
+        if not done:
+            failures.append(path)
+    return failures
+
+
+def _remove_shims() -> bool:
+    """Remove the launcher entries. False when any is still present."""
+    ok = True
+    for shim in _shim_paths():
+        if not shim.exists():
+            continue
+        try:
+            _remove(shim)
+        except OSError:
+            ok = False
+    return ok
+
+
+def _report_kept(purge_data: bool) -> None:
     if purge_data:
         console.print(
-            f"{CLOSING_INDENT}Kept: PostgreSQL server. Drop the data manually if needed: DROP DATABASE trace;",
+            f"{CLOSING_INDENT}Kept: the PostgreSQL server. Drop the data with: DROP DATABASE trace;",
             style="dim",
         )
-    else:
-        console.print(
-            f"{CLOSING_INDENT}Kept: storage (~/.trace/storage), trust keys (~/.trace/trust), PostgreSQL database.",
-            style="dim",
-        )
-        console.print(f"{CLOSING_INDENT}Run `trace uninstall --purge-data` to remove those too.", style="dim")
+        return
+    console.print(
+        f"{CLOSING_INDENT}Kept: your cases and evidence (~/.trace/storage), signing keys, and the database.",
+        style="dim",
+    )
+    console.print(f"{CLOSING_INDENT}Run `trace uninstall --purge-data` to remove those too.", style="dim")
+
+
+def _report_failures(failures: list[Path]) -> None:
     console.print("")
-    return 0
+    console.print(f"[yellow]{CLOSING_INDENT}Some files could not be removed:[/yellow]")
+    for path in failures:
+        console.print(f"{CLOSING_INDENT}  {path}")
+    console.print(f"{CLOSING_INDENT}The `trace` command still works, so you can check again.")
+    console.print(f"{CLOSING_INDENT}Nothing was lost — only these folders were left behind.")
+    console.print("")
+
+
+def run_uninstall(purge_data: bool) -> int:
+    console.print("Uninstalling Trace\n")
+    failures = _remove_targets(_ALWAYS)
+    shim_ok = _remove_shims() if not failures else False
+    if failures:
+        # Leaving the launcher in place is what makes a partial uninstall recoverable:
+        # without `trace` on PATH the operator has no way to inspect or retry it.
+        _step(False, "Kept the `trace` launcher — finish with `trace uninstall`")
+    else:
+        _step(shim_ok, "Removed the `trace` launcher" if shim_ok else "Couldn't remove the `trace` launcher")
+    console.print(done_line())
+    console.print("")
+    _report_kept(purge_data)
+    if failures:
+        _report_failures(failures)
+        return EXIT_ERROR
+    if not failures and shim_ok:
+        console.print(f"{CLOSING_INDENT}Trace has been removed.")
+        console.print("")
+    console.print("")
+    return EXIT_SUCCESS
 
 
 def uninstall_cmd(
@@ -79,11 +134,12 @@ def uninstall_cmd(
     if not interactive_terminal() and not yes:
         raise typer.BadParameter("refusing interactive uninstall without --yes in non-interactive mode")
     if not yes:
-        scope = (
-            "the app AND all data (storage, trust keys, database)"
-            if purge_data
-            else "the app only (storage and database are kept)"
-        )
-        if not typer.confirm(f"This removes {scope}. Continue?", default=False):
+        if purge_data:
+            console.print("This deletes Trace, its old versions, your database backups,")
+            console.print("and your cases, evidence and signing keys. Continue?")
+        else:
+            console.print("This deletes Trace, its old versions, and your database backups.")
+            console.print("Your cases, evidence and signing keys are kept. Continue?")
+        if not typer.confirm("", default=False):
             raise typer.Exit(EXIT_SUCCESS)
     raise typer.Exit(run_uninstall(purge_data))

@@ -105,7 +105,7 @@ def _is_retryable_url_error(e: urllib.error.URLError) -> bool:
 
 
 def _read_manifest_response(response: Any, max_bytes: int) -> tuple[bytes, str | None]:
-    from trace_core.updates.errors import UpdateError
+    from trace_core.updates.errors import UpdateResponseRefused
 
     if response.status == 304:
         raise _NotModified()
@@ -114,8 +114,12 @@ def _read_manifest_response(response: Any, max_bytes: int) -> tuple[bytes, str |
     # release assets as octet-stream; signature+schema decide.
     # TLS is transport-only; Ed25519 is trust.
     if "json" not in content_type and "octet-stream" not in content_type:
-        raise UpdateError(f"unexpected manifest content type {content_type!r}")
+        raise UpdateResponseRefused(f"the manifest URL returned {content_type or 'no content type'}, not JSON")
     data = response.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        # A refusal, not a transport fault. Retrying cannot shrink the response, and the
+        # remedy for UpdateNetworkError is to check connectivity.
+        raise UpdateResponseRefused(f"manifest response exceeded {max_bytes} bytes")
     return data, response.headers.get("ETag")
 
 
@@ -154,7 +158,7 @@ def stream_artifact_to_file(
     on_bytes: Callable[[int], None] | None = None,
 ) -> Path:
     """Single source for artifact download. Streams in 1 MB chunks, never holds full bytes in RAM."""
-    from trace_core.updates.errors import UpdateNetworkError
+    from trace_core.updates.errors import UpdateResponseRefused
     from trace_core.updates.verifier import assert_safe_filename
 
     assert_safe_filename(filename)
@@ -174,7 +178,7 @@ def stream_artifact_to_file(
                         break
                     written += len(chunk)
                     if written > max_bytes:
-                        raise UpdateNetworkError("artifact response too large")
+                        raise UpdateResponseRefused(f"artifact exceeded {max_bytes} bytes")
                     fout.write(chunk)
                     if on_bytes is not None:
                         on_bytes(written)
@@ -197,7 +201,7 @@ class HttpManifestSource(ManifestSource):
         self.max_bytes = max_bytes if max_bytes is not None else MAX_MANIFEST_BYTES
 
     def fetch_with_etag(self, channel: str, etag: str | None = None) -> tuple[bytes, str | None]:
-        from trace_core.updates.errors import UpdateNetworkError
+        from trace_core.updates.errors import UpdateResponseRefused
 
         url = f"{self.base_url}/{channel}{_JSON_SUFFIX}"
         _validate_manifest_url(url)
@@ -214,7 +218,7 @@ class HttpManifestSource(ManifestSource):
 
         data, response_etag = _with_retries(_fetch)
         if len(data) > self.max_bytes:
-            raise UpdateNetworkError("manifest response too large")
+            raise UpdateResponseRefused(f"manifest response exceeded {self.max_bytes} bytes")
         return data, response_etag
 
     def fetch(self, channel: str) -> bytes:

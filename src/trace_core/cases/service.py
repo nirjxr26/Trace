@@ -94,13 +94,9 @@ def _record_audit(  # type: ignore[no-untyped-def]
     claimed: str | None = None,
 ):
     from trace_core.audit.service import AuditService
-    from trace_core.core.operators import current_identity
 
     action, subject, details, ctx = builder_tuple
-    actual, _ = current_identity()
-    if claimed and claimed.strip() and claimed.strip() != actual:
-        details = {**details, "claimed_actor": claimed.strip()}
-    return AuditService().record(session, action, subject, actor, details, ctx)
+    return AuditService().record_hook(lambda: (action, subject, details, ctx), actor, claimed)(session)
 
 
 def _audit_hook(
@@ -114,6 +110,36 @@ def _audit_hook(
         _record_audit(session, build(), actor, claimed=claimed)
 
     return _hook
+
+
+def _close_audit_hook(updated: Any, examiner: str, claimed: str | None, pinned: dict[str, Any]):  # type: ignore[no-untyped-def]
+    """Ledger entry for the close, written inside the mutation's own transaction."""
+    from trace_core.audit.builder import for_case_closed
+
+    def _audit(s: Any) -> None:
+        dto = _record_audit(
+            s,
+            for_case_closed(updated.number, updated.id, updated.closure_reason or "", examiner),
+            examiner,
+            claimed=claimed,
+        )
+        if dto is None or dto.seq is None:
+            raise InvariantViolationError("close audit hook produced no ledger position; refusing to seal")
+        pinned["seq"], pinned["chain"] = dto.seq, dto.chain_hash
+
+    return _audit
+
+
+def _close_anchor_hook(updated: Any, pinned: dict[str, Any]):  # type: ignore[no-untyped-def]
+    """Anchor intent at the exact seq/chain of THIS close. Never re-reads the head."""
+    from trace_core.audit.anchor import record_anchor_intent
+
+    def _intent(s: Any) -> None:
+        if not pinned:
+            raise InvariantViolationError("close anchor hook has no ledger position; refusing to seal")
+        record_anchor_intent(s, updated.number, updated.id, pinned["seq"], pinned["chain"])
+
+    return _intent
 
 
 class CaseService(BaseService):
@@ -291,44 +317,22 @@ class CaseService(BaseService):
                 raise InvalidCaseStateError(str(e)) from e
 
             updated = repo.update(case)
-
             pinned: dict[str, Any] = {}
 
-            from trace_core.audit.builder import for_case_closed
-
-            def _audit(s: Any) -> None:
-                dto = _record_audit(
-                    s,
-                    for_case_closed(updated.number, updated.id, updated.closure_reason or "", examiner),
-                    examiner,
-                    claimed=closed_by or actor,
-                )
-                if dto is None or dto.seq is None:
-                    raise InvariantViolationError("close audit hook produced no ledger position; refusing to seal")
-                pinned["seq"], pinned["chain"] = dto.seq, dto.chain_hash
-
-            def _intent(s: Any) -> None:
-                # Exact seq/chain of THIS close, captured in-transaction. Never re-read head.
-                from trace_core.audit.anchor import record_anchor_intent
-
-                if not pinned:
-                    raise InvariantViolationError("close anchor hook has no ledger position; refusing to seal")
-                record_anchor_intent(s, updated.number, updated.id, pinned["seq"], pinned["chain"])
-
-            def _publish() -> None:
-                try:
-                    from trace_core.audit.anchor import publish_pending_anchors
-
-                    publish_pending_anchors(self.session_manager)
-                except Exception as exc:
-                    import structlog
-
-                    structlog.get_logger().warning("Anchor publish failed", case=updated.number, error=str(exc))
-
-            uow.before_commit(_audit)
-            uow.before_commit(_intent)
-            uow.on_commit(_publish)
+            uow.before_commit(_close_audit_hook(updated, examiner, closed_by or actor, pinned))
+            uow.before_commit(_close_anchor_hook(updated, pinned))
+            uow.on_commit(self._publish_anchor)
             return CaseResponseDto.from_domain(updated)
+
+    def _publish_anchor(self) -> None:
+        try:
+            from trace_core.audit.anchor import publish_pending_anchors
+
+            publish_pending_anchors(self.session_manager)
+        except Exception as exc:
+            import structlog
+
+            structlog.get_logger().warning("Anchor publish failed", error=str(exc))
 
     def delete_case(self, identifier: str, purge: bool = False, actor: str | None = None) -> bool:
         """

@@ -41,6 +41,19 @@ class HelperFailure(Exception):
         self.detail = detail
 
 
+def _start(argv: list[str]) -> subprocess.Popen[bytes]:
+    try:
+        return subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            shell=False,
+        )
+    except OSError as exc:
+        raise HelperFailure(UnknownCause.TOOL_MISSING, f"{argv[0]} could not be executed") from exc
+
+
 def run_capped(argv: list[str], *, timeout: int = TIMEOUT_SECONDS, cap: int = STDOUT_CAP) -> bytes:
     """Run a fixed argv list and return stdout, refusing anything over `cap` bytes.
 
@@ -54,16 +67,7 @@ def run_capped(argv: list[str], *, timeout: int = TIMEOUT_SECONDS, cap: int = ST
     has no use for it once a non-zero exit has already become a named cause. stdin is
     closed so a tool that reads it cannot block until the timeout.
     """
-    try:
-        proc = subprocess.Popen(
-            argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            shell=False,
-        )
-    except OSError as exc:
-        raise HelperFailure(UnknownCause.TOOL_MISSING, f"{argv[0]} could not be executed") from exc
+    proc = _start(argv)
 
     chunks: list[bytes] = []
     held = 0

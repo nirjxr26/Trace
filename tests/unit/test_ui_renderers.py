@@ -40,12 +40,12 @@ def test_utc_zulu_treats_naive_as_utc() -> None:
 
 
 def test_domain_violation_is_reported_as_usage_error() -> None:
-    """Invariant violations are user-input failures, never 'unexpected operational error'."""
+    """A rule the user broke stays a usage error, not an internal failure."""
     from trace_core.core.cli.exit_codes import EXIT_USAGE
-    from trace_core.core.domain import InvariantViolationError
+    from trace_core.core.domain import DomainError
 
     title, message, _remed, code = _resolve_error_details(
-        InvariantViolationError("tag exceeds maximum length of 50 characters."), None, None
+        DomainError("tag exceeds maximum length of 50 characters."), None, None
     )
     assert code == EXIT_USAGE
     assert title == "Invalid Input"

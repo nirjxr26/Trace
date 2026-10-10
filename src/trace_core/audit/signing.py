@@ -27,6 +27,17 @@ def _secret() -> bytes:
     return settings.secret_key.get_secret_value().encode("utf-8")
 
 
+def is_default_key() -> bool:
+    """True when the active key is the shipped placeholder rather than an operator's.
+
+    Signatures written under a real key cannot verify under this one, so a mismatch while
+    it is active says the verifier holds the wrong key, not that the ledger was edited.
+    """
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    return settings.secret_key.get_secret_value() == DEV_SECRET_SENTINEL
+
+
 def _warn_default_key() -> None:
     global _warned_default_key
     if _warned_default_key:

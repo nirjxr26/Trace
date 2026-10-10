@@ -28,16 +28,23 @@ def test_deferred_and_rollback_branches():
     assert can_transition(UpdateState.HEALTH_CHECK, UpdateState.ROLLING_BACK)
     assert can_transition(UpdateState.ROLLING_BACK, UpdateState.ROLLED_BACK)
     assert can_transition(UpdateState.ROLLING_BACK, UpdateState.RECOVERY_REQUIRED)
+    # RECOVERY_REQUIRED must be escapable. It had only one outgoing edge and no caller ever
+    # took it, so `trace recovery` had nothing to move the system to.
+    assert can_transition(UpdateState.RECOVERY_REQUIRED, UpdateState.ROLLED_BACK)
+    assert can_transition(UpdateState.RECOVERY_REQUIRED, UpdateState.IDLE)
 
 
 @pytest.mark.parametrize(
-    "a,b",
+    ("a", "b"),
     [
         (UpdateState.IDLE, UpdateState.COMPLETED),
         (UpdateState.AVAILABLE, UpdateState.INSTALLING),
         (UpdateState.COMPLETED, UpdateState.IDLE),
         (UpdateState.FAILED, UpdateState.AVAILABLE),
         (UpdateState.STAGED, UpdateState.MIGRATING),
+        # A completed rollback is final. Re-entering IDLE from it would let a second
+        # `trace recovery` roll back again, and previous-version now names the failed
+        # release, so it would re-activate the release that just failed.
         (UpdateState.ROLLED_BACK, UpdateState.IDLE),
     ],
 )

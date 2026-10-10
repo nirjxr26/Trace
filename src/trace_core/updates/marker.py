@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from trace_core.core.fs import atomic_write_lines, check_contained
+from trace_core.core.fs import JsonFileVerdict, atomic_write_lines, check_contained, classify_json_file
 from trace_core.core.settings import settings
 from trace_core.updates.errors import RecoveryError
 
@@ -47,14 +47,13 @@ def write_marker(data: dict[str, Any], path: str | Path | None = None) -> Path:
 
 def read_marker(path: str | Path | None = None) -> dict[str, Any]:
     target = Path(path) if path else marker_path()
-    try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-    except FileNotFoundError:
+    if not target.exists():
         raise RecoveryError("no update marker found; manual inspection required") from None
-    except (OSError, ValueError) as e:
-        raise RecoveryError("corrupt update marker; manual inspection required") from e
-    if not isinstance(data, dict):
-        raise RecoveryError("corrupt update marker; manual inspection required")
+    verdict, data = classify_json_file(target)
+    if verdict is JsonFileVerdict.UNREADABLE:
+        raise RecoveryError("could not read the update marker; left in place, retry or inspect") from None
+    if verdict is not JsonFileVerdict.OK or data is None:
+        raise RecoveryError("corrupt update marker; manual inspection required") from None
     schema = data.get("marker_schema")
     required = SCHEMA_REQUIRED_KEYS.get(schema) if isinstance(schema, int) else None
     if required is None:

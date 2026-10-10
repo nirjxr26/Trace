@@ -4,6 +4,7 @@ from rich.live import Live
 from rich.text import Text
 
 from trace_core.core.ui.renderers import closing_block, console, safe_text, step_line
+from trace_core.updates.domain import UpdateFailureStage
 from trace_core.updates.dto import UpdateResultDto
 from trace_core.updates.manifest import ReleaseManifest
 from trace_core.updates.stages import (
@@ -38,7 +39,6 @@ def render_check_blocked(payload: dict) -> None:
     )
     if payload.get("notes"):
         console.print(safe_text(payload["notes"]))
-    console.print("[dim]See `trace update history` for past attempts.[/dim]")
 
 
 def render_up_to_date(current: str, channel: str) -> None:
@@ -46,7 +46,18 @@ def render_up_to_date(current: str, channel: str) -> None:
     console.print(f"[green]✓ You're up to date[/green] — Trace v{safe_text(current)} ({safe_text(channel)})")
 
 
+def render_version_unknown(problem: str) -> None:
+    """The pointer could not be read, so "up to date" cannot be claimed. Without this the
+    fallback package version was reported as the installed one."""
+    console.print(f"[yellow]Couldn't tell which version is installed[/yellow] — {safe_text(problem)}")
+    console.print("[dim]Nothing was changed. Run `trace recovery` to put the version pointer back.[/dim]")
+
+
 def render_check_card(payload: dict, channel: str) -> None:
+    problem = payload.get("version_problem")
+    if problem:
+        render_version_unknown(str(problem))
+        return
     if not payload["available"]:
         render_up_to_date(str(payload["current"]), channel)
         return
@@ -82,6 +93,28 @@ def render_install_summary(manifest: ReleaseManifest, current: str, bypass_note:
         console.print("Restart: Required")
     if bypass_note:
         console.print(f"[yellow]Override: {safe_text(bypass_note)}[/yellow]")
+
+
+def _active_version() -> str | None:
+    """The release the pointer names right now, or None when it cannot be read. An
+    unreadable pointer is not the same as the pre-update version."""
+    from trace_updater import updater as updater_mod
+
+    try:
+        return updater_mod.read_active(updater_mod.install_root())
+    except Exception:
+        return None
+
+
+def _needs_recovery(dto: UpdateResultDto) -> bool:
+    """Whether `trace recovery` is the right next step for this failure.
+
+    `failure_stage == RECOVERY` is never produced by any code path — both RECOVERY_REQUIRED
+    exits record HEALTH or ACTIVATION — so gating on it meant the user who most needed to run
+    recovery was never told.
+    """
+    stage = str(dto.failure_stage or "")
+    return stage in {UpdateFailureStage.RECOVERY, UpdateFailureStage.ACTIVATION, UpdateFailureStage.HEALTH}
 
 
 class UpdateProgressDisplay(ProgressCallback):
@@ -141,6 +174,17 @@ class UpdateProgressDisplay(ProgressCallback):
         self._draw(force=True)
 
     def finish(self, dto: UpdateResultDto, current: str) -> None:
+        # `current` is the version captured before the update ran. After the pointer flips,
+        # saying "Still on v<current>" names a release that is no longer active.
+        active = _active_version()
+        if active is None:
+            version_note = (
+                f"Active release: could not be read. The release before this update was v{safe_text(current)}."
+            )
+        elif active == current:
+            version_note = f"Still on v{safe_text(active)}."
+        else:
+            version_note = f"Active release is v{safe_text(active)}; it was v{safe_text(current)} before the update."
         if dto.result == "SUCCESS":
             for stage in STAGE_ORDER:
                 self.statuses[stage] = StageStatus.DONE
@@ -158,20 +202,23 @@ class UpdateProgressDisplay(ProgressCallback):
             self.statuses[Stage.INSTALL] = StageStatus.FAILED
             self._stop()
             self._print_final_frame()
-            closing_block(
-                "▲", "The update was rolled back.", f"Current version: v{safe_text(current)}", token="warning"
-            )
+            closing_block("▲", "The update was rolled back.", version_note, token="warning")
             return
         failed_stage = _FAILED_STAGE.get(str(dto.failure_stage or ""))
         if failed_stage is not None:
             self.statuses[failed_stage] = StageStatus.FAILED
         self._stop()
         self._print_final_frame()
-        closing_block("✕", "Update failed", "Run `trace update history` for details.", token="danger")
+        closing_block("✕", "Update failed", None, token="danger")
         # Plain string arg, not an f-string: Rich only interprets markup in the
         # format string, but escape anyway so a crafted reason can never render as markup.
-        console.print(safe_text(dto.failure_reason or "") or "Update did not complete.")
-        console.print(f"Current version: v{safe_text(current)}")
+        console.print(safe_text(dto.failure_reason or "") or "The update did not finish.")
+        console.print(version_note)
+        console.print(
+            "[yellow]Run `trace recovery` to finish putting things back.[/yellow]"
+            if _needs_recovery(dto)
+            else "[dim]Run `trace recovery` if this did not settle.[/dim]"
+        )
         console.print("")
 
     def _print_final_frame(self) -> None:

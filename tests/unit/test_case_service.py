@@ -104,8 +104,8 @@ def test_close_refuses_when_the_audit_hook_publishes_no_position(service: CaseSe
     service.create_case(CaseCreateDto(number="2026-CLOSE-0002", title="Anchor gap", lead_examiner="Examiner 1"))
 
     class _SilentAuditService:
-        def record(self, *args, **kwargs):  # type: ignore[no-untyped-def]
-            return None
+        def record_hook(self, build, actor, claimed=None):  # type: ignore[no-untyped-def]
+            return lambda session: None
 
     monkeypatch.setattr(audit_service_mod, "AuditService", _SilentAuditService)
     with pytest.raises(InvariantViolationError, match="refusing to seal"):

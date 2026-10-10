@@ -1,12 +1,13 @@
 import contextlib
 import json
+import os
 import shutil
 import subprocess
 import threading
 from pathlib import Path
 
 from trace_core.core.database.session import DatabaseSessionManager, sqlite_file_path
-from trace_core.core.fs import atomic_write_lines, check_contained
+from trace_core.core.fs import JsonFileVerdict, atomic_write_lines, check_contained, classify_json_file, sqlite_sidecars
 from trace_core.updates.errors import (
     MigrationCompatibilityError,
     RecoveryError,
@@ -63,14 +64,20 @@ def is_owner(transaction_id: str) -> bool:
 
 
 def marker_state() -> tuple[str, dict | None]:
+    """Single classifier for the migration marker. Four callers used to classify the same
+    OSError three different ways — "corrupt" (marker.py), "unreadable" (session.py) and
+    "corrupt" again (here) — and only one of those names lets an operator act correctly.
+    A file that cannot be read is not corrupt, and must not be deleted as if it were.
+
+    States: absent · active · corrupt (readable but unusable) · unreadable (could not be read).
+    """
     p = migration_marker_path()
     if not p.exists():
         return "absent", None
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return "corrupt", None
-    if not isinstance(data, dict) or "transaction_id" not in data:
+    verdict, data = classify_json_file(p)
+    if verdict is JsonFileVerdict.UNREADABLE:
+        return "unreadable", None
+    if verdict is not JsonFileVerdict.OK or data is None or "transaction_id" not in data:
         return "corrupt", None
     return "active", data
 
@@ -156,9 +163,83 @@ def _pg_parts(url: str) -> tuple[str, str | None]:
     return clean, password
 
 
-def restore_backup(backup_path: str | Path, manager: DatabaseSessionManager) -> None:
-    import os
+def sqlite3_usable(path: Path) -> bool:
+    """Whether a restored file opens as a real SQLite database with an intact schema."""
+    import sqlite3
 
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return False
+    try:
+        row = conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        return bool(row) and row[0] > 0
+    except sqlite3.DatabaseError:
+        return False
+    finally:
+        conn.close()
+
+
+def _checkpoint_sqlite(live: Path) -> None:
+    """Fold the WAL into the main file and drop the sidecars.
+
+    Trace sets journal_mode=WAL on every connection (session.py), so committed rows can sit
+    only in `trace.db-wal`. Copying over `trace.db` while that file still exists restores the
+    old main database and leaves the old transaction log beside it. Checkpointing first means
+    the file being copied is the whole database.
+    """
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(live, isolation_level=None)
+    except sqlite3.Error as e:
+        raise RecoveryError(f"could not open the database to flush its write-ahead log ({e})") from e
+    try:
+        # PASSIVE, not TRUNCATE: TRUNCATE blocks while any other connection holds a read
+        # lock, so a restore would hang on a database something else still has open. PASSIVE
+        # folds in whatever it can and returns immediately. Anything left unflushed belongs
+        # to the database being replaced, and the sidecars are removed after the swap.
+        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+    except sqlite3.Error:
+        # Checkpointing is best-effort. Failing here would refuse a restore that can still
+        # succeed, and the sidecar removal after the swap is what actually matters.
+        pass
+    finally:
+        conn.close()
+
+
+def _restore_sqlite(src: Path, live: Path, manager: DatabaseSessionManager) -> None:
+    """Replace a SQLite database from a backup, keeping the current file if anything fails.
+
+    Restores to a sibling first and verifies it, then swaps. A copy that fails partway leaves
+    the live database untouched instead of half-overwritten.
+    """
+    if manager._engine is not None:
+        manager._engine.dispose()
+    if live.exists():
+        _checkpoint_sqlite(live)
+    staged = live.with_name(live.name + ".restore")
+    try:
+        shutil.copy2(src, staged)
+        if sqlite3_usable(staged):
+            if manager._engine is not None:
+                manager._engine.dispose()
+            os.replace(staged, live)
+        else:
+            raise RecoveryError("the restored database could not be opened; the current one was left in place")
+    except OSError as e:
+        raise RecoveryError(f"database restore failed ({e}); the current database was left in place") from e
+    finally:
+        for sidecar in sqlite_sidecars(staged):
+            sidecar.unlink(missing_ok=True)
+        staged.unlink(missing_ok=True)
+    for sidecar in sqlite_sidecars(live):
+        sidecar.unlink(missing_ok=True)
+    manager._engine = None
+    manager._session_factory = None
+
+
+def restore_backup(backup_path: str | Path, manager: DatabaseSessionManager) -> None:
     src = _confine_backup_path(backup_path)
     url = manager._url
     if not src.is_file() or src.stat().st_size == 0:
@@ -172,11 +253,7 @@ def restore_backup(backup_path: str | Path, manager: DatabaseSessionManager) -> 
         raise RecoveryError(BACKUP_PATH_REFUSED) from e
     live = sqlite_file_path(url)
     if live is not None:
-        if manager._engine is not None:
-            manager._engine.dispose()
-        shutil.copy2(src, live)
-        manager._engine = None
-        manager._session_factory = None
+        _restore_sqlite(src, live, manager)
         return
     if url.startswith("postgresql"):
         clean_url, password = _pg_parts(url)
@@ -244,6 +321,24 @@ def _advance_previous(base: str | Path, restored: str | None, failed: str | None
     atomic_write_lines(previous_path(base), [failed])
 
 
+def _unique_stamp(dest: Path) -> str:
+    """Second-resolution timestamp, disambiguated if two backups land in the same second.
+
+    A bare timestamp is not uniqueness: two updates inside one second reused the name, and
+    SQLite's `VACUUM INTO` refuses an existing file, so the second backup still failed.
+    """
+    from trace_core.core.clock import now_utc
+
+    base = now_utc().strftime("%Y%m%dT%H%M%SZ")
+    if not any(dest.glob(f"trace-backup-{base}*")):
+        return base
+    for n in range(2, 100):
+        candidate = f"{base}-{n}"
+        if not any(dest.glob(f"trace-backup-{candidate}*")):
+            return candidate
+    raise UpdateError(_BACKUP_FAILED)
+
+
 def backup_database(manager: DatabaseSessionManager, dest_dir: str | Path) -> Path:
     from sqlalchemy import text
 
@@ -251,8 +346,9 @@ def backup_database(manager: DatabaseSessionManager, dest_dir: str | Path) -> Pa
 
     url = manager._url
     dest = ensure_dir(dest_dir)
+    stamp = _unique_stamp(dest)
     if url.startswith("sqlite") and ":memory:" not in url:
-        out = dest / "trace-backup.db"
+        out = dest / f"trace-backup-{stamp}.db"
         literal = str(check_contained(out, dest)).replace("'", "''")
         with manager.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.execute(text(f"VACUUM INTO '{literal}'"))
@@ -260,7 +356,7 @@ def backup_database(manager: DatabaseSessionManager, dest_dir: str | Path) -> Pa
             raise UpdateError(f"{_BACKUP_FAILED}: empty backup")
         return out
     if url.startswith("postgresql"):
-        out = dest / "trace-backup.sql"
+        out = dest / f"trace-backup-{stamp}.sql"
         check_contained(out, dest)
         clean_url, password = _pg_parts(url)
         try:
@@ -292,6 +388,8 @@ def run_updater_migration(
     backup_waiver: str | None = None,
 ) -> dict:
     state, active = marker_state()
+    if state == "unreadable":
+        raise UpdateInProgressError("update marker unreadable; left in place, run trace recovery before migrating")
     if state == "corrupt":
         raise UpdateInProgressError("update marker corrupt; run trace recovery before migrating")
     if state == "active" and active is not None and active.get("transaction_id") != transaction_id:

@@ -164,7 +164,9 @@ def test_finish_rolled_back_frame(capsys):
     display.finish(dto, "0.2.3")
     out = capsys.readouterr().out
     assert "rolled back" in out
-    assert "Current version: v0.2.3" in out
+    # Reads the install pointer rather than echoing the pre-update capture.
+    assert "Active release" in out, out
+    assert "0.2.3" in out, out
 
 
 def test_finish_failed_frame(capsys):
@@ -181,7 +183,53 @@ def test_finish_failed_frame(capsys):
     out = capsys.readouterr().out
     assert "Update failed" in out
     assert "staged artifact failed re-verification" in out
-    assert "trace update history" in out
+    assert "Active release" in out, out
+    assert "0.2.3" in out, out
+    # `trace update history` was never built; pointing users at it was the defect.
+    assert "update history" not in out
+
+
+def test_the_failure_frame_names_the_release_that_is_actually_active(capsys, monkeypatch):
+    """`current` is captured before the update runs. After `activate` flips the pointer,
+    "Still on v<current>" names a release that is no longer running."""
+    from trace_core.updates import renderers
+    from trace_core.updates.renderers import UpdateProgressDisplay
+
+    monkeypatch.setattr(renderers, "_active_version", lambda: "0.2.4")
+    dto = UpdateResultDto(from_version="0.2.3", to_version="0.2.4", result="FAILED", failure_reason="verify failed")
+    UpdateProgressDisplay(current="0.2.3", target="0.2.4").finish(dto, "0.2.3")
+    out = capsys.readouterr().out
+    assert "Active release is v0.2.4" in out, out
+    assert "Still on v0.2.3" not in out, out
+
+
+def test_a_failed_rollback_tells_the_user_to_run_recovery(capsys):
+    """`failure_stage == RECOVERY` is never produced, so the recovery hint never fired for
+    the failures that most need it."""
+    from trace_core.updates.renderers import UpdateProgressDisplay
+
+    dto = UpdateResultDto(
+        from_version="0.2.3",
+        to_version="0.2.4",
+        result="FAILED",
+        failure_stage="activation",
+        failure_reason="post-activation verification failed; rollback failed",
+    )
+    UpdateProgressDisplay(current="0.2.3", target="0.2.4").finish(dto, "0.2.3")
+    out = capsys.readouterr().out
+    assert "Run `trace recovery` to finish putting things back." in out, out
+
+
+def test_an_unreadable_pointer_does_not_claim_the_old_version_is_still_active(capsys, monkeypatch):
+    from trace_core.updates import renderers
+    from trace_core.updates.renderers import UpdateProgressDisplay
+
+    monkeypatch.setattr(renderers, "_active_version", lambda: None)
+    dto = UpdateResultDto(from_version="0.2.3", to_version="0.2.4", result="FAILED", failure_reason="x")
+    UpdateProgressDisplay(current="0.2.3", target="0.2.4").finish(dto, "0.2.3")
+    out = capsys.readouterr().out
+    assert "could not be read" in out, out
+    assert "Still on" not in out, out
 
 
 def test_frame_checklist_states():

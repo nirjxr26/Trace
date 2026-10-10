@@ -1,6 +1,6 @@
 """Audit service: query + verify + export + central record()."""
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -81,6 +81,24 @@ class AuditService(BaseService):
             action, actor, subject.number, subject.id, merged, subject_type=subject.type
         )
 
+    def record_hook(
+        self,
+        build: Callable[[], tuple[AuditAction, Subject, dict[str, Any], Context]],
+        actor: str,
+        claimed: str | None = None,
+    ) -> Callable[[Session], Any]:
+        from trace_core.core.operators import current_identity
+
+        def _hook(session: Session) -> Any:
+            action, subject, details, ctx = build()
+            if claimed and claimed.strip():
+                actual, _ = current_identity()
+                if claimed.strip() != actual:
+                    details = {**details, "claimed_actor": claimed.strip()}
+            return self.record(session, action, subject, actor, details, ctx)
+
+        return _hook
+
     def get_by_seq(self, seq: int):  # type: ignore[no-untyped-def]
         if seq < 1:
             from trace_core.core.errors import ValidationError
@@ -105,6 +123,13 @@ class AuditService(BaseService):
         with _ledger_session(self.session_manager) as session:
             repo = SqlAlchemyAuditRepository(session)
             return repo.list_events(filt)
+
+    def count_events(self, f: AuditFilterDto | None = None) -> int:
+        from trace_core.audit.repository import SqlAlchemyAuditRepository
+
+        filt = f or AuditFilterDto()
+        with _ledger_session(self.session_manager) as session:
+            return SqlAlchemyAuditRepository(session).count_events(filt)
 
     def list_event_summaries(self, f: AuditFilterDto | None = None) -> list[AuditEventSummaryDto]:
         from trace_core.audit.repository import SqlAlchemyAuditRepository

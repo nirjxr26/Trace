@@ -5,7 +5,13 @@ from typing import Any
 from uuid import UUID
 
 from trace_core.audit.domain import AuditAction
-from trace_core.audit.events import SUBJECT_TYPE_CASE, SUBJECT_TYPE_DEVICE, Context, Subject
+from trace_core.audit.events import (
+    SUBJECT_TYPE_CASE,
+    SUBJECT_TYPE_DEVICE,
+    SUBJECT_TYPE_SYSTEM,
+    Context,
+    Subject,
+)
 from trace_core.core.operators import process_session_id
 from trace_core.core.settings import settings
 
@@ -200,6 +206,34 @@ def for_device_override(
             "reason": reason,
         },
         command or f"device check {node} --acknowledge-unverified-source",
+    )
+
+
+def _subject_system() -> Subject:
+    return Subject(type=SUBJECT_TYPE_SYSTEM, number=None, id=None)
+
+
+def for_update_policy_override(
+    from_version: str,
+    to_version: str,
+    authorized_by: str,
+    gate: str,
+    blocked_reason: str,
+    reason: str,
+    command: str | None = None,
+) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
+    return (
+        AuditAction.UPDATE_POLICY_OVERRIDE,
+        _subject_system(),
+        {
+            "from_version": from_version,
+            "to_version": to_version,
+            "authorized_by": authorized_by,
+            "gate": gate,
+            "blocked_reason": blocked_reason,
+            "reason": reason,
+        },
+        _ctx(command or f"update install {from_version}->{to_version} --bypass-minimum"),
     )
 
 
