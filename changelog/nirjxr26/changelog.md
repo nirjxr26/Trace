@@ -4149,6 +4149,15 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
   `tests/updates/test_phase_c_durable.py`, `tests/updates/test_policy_versions.py`,
   `tests/updates/test_response_classification.py`, `tests/updates/test_restore_safety.py`,
   `tests/updates/test_state_machine.py`, `changelog/nirjxr26/changelog.md`.
+- CI fix, root cause mine: the suite was environment-dependent. It inherited whatever signing
+  key the machine had — the repo `.env` or a real `TRACE_SECRET_KEY` locally, the shipped
+  placeholder on the runner — so `is_default_key()` differed per machine and `audit/verifier.py`
+  reported every signature mismatch as `signing_key` rather than `signature`. Nine failures
+  on CI that could not exist locally. `tests/conftest.py` now forces a fixed non-placeholder
+  key for the session and rebinds `settings.secret_key` (pydantic-settings resolves the value
+  at construction, so setting the variable alone is not enough), raising rather than running if
+  it does not take effect. Verified green under a placeholder key, a real operator key, and no
+  key at all. Two doctor tests and the structlog self-heal test were downstream of the same key.
 - Second pass on the S5778 findings: the first fix reduced each block to one statement but
   left a second call nested in the argument list, which is the other half of the same rule.
   `AuditService(session_manager)`, `_FailThird(c)`, `_signed(...)`, `_Svc()`,
