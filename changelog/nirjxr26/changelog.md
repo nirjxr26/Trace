@@ -4167,3 +4167,18 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Verification: `ruff check src tests` clean including `C901`; `mypy src tests` clean on 206
   files; unit + updates suites green (1148 passed, 12 skipped). Full pre-PR gate on the final
   tree: passed, 1159 passed / 12 skipped, 81.28% coverage.
+
+## 2026-10-10
+- Summary: CI fix, second root cause of mine. `test_self_heal_failures_reach_the_log` passed
+  for months only because the machine it was written on had been up longer than the
+  five-minute self-heal interval. `time.monotonic()` returns seconds since an unspecified
+  origin and starts near zero on a freshly booted runner, so `_maybe_heal` took its
+  throttle branch and logged nothing — the exact regression the test exists to catch,
+  reported as passing. The test now stubs `time.monotonic` past the interval.
+  Falsified in both directions under a simulated 45-second uptime: without the stub it
+  fails, with the stub it passes.
+- Root cause of the class: this suite had two tests whose outcome depended on ambient
+  machine state rather than the code. Both are now pinned. Worth watching for the same
+  shape — a test that passes because of wall-clock uptime, elapsed real time, or an
+  operator's `.env` is a test that reports nothing.
+- Files: `tests/unit/test_selfheal.py`, `changelog/nirjxr26/changelog.md`.

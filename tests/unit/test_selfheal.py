@@ -187,7 +187,13 @@ def test_a_healthy_state_file_is_left_alone(tmp_path, monkeypatch) -> None:
 
 
 def test_self_heal_failures_reach_the_log(tmp_path, monkeypatch, caplog) -> None:
-    """`_maybe_heal` discarded run_self_heal()'s return, so a failure was invisible."""
+    """`_maybe_heal` discarded run_self_heal()'s return, so a failure was invisible.
+
+    `time.monotonic` is stubbed past the interval. It returns seconds since an unspecified
+    origin and starts near zero on a freshly booted runner, so the 5-minute throttle
+    swallowed the whole call. The test passed for months only because the machine it was
+    written on had been up longer than the interval.
+    """
     from trace_core.updates import selfheal
 
     captured: list[dict] = []
@@ -196,6 +202,7 @@ def test_self_heal_failures_reach_the_log(tmp_path, monkeypatch, caplog) -> None
         def warning(self, event, **kwargs):
             captured.append({"event": event, **kwargs})
 
+    monkeypatch.setattr(selfheal.time, "monotonic", lambda: selfheal._HEAL_INTERVAL + 1.0)
     monkeypatch.setattr(selfheal.structlog, "get_logger", lambda: _Log())
     monkeypatch.setattr(selfheal, "_LAST_HEAL", 0.0)
     monkeypatch.setattr(
