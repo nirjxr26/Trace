@@ -9,6 +9,27 @@ sys.path.insert(0, "src")
 from trace_core.core.database.migrations import MIGRATIONS
 from trace_core.core.fs import check_contained, ensure_dir, sha256_file
 
+POLICY_PATH = Path(__file__).resolve().parent / "release_policy.json"
+
+
+def _release_policy(path: str | Path) -> dict[str, str]:
+    """The update floor and its migration notes, from version control.
+
+    These were workflow_dispatch inputs, which are empty on a tag push — the normal release
+    path. The shell fallbacks that covered for that made the "fail closed" assertion
+    unfailable, and removing them without moving the source of truth meant a tag push could
+    not publish at all. The floor is a property of the release, so it belongs in the repo
+    where a reviewer can see and change it in the same diff as the code.
+    """
+    target = Path(path)
+    try:
+        policy = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"cannot read release policy {target}: {e}") from None
+    if not isinstance(policy, dict):
+        raise SystemExit(f"release policy {target} must be a JSON object")
+    return {str(k): str(v) for k, v in policy.items()}
+
 
 def _parse_manifest_args(argv: list[str]) -> tuple[str, str, str, str, str | None, str | None]:
     parser = argparse.ArgumentParser(prog="make_manifest.py")
@@ -16,10 +37,17 @@ def _parse_manifest_args(argv: list[str]) -> tuple[str, str, str, str, str | Non
     parser.add_argument("channel")
     parser.add_argument("release_id")
     parser.add_argument("out")
-    parser.add_argument("--min-version", default=os.environ.get("TRACE_MANIFEST_MIN_VERSION"))
-    parser.add_argument("--notes", default=os.environ.get("TRACE_MANIFEST_NOTES"))
+    parser.add_argument("--min-version")
+    parser.add_argument("--notes")
+    parser.add_argument("--policy", default=str(POLICY_PATH))
     ns = parser.parse_args(argv)
-    return ns.tag, ns.channel, ns.release_id, ns.out, ns.min_version or None, ns.notes or None
+    policy = _release_policy(ns.policy)
+    # Explicit flag > env > committed policy. The policy is the default so a tag push works.
+    min_version = (
+        ns.min_version or os.environ.get("TRACE_MANIFEST_MIN_VERSION") or policy.get("minimum_supported_version")
+    )
+    notes = ns.notes or os.environ.get("TRACE_MANIFEST_NOTES") or policy.get("notes")
+    return ns.tag, ns.channel, ns.release_id, ns.out, min_version or None, notes or None
 
 
 def main() -> None:

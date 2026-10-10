@@ -1,0 +1,4 @@
+{
+  "minimum_supported_version": "0.2.5",
+  "notes": "One manual step is required below 0.2.5. Install this release wheel once with your trace venv python via pip install --force-reinstall --no-deps, or run a fresh install (pre-2.3 boxes remove ~/.trace/app first). Storage and database are untouched; afterwards updates are zero-touch again."
+}

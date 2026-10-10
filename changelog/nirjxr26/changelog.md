@@ -4182,3 +4182,25 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
   shape — a test that passes because of wall-clock uptime, elapsed real time, or an
   operator's `.env` is a test that reports nothing.
 - Files: `tests/unit/test_selfheal.py`, `changelog/nirjxr26/changelog.md`.
+
+## 2026-10-10
+- Summary: release fix. My earlier fail-closed change blocked every release: it required
+  `min_version` and `notes` as `workflow_dispatch` inputs, and those are empty on the
+  `push: tags` path — the normal way a release is cut. Removing the shell fallbacks made the
+  assertion genuinely failable but left no source of truth on the tag path, so nothing could
+  publish at all.
+- Fix: the update floor and its migration notes moved to `release/release_policy.json`, in
+  version control and reviewed in the same diff as the code that depends on it.
+  `make_manifest.py` reads it by default and keeps `--min-version` / `--notes` as one-off
+  overrides; precedence is flag > env > policy. The workflow no longer requires either
+  input. A missing, unparseable, or incomplete policy still refuses to build, so the
+  fail-closed property is kept — it just fails closed on a real input rather than a
+  dispatch-only field.
+- Correction: `--policy` was accepted but ignored, so the three new refusal tests passed a
+  broken policy and still got a manifest. `_release_policy` took no argument and read the
+  module constant regardless. Caught by running the tests rather than reading them.
+- Files: `release/release_policy.json` (new), `release/make_manifest.py`,
+  `.github/workflows/release.yml`, `tests/unit/test_release_manifest.py`,
+  `changelog/nirjxr26/changelog.md`.
+- Verification: 14 release-manifest tests pass. Falsified: reintroducing the required
+  dispatch input fails 1; hardcoding the floor instead of reading the policy fails 2.

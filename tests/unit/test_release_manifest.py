@@ -82,24 +82,74 @@ def test_manifest_refuses_two_wheels(tmp_path: Path) -> None:
     assert proc.returncode != 0
 
 
-def test_a_release_without_a_floor_is_refused(tmp_path: Path) -> None:
-    """The workflow's "fail closed" step could never fire: two shell fallbacks above it
-    guaranteed both values were non-empty, so every tag push published floor 0.2.5 whatever
-    the real minimum was. The refusal now lives where the value is produced."""
+def test_the_floor_comes_from_version_control_not_dispatch_inputs(tmp_path: Path) -> None:
+    """The floor was a workflow_dispatch input, which is empty on a tag push — the normal
+    release path. A tag push must therefore publish, using release/release_policy.json."""
+    policy = json.loads((REPO_ROOT / "release" / "release_policy.json").read_text(encoding="utf-8"))
+    assert policy["minimum_supported_version"], "the committed floor must be stated"
+    assert policy["notes"], "the committed migration notes must be stated"
+
     proc = _run_manifest(tmp_path, {"trace-9.9.9-py3-none-any.whl": b"wheel-bytes"}, extra_args=[])
-    assert proc.returncode != 0, proc.stdout + proc.stderr
-    assert "min-version" in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
-    assert not (tmp_path / "out.json").exists(), "no manifest may be written without a floor"
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    manifest = _read_manifest(tmp_path)
+    assert manifest["minimum_supported_version"] == policy["minimum_supported_version"]
+    assert manifest["notes"] == policy["notes"]
 
 
-def test_a_release_with_notes_but_no_floor_is_still_refused(tmp_path: Path) -> None:
+def test_an_explicit_flag_overrides_the_committed_policy(tmp_path: Path) -> None:
     proc = _run_manifest(
         tmp_path,
         {"trace-9.9.9-py3-none-any.whl": b"wheel-bytes"},
-        extra_args=["--notes", "migration notes"],
+        extra_args=["--min-version", "0.9.9", "--notes", "one-off notes"],
+    )
+    assert proc.returncode == 0, proc.stderr
+    manifest = _read_manifest(tmp_path)
+    assert manifest["minimum_supported_version"] == "0.9.9"
+    assert manifest["notes"] == "one-off notes"
+
+
+def test_the_workflow_does_not_require_dispatch_inputs_for_a_tag_push() -> None:
+    """`inputs.min_version` is empty on `push`, so requiring it blocked every release."""
+    workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "MANIFEST_MIN_VERSION:?" not in workflow, "a tag push must not be blocked on a dispatch-only input"
+    assert "release_policy.json" in workflow or "make_manifest.py" in workflow
+
+
+def test_a_missing_policy_file_is_refused(tmp_path: Path) -> None:
+    """A release must state its floor. The policy file is now that source, so an unreadable
+    or absent one stops the build rather than shipping a manifest with no floor."""
+    broken = tmp_path / "broken_policy.json"
+    broken.write_text("{not json", encoding="utf-8")
+    proc = _run_manifest(
+        tmp_path,
+        {"trace-9.9.9-py3-none-any.whl": b"wheel-bytes"},
+        extra_args=["--policy", str(broken)],
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "cannot read release policy" in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+    assert not (tmp_path / "out.json").exists(), "no manifest may be written without a floor"
+
+
+def test_a_policy_without_a_floor_is_refused(tmp_path: Path) -> None:
+    partial = tmp_path / "partial_policy.json"
+    partial.write_text(json.dumps({"notes": "notes only"}), encoding="utf-8")
+    proc = _run_manifest(
+        tmp_path,
+        {"trace-9.9.9-py3-none-any.whl": b"wheel-bytes"},
+        extra_args=["--policy", str(partial)],
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "min-version" in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+
+
+def test_an_absent_policy_file_is_refused(tmp_path: Path) -> None:
+    proc = _run_manifest(
+        tmp_path,
+        {"trace-9.9.9-py3-none-any.whl": b"wheel-bytes"},
+        extra_args=["--policy", str(tmp_path / "absent.json")],
     )
     assert proc.returncode != 0
-    assert "min-version" in (proc.stdout + proc.stderr)
+    assert "cannot read release policy" in (proc.stdout + proc.stderr)
 
 
 def test_the_workflow_has_no_fallback_that_defeats_its_own_assertion() -> None:

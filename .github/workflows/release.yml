@@ -64,12 +64,12 @@ jobs:
           MANIFEST_MIN_VERSION: ${{ inputs.min_version }}
           MANIFEST_NOTES: ${{ inputs.notes }}
         run: |
-          # No shell fallbacks. These were guaranteed non-empty, so the assertion below
-          # could never fire and every tag push published floor 0.2.5 regardless of the
-          # real minimum. A release that cannot state its floor now stops here.
-          : "${MANIFEST_MIN_VERSION:?minimum_supported_version is required - add it as a workflow_dispatch input}"
-          : "${MANIFEST_NOTES:?migration notes are required - add them as a workflow_dispatch input}"
-          python release/make_manifest.py "${GITHUB_REF_NAME}" stable "${GITHUB_REF_NAME}" release-manifest.json --min-version "$MANIFEST_MIN_VERSION" --notes "$MANIFEST_NOTES"
+          # The floor and its notes come from release/release_policy.json, which is in
+          # version control and reviewed with the code. The dispatch inputs above are an
+          # override for a one-off, empty on the normal tag-push path. No shell fallback:
+          # a fallback here would guarantee both values non-empty and make the assertion
+          # in the next step unfailable, which is the defect this replaced.
+          python release/make_manifest.py "${GITHUB_REF_NAME}" stable "${GITHUB_REF_NAME}" release-manifest.json
       - name: Assert update floor (fail closed without min-version + notes)
         run: |
           python -c "import json; m=json.load(open('release-manifest.json')); assert m.get('minimum_supported_version'), 'manifest missing minimum_supported_version'; assert m.get('notes'), 'manifest missing migration notes'; print('floor ok:', m['minimum_supported_version'])"
