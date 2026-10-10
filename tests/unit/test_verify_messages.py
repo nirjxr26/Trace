@@ -8,7 +8,7 @@ not support.
 import pytest
 
 
-@pytest.fixture()
+@pytest.fixture
 def out(capsys):
     """Rendered card as plain text. Rich wraps rows, so this collapses whitespace —
     otherwise a phrase split across two lines never matches."""

@@ -8,7 +8,7 @@ def test_version_ordering():
     assert _parse_version("1.10.0") > _parse_version("1.9.0")
     assert _parse_version("1.4.0a1") < _parse_version("1.4.0")
     assert _parse_version("1.5.0-beta.1") < _parse_version("1.5.0")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="invalid version"):
         _parse_version("not-a-version")
 
 

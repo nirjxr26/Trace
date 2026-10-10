@@ -74,8 +74,9 @@ def test_enumeration_raises_when_lsblk_is_unavailable(monkeypatch: pytest.Monkey
         raise HelperFailure(UnknownCause.TOOL_MISSING, "lsblk missing")
 
     monkeypatch.setattr(linux, "lsblk_json", _absent)
+    adapter = linux.LinuxDevice()
     with pytest.raises(HelperFailure):
-        linux.LinuxDevice().list_block_devices()
+        adapter.list_block_devices()
 
 
 def test_enumeration_never_opens_a_device_for_content(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -650,4 +651,5 @@ def test_an_unknown_verdict_is_not_rendered_as_success(monkeypatch: pytest.Monke
             assert successes == [], f"UNKNOWN took the success branch: {successes}"
             assert any("UNKNOWN" in m for m in printed), printed
         else:
-            assert successes and "READ_ONLY" in successes[0], successes
+            assert successes, "a confirmed verdict must reach the success branch"
+            assert "READ_ONLY" in successes[0], successes

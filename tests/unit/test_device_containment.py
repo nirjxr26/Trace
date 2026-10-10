@@ -146,7 +146,7 @@ def test_empty_path_fails_closed(tmp_path) -> None:  # type: ignore[no-untyped-d
     dev = tmp_path / "dev"
     dev.mkdir()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="escaping the trusted device root"):
         check_device_contained("", dev)
 
 

@@ -4109,3 +4109,52 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Verification: version tests green (8 passed incl. `test_cli_version` and pointer tests).
   Falsified: settings reverted to 0.3.0 fails `test_version_single_sourced`. Full gate on
   the final tree: passed, 1159 passed / 12 skipped, 81.25%, ruff + mypy clean (206 files).
+
+## 2026-10-09
+- Summary: SonarQube backlog closed and gated against reopening. Ruff now selects `C901`
+  and `PT` with `max-complexity = 15`, so cognitive-complexity ceilings and the pytest
+  anti-patterns that produced the backlog fail the pre-PR gate instead of drifting back.
+  `fixture-parentheses = false` keeps the SonarQube syntax rule from firing again.
+- Source: `doctor.py` `run_doctor` split into `_Results`/`_database_results`/`_render_header`
+  and the repeated "Records protected" literal replaced by `PROTECTED_NAME`;
+  `uninstall.py` `run_uninstall` split into `_remove_targets`/`_remove_shims`/`_report_kept`/
+  `_report_failures`; `devices/linux.py` `_probe_cause` split with a new `_error_cause`;
+  `updates/selfheal.py` `check_state_json` split with a new `_state_file_verdict`.
+  Two functions over the limit that were not on the list also fixed: `cases/service.py`
+  `close_case` (nested hooks lifted to `_close_audit_hook`/`_close_anchor_hook`) and
+  `devices/_subprocess.py` `run_capped` (Popen lifted to `_start`).
+- `devices/win32.py`: `_dos_device_names` returned `set[LiteralString]` where `set[str]` was
+  declared. Same values, same empty-string filter; now a comprehension with an annotated
+  local so the return type is genuinely `set[str]`.
+- Tests: 14 `pytest.raises` blocks reduced to a single statement, `Exception` narrowed to
+  `IntegrityError` and `DeviceEnumerationError` in four places, six composite assertions
+  split, three `@pytest.fixture()` empty parens removed, `match=` added to every broad
+  `raises`.
+- Correction: the first round of `match=` patterns was written without reading the actual
+  exception text. Seven of them did not match and the tests failed — the intended message
+  was "Refusing device that does not exist", not "escaping the trusted device root", and
+  likewise for canonical-JSON, version parsing and shell splitting. Every pattern was then
+  probed against the real raise and corrected. A specific assertion with an invented
+  pattern is worse than a broad one.
+- Correction: `test_case_service_audit_hooks_are_built_by_one_factory` pinned a call count of
+  6, which the `close_case` split changed. Raised to 8 and a second assertion added for the
+  new factory, rather than reverting the split.
+- Files: `pyproject.toml`, `src/trace_core/{core/cli/doctor,core/cli/uninstall,cases/service,devices/_subprocess,devices/linux,devices/win32,updates/selfheal}.py`,
+  `tests/unit/test_audit_ledger.py`, `tests/unit/test_anchor_verification.py`,
+  `tests/unit/test_case_entity.py`, `tests/unit/test_device_containment.py`,
+  `tests/unit/test_device_enumeration_truth.py`, `tests/unit/test_devices_cli.py`,
+  `tests/unit/test_devices_linux_adapter.py`, `tests/unit/test_doctor.py`,
+  `tests/unit/test_installer_contract.py`, `tests/unit/test_security_regressions.py`,
+  `tests/unit/test_shared_helpers.py`, `tests/unit/test_shell.py`,
+  `tests/updates/test_phase_c_durable.py`, `tests/updates/test_policy_versions.py`,
+  `tests/updates/test_response_classification.py`, `tests/updates/test_restore_safety.py`,
+  `tests/updates/test_state_machine.py`, `changelog/nirjxr26/changelog.md`.
+- Second pass on the S5778 findings: the first fix reduced each block to one statement but
+  left a second call nested in the argument list, which is the other half of the same rule.
+  `AuditService(session_manager)`, `_FailThird(c)`, `_signed(...)`, `_Svc()`,
+  `svc.verify()`, `str(...)`, `LinuxDevice()`, `float("nan")` are all now built before the
+  `with`, leaving exactly one invocation inside it. Verified by an AST walk over the three
+  flagged files: 22 `pytest.raises` blocks, 0 with a nested call.
+- Verification: `ruff check src tests` clean including `C901`; `mypy src tests` clean on 206
+  files; unit + updates suites green (1148 passed, 12 skipped). Full pre-PR gate on the final
+  tree: passed, 1159 passed / 12 skipped, 81.28% coverage.

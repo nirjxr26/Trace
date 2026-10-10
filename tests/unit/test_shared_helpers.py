@@ -79,8 +79,9 @@ def test_update_lifecycle_record_fills_the_invariant_fields() -> None:
 
 def test_case_service_audit_hooks_are_built_by_one_factory() -> None:
     src = _source(cases_service)
-    assert src.count("_audit_hook(") == 6, "5 builder sites plus the factory definition"
-    assert src.count("def _audit_hook(") == 1
+    assert src.count("_audit_hook(") == 8, "5 builder sites plus 3 uses inside the two factories"
+    assert src.count("def _audit_hook(") == 1, "exactly one factory definition"
+    assert src.count("def _close_audit_hook(") == 1, "the close hook factory is defined once"
     built: tuple[Any, Any, dict[str, Any], Any] = ("ACTION", object(), {}, object())
     hook = cases_service._audit_hook(lambda: built, "actor", claimed="claimed")
     assert callable(hook)

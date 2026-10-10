@@ -51,7 +51,7 @@ def test_number_grammar_rejects_hostile() -> None:
 def test_anchor_path_contained() -> None:
     from trace_core.audit.anchor import anchor_path
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="escaping"):
         anchor_path("../../../../etc", 1)
 
 
@@ -953,12 +953,9 @@ async def test_bad_anchor_path_notifies(session_manager: DatabaseSessionManager)
 
         svc = AuditService(session_manager)
         res = svc.verify()
-        try:
-            verify_against_anchor(svc, res, "/no/such/anchor.json")
-        except ValidationError as exc:
-            assert "Unreadable anchor" in str(exc)
-        except Exception:
-            pass  # empty ledger: nothing to anchor-check, app already stayed alive
+        if res.events_verified:
+            with pytest.raises(ValidationError, match="Unreadable anchor"):
+                verify_against_anchor(svc, res, "/no/such/anchor.json")
 
 
 @pytest.mark.anyio

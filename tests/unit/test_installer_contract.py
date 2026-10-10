@@ -35,7 +35,7 @@ def test_the_powershell_installer_parses() -> None:
 
 
 @pytest.mark.parametrize(
-    "script,name",
+    ("script", "name"),
     [(PS1, "install.ps1"), (SH, "install.sh")],
     ids=["ps1", "sh"],
 )
@@ -51,7 +51,7 @@ def test_a_failing_doctor_is_not_swallowed(script: Path, name: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "script,name",
+    ("script", "name"),
     [(PS1, "install.ps1"), (SH, "install.sh")],
     ids=["ps1", "sh"],
 )
@@ -80,7 +80,7 @@ def test_the_shell_installer_rejects_unknown_flags() -> None:
 
 
 @pytest.mark.parametrize(
-    "script,name,flag",
+    ("script", "name", "flag"),
     [(PS1, "install.ps1", "DoctorFailed"), (SH, "install.sh", "DOCTOR_FAILED")],
     ids=["ps1", "sh"],
 )

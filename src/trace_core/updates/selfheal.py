@@ -76,23 +76,35 @@ def check_trust_dirs() -> SelfCheck:
     return _guard("trust dirs", run)
 
 
+def _state_file_verdict(path: Path) -> tuple[SelfCheck | None, bool]:
+    """One state file: (failure to stop on, whether it was repaired)."""
+    if not path.exists():
+        return None, False
+    verdict, _data = classify_json_file(path)
+    if verdict is JsonFileVerdict.UNREADABLE:
+        return (
+            SelfCheck(
+                STATE_FILES_NAME,
+                False,
+                f"could not read {path.name} - left in place, run `trace recovery`",
+            ),
+            False,
+        )
+    if verdict is JsonFileVerdict.CORRUPT:
+        if not _remove(path):
+            return SelfCheck(STATE_FILES_NAME, False, f"cannot remove corrupt {path.name}"), False
+        return None, True
+    return None, False
+
+
 def check_state_json() -> SelfCheck:
     def run() -> SelfCheck:
         repaired = False
         for path in state_file_paths():
-            if not path.exists():
-                continue
-            verdict, _data = classify_json_file(path)
-            if verdict is JsonFileVerdict.UNREADABLE:
-                return SelfCheck(
-                    STATE_FILES_NAME,
-                    False,
-                    f"could not read {path.name} - left in place, run `trace recovery`",
-                )
-            if verdict is JsonFileVerdict.CORRUPT:
-                if not _remove(path):
-                    return SelfCheck(STATE_FILES_NAME, False, f"cannot remove corrupt {path.name}")
-                repaired = True
+            failure, was_repaired = _state_file_verdict(path)
+            if failure is not None:
+                return failure
+            repaired = repaired or was_repaired
         return SelfCheck(STATE_FILES_NAME, True, "reset" if repaired else "ok", repaired=repaired)
 
     return _guard(STATE_FILES_NAME, run)

@@ -16,6 +16,7 @@ def _boom():
 
 
 def test_a_failed_enumeration_raises_instead_of_returning_no_devices(session_manager) -> None:
+    from trace_core.devices.domain import DeviceEnumerationError
     from trace_core.devices.service import DeviceService
 
     service = DeviceService(session_manager)
@@ -30,7 +31,7 @@ def test_a_failed_enumeration_raises_instead_of_returning_no_devices(session_man
             return ()
 
     service.enumerator = _Broken()  # type: ignore[assignment]
-    with pytest.raises(Exception) as caught:
+    with pytest.raises(DeviceEnumerationError) as caught:
         service.list_devices()
     assert "Could not list devices" in str(caught.value), caught.value
     assert "not the same as finding none" in str(caught.value), caught.value
@@ -44,7 +45,8 @@ def test_the_error_card_names_the_failure_not_an_empty_list(session_manager) -> 
         DeviceEnumerationError("Could not list devices: lsblk could not be executed."), None, None
     )
     assert title == "Couldn't List Devices", title
-    assert remedy is not None and "Nothing was changed" in remedy, remedy
+    assert remedy is not None, "a failed enumeration must carry a remedy"
+    assert "Nothing was changed" in remedy, remedy
     assert code != 0, "a failed enumeration must not exit success"
 
 

@@ -203,7 +203,8 @@ def test_two_backups_in_a_row_both_succeed(tmp_path) -> None:
     first = backup_database(mgr, dest)
     second = backup_database(mgr, dest)
     assert first.name != second.name
-    assert first.exists() and second.exists()
+    assert first.exists(), first
+    assert second.exists(), second
 
 
 def test_masking_does_not_rewrite_a_sqlite_url() -> None:

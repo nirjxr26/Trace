@@ -214,8 +214,9 @@ def test_a_key_problem_does_not_also_report_tampering(
     CaseService(session_manager).create_case(CaseCreateDto(title="T1", lead_examiner="Ex"))
     _restamp_payload_leaving_signature_stale(session_manager)
     monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+    audit_svc = AuditService(session_manager)
     with pytest.raises(ApplicationError) as exc:
-        do_verify(AuditService(session_manager), "json", None)
+        do_verify(audit_svc, "json", None)
     assert not isinstance(exc.value, AuditTamperError)
     assert "tamper" not in str(exc.value).lower()
     assert "restore" not in str(exc.value).lower()
@@ -229,8 +230,9 @@ def test_real_tampering_still_reports_tampering(session_manager: DatabaseSession
     CaseService(session_manager).create_case(CaseCreateDto(title="T1", lead_examiner="Ex"))
     CaseService(session_manager).create_case(CaseCreateDto(title="T2", lead_examiner="Ex"))
     _tamper_seq_one(session_manager)
+    audit_svc = AuditService(session_manager)
     with pytest.raises(AuditTamperError, match="Tamper detected at seq 1"):
-        do_verify(AuditService(session_manager), "json", None)
+        do_verify(audit_svc, "json", None)
 
 
 def test_the_tamper_remedy_names_key_rotation_not_only_a_restore(
@@ -268,10 +270,11 @@ def test_the_shared_verify_core_refuses_a_tampered_chain(
 
     CaseService(session_manager).create_case(CaseCreateDto(title="A", lead_examiner="Ex"))
     CaseService(session_manager).create_case(CaseCreateDto(title="B", lead_examiner="Ex"))
-    assert do_verify(AuditService(session_manager), "json", None).is_valid is True
+    audit_svc = AuditService(session_manager)
+    assert do_verify(audit_svc, "json", None).is_valid is True
     _tamper_seq_one(session_manager)
     with pytest.raises(AuditTamperError, match="Tamper detected at seq 1"):
-        do_verify(AuditService(session_manager), "json", None)
+        do_verify(audit_svc, "json", None)
 
 
 def test_the_repl_verify_surface_refuses_a_tampered_chain(
@@ -442,10 +445,12 @@ def test_canonical_key_order() -> None:
 
 
 def test_non_finite_rejected() -> None:
-    with pytest.raises(ValueError):
-        canonical_json({"v": float("nan")})
-    with pytest.raises(ValueError):
-        canonical_json({"v": float("inf")})
+    nan_payload = {"v": float("nan")}
+    with pytest.raises(ValueError, match="Non-finite float"):
+        canonical_json(nan_payload)
+    inf_payload = {"v": float("inf")}
+    with pytest.raises(ValueError, match="Non-finite float"):
+        canonical_json(inf_payload)
 
 
 def test_append_retries_transient_head_collision(session_manager, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -623,16 +628,14 @@ def test_a_restored_database_regains_append_only_protection_on_startup(
     with session_manager.engine.begin() as c:
         _disable_audit_triggers(c)
     assert _sqlite_trigger_names(session_manager) == set()
-    with pytest.raises(Exception):
-        with session_manager.session() as s:
-            s.execute(sqlalchemy.text("UPDATE audit_events SET actor='tampered' WHERE seq=1"))
+    with pytest.raises(sqlalchemy.exc.IntegrityError):
+        _tamper_update(session_manager)
 
     apply_migrations(session_manager.engine)
 
     assert _sqlite_trigger_names(session_manager) == {"audit_events_no_update", "audit_events_no_delete"}
-    with pytest.raises(Exception):
-        with session_manager.session() as s:
-            s.execute(sqlalchemy.text("UPDATE audit_events SET actor='tampered' WHERE seq=1"))
+    with pytest.raises(sqlalchemy.exc.IntegrityError):
+        _tamper_update(session_manager)
 
 
 def test_reasserting_protection_leaves_a_healthy_database_alone(session_manager: DatabaseSessionManager) -> None:
@@ -646,6 +649,11 @@ def test_reasserting_protection_leaves_a_healthy_database_alone(session_manager:
 
     with session_manager.session() as s:
         assert s.execute(sqlalchemy.text("SELECT count(*) FROM audit_events")).scalar() == before
+
+
+def _tamper_update(session_manager: DatabaseSessionManager) -> None:
+    with session_manager.session() as s:
+        s.execute(sqlalchemy.text("UPDATE audit_events SET actor='tampered' WHERE seq=1"))
 
 
 def test_installing_the_sqlite_triggers_raises_when_one_cannot_be_created(
@@ -664,5 +672,6 @@ def test_installing_the_sqlite_triggers_raises_when_one_cannot_be_created(
             return self._inner.execute(*a, **k)  # type: ignore[attr-defined]
 
     with session_manager.engine.connect() as c:
+        failing = cast(Connection, _FailThird(c))
         with pytest.raises(sqlalchemy.exc.OperationalError):
-            _install_sqlite_audit_triggers(cast(Connection, _FailThird(c)))
+            _install_sqlite_audit_triggers(failing)

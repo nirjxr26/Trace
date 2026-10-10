@@ -48,10 +48,10 @@ def _step(ok: bool, label: str) -> None:
     console.print(step_line(StageStatus.DONE if ok else StageStatus.FAILED, label))
 
 
-def run_uninstall(purge_data: bool) -> int:
-    console.print("Uninstalling Trace\n")
+def _remove_targets(targets: tuple[str, ...]) -> list[Path]:
+    """Remove each target, reporting per step. Returns the ones that survived."""
     failures: list[Path] = []
-    for target in _ALWAYS:
+    for target in targets:
         path = _trace_root() / target
         if not path.exists():
             continue
@@ -63,45 +63,63 @@ def run_uninstall(purge_data: bool) -> int:
         _step(done, f"Removed ~/.trace/{target}" if done else f"Couldn't remove ~/.trace/{target}")
         if not done:
             failures.append(path)
-    shim_ok = True
-    if failures:
-        # Leaving the launcher in place is what makes a partial uninstall recoverable:
-        # without `trace` on PATH the operator has no way to inspect or retry it.
-        _step(False, "Kept the `trace` launcher — finish with `trace uninstall`")
-    else:
-        for shim in _shim_paths():
-            if not shim.exists():
-                continue
-            try:
-                _remove(shim)
-            except OSError:
-                shim_ok = False
-        _step(shim_ok, "Removed the `trace` launcher" if shim_ok else "Couldn't remove the `trace` launcher")
-    shim_removed = not failures and shim_ok
-    console.print(done_line())
-    console.print("")
+    return failures
+
+
+def _remove_shims() -> bool:
+    """Remove the launcher entries. False when any is still present."""
+    ok = True
+    for shim in _shim_paths():
+        if not shim.exists():
+            continue
+        try:
+            _remove(shim)
+        except OSError:
+            ok = False
+    return ok
+
+
+def _report_kept(purge_data: bool) -> None:
     if purge_data:
         console.print(
             f"{CLOSING_INDENT}Kept: the PostgreSQL server. Drop the data with: DROP DATABASE trace;",
             style="dim",
         )
-    else:
-        console.print(
-            f"{CLOSING_INDENT}Kept: your cases and evidence (~/.trace/storage), signing keys, and the database.",
-            style="dim",
-        )
-        console.print(f"{CLOSING_INDENT}Run `trace uninstall --purge-data` to remove those too.", style="dim")
+        return
+    console.print(
+        f"{CLOSING_INDENT}Kept: your cases and evidence (~/.trace/storage), signing keys, and the database.",
+        style="dim",
+    )
+    console.print(f"{CLOSING_INDENT}Run `trace uninstall --purge-data` to remove those too.", style="dim")
+
+
+def _report_failures(failures: list[Path]) -> None:
+    console.print("")
+    console.print(f"[yellow]{CLOSING_INDENT}Some files could not be removed:[/yellow]")
+    for path in failures:
+        console.print(f"{CLOSING_INDENT}  {path}")
+    console.print(f"{CLOSING_INDENT}The `trace` command still works, so you can check again.")
+    console.print(f"{CLOSING_INDENT}Nothing was lost — only these folders were left behind.")
+    console.print("")
+
+
+def run_uninstall(purge_data: bool) -> int:
+    console.print("Uninstalling Trace\n")
+    failures = _remove_targets(_ALWAYS)
+    shim_ok = _remove_shims() if not failures else False
     if failures:
-        console.print("")
-        console.print(f"[yellow]{CLOSING_INDENT}Some files could not be removed:[/yellow]")
-        for path in failures:
-            console.print(f"{CLOSING_INDENT}  {path}")
-        if failures:
-            console.print(f"{CLOSING_INDENT}The `trace` command still works, so you can check again.")
-        console.print(f"{CLOSING_INDENT}Nothing was lost — only these folders were left behind.")
-        console.print("")
+        # Leaving the launcher in place is what makes a partial uninstall recoverable:
+        # without `trace` on PATH the operator has no way to inspect or retry it.
+        _step(False, "Kept the `trace` launcher — finish with `trace uninstall`")
+    else:
+        _step(shim_ok, "Removed the `trace` launcher" if shim_ok else "Couldn't remove the `trace` launcher")
+    console.print(done_line())
+    console.print("")
+    _report_kept(purge_data)
+    if failures:
+        _report_failures(failures)
         return EXIT_ERROR
-    if shim_removed:
+    if not failures and shim_ok:
         console.print(f"{CLOSING_INDENT}Trace has been removed.")
         console.print("")
     console.print("")

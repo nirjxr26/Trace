@@ -325,7 +325,7 @@ def _query_dos_devices() -> set[str]:
         buffer = ctypes.create_unicode_buffer(size)
         needed = kernel.QueryDosDeviceW(None, buffer, size)
         if needed:
-            return set("".join(buffer[:needed]).split("\x00")) - {""}
+            return {name for name in "".join(buffer[:needed]).split("\x00") if name}
         if kernel.GetLastError() not in (ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA) or size >= MAX_DOS_DEVICE_BUFFER:
             return set()
         size *= 2
@@ -345,7 +345,7 @@ def _try_open(node: str) -> tuple[int | None, int]:
 
     create_file = kernel.CreateFileW
     create_file.restype = wintypes.HANDLE
-    ctypes.set_last_error(0)
+    kernel.SetLastError(0)
     handle = create_file(
         ctypes.c_wchar_p(node),
         GENERIC_READ,

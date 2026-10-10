@@ -25,17 +25,17 @@ def test_case_creation_valid() -> None:
 
 
 def test_case_validation_rejects_empty_number() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="at least 1 character"):
         Case(number="", title="Test", lead_examiner="Investigator X")
 
 
 def test_case_validation_rejects_empty_title() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="title cannot be empty"):
         Case(number="2026-CR-0002", title="   ", lead_examiner="Investigator X")
 
 
 def test_case_validation_rejects_empty_examiner() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="at least 1 character"):
         Case(number="2026-CR-0003", title="Test", lead_examiner="")
 
 

@@ -35,7 +35,7 @@ def test_deferred_and_rollback_branches():
 
 
 @pytest.mark.parametrize(
-    "a,b",
+    ("a", "b"),
     [
         (UpdateState.IDLE, UpdateState.COMPLETED),
         (UpdateState.AVAILABLE, UpdateState.INSTALLING),

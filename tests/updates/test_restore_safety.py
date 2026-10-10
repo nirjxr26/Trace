@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 
-@pytest.fixture()
+@pytest.fixture
 def live_db(tmp_path):
     path = tmp_path / "trace.db"
     conn = sqlite3.connect(path, isolation_level=None)
@@ -77,17 +77,27 @@ def test_wal_sidecars_do_not_survive_a_restore(live_db, tmp_path) -> None:
     assert rows == [("from backup",)], rows
 
 
+def _corrupt_backup(tmp_path, name: str, payload: bytes):
+    bad = _backup_in_storage(tmp_path, name)
+    bad.write_bytes(payload)
+    return bad
+
+
+def _restore_that_fails(backup, live_db):
+    from trace_core.updates.migration import restore_backup
+
+    restore_backup(backup, _manager_for(live_db))
+
+
 def test_a_corrupt_backup_never_replaces_the_live_database(live_db, tmp_path) -> None:
     """The old code copied first and checked nothing. A truncated or non-SQLite backup
     would overwrite a healthy evidence database and only be discovered later."""
     from trace_core.updates.errors import RecoveryError
-    from trace_core.updates.migration import restore_backup
 
-    bad = _backup_in_storage(tmp_path, "bad.db")
-    bad.write_bytes(b"this is not a database")
+    bad = _corrupt_backup(tmp_path, "bad.db", b"this is not a database")
 
     with pytest.raises(RecoveryError):
-        restore_backup(bad, _manager_for(live_db))
+        _restore_that_fails(bad, live_db)
 
     conn = sqlite3.connect(live_db)
     rows = conn.execute("SELECT note FROM audit_events").fetchall()
@@ -97,24 +107,20 @@ def test_a_corrupt_backup_never_replaces_the_live_database(live_db, tmp_path) ->
 
 def test_a_restore_that_cannot_be_verified_says_the_current_database_is_intact(live_db, tmp_path) -> None:
     from trace_core.updates.errors import RecoveryError
-    from trace_core.updates.migration import restore_backup
 
-    bad = _backup_in_storage(tmp_path, "bad.db")
-    bad.write_bytes(b"not a database either")
+    bad = _corrupt_backup(tmp_path, "bad.db", b"not a database either")
     with pytest.raises(RecoveryError) as caught:
-        restore_backup(bad, _manager_for(live_db))
+        _restore_that_fails(bad, live_db)
     message = str(caught.value).lower()
     assert "left in place" in message or "current database" in message, message
 
 
 def test_no_staging_file_is_left_behind(live_db, tmp_path) -> None:
     from trace_core.updates.errors import RecoveryError
-    from trace_core.updates.migration import restore_backup
 
-    bad = _backup_in_storage(tmp_path, "bad.db")
-    bad.write_bytes(b"nope")
+    bad = _corrupt_backup(tmp_path, "bad.db", b"nope")
     with pytest.raises(RecoveryError):
-        restore_backup(bad, _manager_for(live_db))
+        _restore_that_fails(bad, live_db)
 
     leftovers = list(live_db.parent.glob(f"{live_db.name}*"))
     names = {p.name for p in leftovers}

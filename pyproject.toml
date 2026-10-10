@@ -49,8 +49,18 @@ target-version = "py312"
 extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP"]
+# C901 and PT are gates, not style: they are what stopped the SonarQube backlog
+# (cognitive-complexity ceilings and pytest anti-patterns) from reopening.
+select = ["E", "F", "I", "UP", "C901", "PT"]
 ignore = ["E501"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+parametrize-names-type = "tuple"
+raises-require-match-for = ["BaseException", "Exception", "ValueError", "OSError"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

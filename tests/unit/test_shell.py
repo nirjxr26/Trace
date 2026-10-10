@@ -380,7 +380,7 @@ def test_repl_split_still_honours_quotes_and_rejects_unbalanced() -> None:
     from trace_core.cli.shell import _split_line
 
     assert _split_line('case list --search "hello world"') == ["case", "list", "--search", "hello world"]
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="No closing quotation"):
         _split_line('say "unbalanced')
 
 
