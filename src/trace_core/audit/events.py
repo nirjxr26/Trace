@@ -28,6 +28,7 @@ class Subject:
     type: str  # case | evidence | report | device | system
     number: str | None = None  # human id, e.g. 2026-CR-0029; None when type != case
     id: UUID | None = None
+    device_serial: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

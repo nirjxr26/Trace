@@ -17,7 +17,6 @@ from trace_core.core.ui.renderers import (
     render_output,
     safe_text,
     sanitize_terminal,
-    split_hash,
 )
 from trace_core.core.ui.theme import THEME_TOKENS
 
@@ -291,10 +290,35 @@ def action_title(action: str) -> str:
     return ACTION_TITLES.get(action, action.replace("_", " ").title())
 
 
+_SHORT_LABELS: Final[dict[str, str]] = {
+    "CASE_CREATED": "Case Created",
+    "CASE_UPDATED": "Case Updated",
+    "CASE_CLOSED": "Case Closed",
+    "CASE_ARCHIVED": "Case Archived",
+    "CASE_RESTORED": "Case Restored",
+    "CASE_PURGED": "Case Purged",
+    "DEVICE_INSPECTED": "Device Inspected",
+    "DEVICE_GATE_CHECKED": "Gate Checked",
+    "DEVICE_OVERRIDE": "Override",
+    "DEVICE_LINKED": "Device Linked",
+    "DEVICE_UNLINKED": "Device Unlinked",
+    "DEVICE_RECOGNIZED": "Device Recognized",
+    "UPDATE_POLICY_OVERRIDE": "Policy Override",
+}
+
+
 def short_action_label(action: Any) -> str:
-    """Compact timeline label for an action enum or string. Single source."""
-    value = getattr(action, "value", action)
-    return str(value).replace("CASE_", "").title()
+    """Compact timeline label for an action enum or string. Single source.
+
+    Names the subject where dropping it would be ambiguous (`Device Linked`, not `Linked`)
+    and drops it where the column already says it (`Gate Checked`, under a device list).
+    Never emits an underscore: these are read at a glance, not parsed.
+    """
+    value = str(getattr(action, "value", action))
+    known = _SHORT_LABELS.get(value)
+    if known is not None:
+        return known
+    return value.replace("CASE_", "").replace("_", " ").title()
 
 
 def format_change_value(value: Any) -> str:
@@ -308,15 +332,6 @@ def format_change_value(value: Any) -> str:
     if isinstance(value, (list, dict)):
         return json.dumps(value, ensure_ascii=False)
     return str(value)
-
-
-def _integrity_rows(e: AuditEventDto, term_w: int) -> list[tuple[str, Any]]:
-    """Categorized ledger hashes, split for narrow terminals."""
-    return [
-        ("Payload Hash", split_hash(e.payload_hash, term_w)),
-        ("Previous Chain", split_hash(e.prev_chain, term_w)),
-        ("Chain Hash", split_hash(e.chain_hash, term_w)),
-    ]
 
 
 def render_audit_detail(e: AuditEventDto) -> None:
@@ -401,9 +416,6 @@ def render_audit_detail(e: AuditEventDto) -> None:
     )
     seal = "✓ VERIFIED" if intact else "✗ MISMATCH"
     render_section_title(f"INTEGRITY · {seal}", style=TOK["accent"] if intact else TOK["danger"])
-    console.print(
-        create_key_value_grid(_integrity_rows(e, term_w), width=kv_width(bp, min_width=16), padding=table_padding(bp))
-    )
     console.print("")
     if not intact:
         console.print("[dim]Row failed its self-check — run `audit verify` for the full chain.[/dim]")
@@ -415,7 +427,7 @@ def _detail_fields(e: AuditEventDto, details: dict, utc_display: str) -> list[tu
     reason = (details.get("reason") or "").strip()
     rows: list[tuple[str, Any]] = [
         ("Actor", f"{sanitize_terminal(e.actor)} @ {sanitize_terminal(host)}"),
-        ("When", f"{format_india_datetime(e.ts)} ({utc_display})"),
+        ("Timestamp", f"{format_india_datetime(e.ts)} ({utc_display})"),
         ("", ""),
         ("Event", e.action.value),
     ]
@@ -473,17 +485,12 @@ def _render_valid(res: VerifyResultDto, anchor: str | None = None) -> None:
         else ""
     )
     rows: list[tuple[str, Any]] = [
-        ("Chain", "trace-audit-v1 · SHA-256 · trace-canonical-json-v1"),
         (
             "Events",
             f"{res.events_verified} verified · seq {res.first_seq} → {res.last_seq}" if res.first_seq else "0",
         ),
         ("Range", f"{res.first_seq} → {res.last_seq}" if res.first_seq else "-"),
         ("Gaps", gaps_str + note),
-        (
-            "Checked",
-            "payload_hash (SHA256 canonical) + chain_hash (prev‖hash‖seq) recomputed from payload_json",
-        ),
     ]
     if anchor:
         rows.append(("Anchor", f"Tail matches {anchor}"))
@@ -549,14 +556,6 @@ def _render_tamper(res: VerifyResultDto) -> None:
             ("Where", where),
             ("What", _what_text(res.mismatch_type)),
             ("Type", res.mismatch_type or "-"),
-            (
-                "Expected",
-                (res.expected_signature or res.expected_payload_hash or res.expected_chain_hash or "-")[:64],
-            ),
-            (
-                "Actual",
-                (res.actual_signature or res.actual_payload_hash or res.actual_chain_hash or "-")[:64],
-            ),
             ("Checked", f"{res.events_verified} events OK, failing at {res.first_mismatch_seq}"),
             ("Gaps", ", ".join(str(g) for g in res.sequence_gaps) if res.sequence_gaps else "None"),
             ("Result", Text("✗ Ledger broken. Do NOT trust events ≥ mismatch.", style=THEME_TOKENS["danger"])),

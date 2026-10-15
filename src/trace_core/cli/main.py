@@ -2,7 +2,6 @@
 
 import typer
 
-from trace_core.cli.shell import run_interactive_shell
 from trace_core.core.cli.catalog import feature_apps
 from trace_core.core.settings import settings
 from trace_core.core.ui.renderers import configure_utf8_streams
@@ -73,6 +72,8 @@ def main(
 ) -> None:
     """If no subcommand is provided, launch into the interactive forensic console."""
     if ctx.invoked_subcommand is None:
+        from trace_core.cli.shell import run_interactive_shell
+
         run_interactive_shell()
 
 

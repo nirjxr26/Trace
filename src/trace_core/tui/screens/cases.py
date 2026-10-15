@@ -1,11 +1,17 @@
 """Cases tab: live table + dossier + raw drawer + mutation forms."""
 
+import json
+from datetime import datetime
+from typing import NamedTuple
+
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.events import Resize
 from textual.widgets import DataTable, Input, Rule, Static
 
+from trace_core.audit.domain import AuditAction
 from trace_core.audit.dto import AuditFilterDto
 from trace_core.audit.service import AuditService
 from trace_core.cases.dto import CaseCreateDto, CaseFilterDto, CaseResponseDto, CaseUpdateDto
@@ -25,6 +31,42 @@ TABLE_COLUMNS = (("Case #", 16), ("Status", 10))
 _CASE_COMMAND_ALIASES = {"close": "seal"}
 _NO_SELECTION = "Select a case first."
 _TITLE_STYLE = f"bold {THEME_HEX['title']}"
+
+
+class _LinkedDevice(NamedTuple):
+    """One device's relationship to a case, as both dossiers present it."""
+
+    node: str
+    label: str
+    model: str
+    size: str
+    current: bool
+    linked_at: datetime
+    linked_by: str
+    capacity_bytes: int | None = None
+
+    @property
+    def heading(self) -> str:
+        from trace_core.devices.renderers import device_heading
+
+        return device_heading(self.node, self.model or None, self.capacity_bytes)
+
+
+def _device_row(node: str, label: str, observed: dict, current: bool, at, who: str) -> _LinkedDevice:
+    """One dossier row. Model and size come from the newest observation for that node.
+
+    The model is shown exactly as recorded. `readable_model` shortens a vendor part number
+    into a product name, which is right for a narrow device-list column and wrong here: in a
+    dossier the part number is what identifies the drive, so `Micron_2400_MTFDKBA512QFM` must
+    not be reduced to `Micron`.
+    """
+    from trace_core.devices.renderers import format_bytes
+
+    record = observed.get(node)
+    model = record.model if record is not None and record.model else ""
+    size = format_bytes(record.capacity_bytes) if record is not None else ""
+    capacity = record.capacity_bytes if record is not None else None
+    return _LinkedDevice(node, label, model, size, current, at, who, capacity)
 
 
 class CasesView(TablePane[CaseResponseDto]):
@@ -55,6 +97,9 @@ class CasesView(TablePane[CaseResponseDto]):
         self._cases: list[CaseResponseDto] = []
         self._event_cache: dict[str, list] = {}
         self._event_total: dict[str, int] = {}
+        self._device_cache: dict[str, list[_LinkedDevice]] = {}
+        self._case_versions: dict[str, datetime] = {}
+        self._detail_width: int | None = None
 
     @property
     def _cases_svc(self) -> CaseService:
@@ -64,7 +109,6 @@ class CasesView(TablePane[CaseResponseDto]):
         with Horizontal(id="cases-top"):
             with Vertical(id="cases-left"):
                 yield Input(placeholder="Search cases...", id="case-search")
-                yield Rule()
                 yield Static("", id=CASE_HEADER_ID, classes="table-head")
                 yield Rule()
                 yield DataTable(id=TABLE_ID, cursor_type="row", show_header=False)
@@ -79,13 +123,18 @@ class CasesView(TablePane[CaseResponseDto]):
 
     def refresh_data(self) -> None:
         """Reload table + dossier. Called on mount, tab switch, and after every mutation."""
-        self._event_cache.clear()
-        self._event_total.clear()
         try:
-            self._cases = self._query()
+            cases = self._query()
         except Exception as exc:  # boundary: every service failure becomes a toast, never a crash
             self.app.notify(str(exc), severity="error")
             return
+        fresh = {c.number: c.updated_at for c in cases}
+        if fresh != self._case_versions:
+            for number in set(self._case_versions) | set(fresh):
+                if self._case_versions.get(number) != fresh.get(number):
+                    self.drop_dossier(number)
+            self._case_versions = fresh
+        self._cases = cases
         self.fill_table(self._cases, [c.number for c in self._cases])
 
     def row_cells(self, case: CaseResponseDto, selected: bool) -> list:  # type: ignore[no-untyped-def]
@@ -94,6 +143,16 @@ class CasesView(TablePane[CaseResponseDto]):
 
         first = f"{SELECT_PREFIX}{case.number}" if selected else f"  {case.number}"
         return [sanitize_terminal(first), status_text(case.status, case.is_deleted)]
+
+    def on_resize(self, event: Resize) -> None:
+        """Dividers are baked for one width; rebuild them when the width moves."""
+        from trace_core.tui.widgets import DossierScroll
+
+        width = self.query_one("#cases-right", DossierScroll).content_region.width
+        if width == self._detail_width:
+            return
+        self._detail_width = width
+        self.render_detail()
 
     def render_detail(self) -> None:
         from trace_core.tui.widgets import DossierScroll
@@ -172,14 +231,12 @@ class CasesView(TablePane[CaseResponseDto]):
         body.append(f"{format_india_datetime(case.opened_at)}\n")
         body.append(f"{'Updated':<15} ", style="dim")
         body.append(f"{format_india_datetime(case.updated_at)}\n")
-        body.append(f"{'Closed':<15} ", style="dim")
         if case.closed_at:
+            body.append(f"{'Closed':<15} ", style="dim")
             body.append(f"{format_india_datetime(case.closed_at)}\n")
             if case.closure_reason:
                 body.append(f"{'Reason':<15} ", style="dim")
                 body.append(f"{sanitize_terminal(case.closure_reason)}\n")
-        else:
-            body.append("—\n", style="dim")
         if case.description:
             body.append(rule)
             body.append("\nDESCRIPTION\n", style=THEME_TOKENS["accent"])
@@ -188,10 +245,78 @@ class CasesView(TablePane[CaseResponseDto]):
             body.append(rule)
             body.append("\nNOTES\n", style=THEME_TOKENS["accent"])
             body.append(f"  {sanitize_terminal(case.notes)}\n")
+        devices = self._case_devices(case.number)
+        if devices:
+            body.append(rule)
+            body.append("\nLINKED DEVICE\n", style=THEME_TOKENS["accent"])
+            for row in devices:
+                heading = row.heading
+                body.append(f"  {sanitize_terminal(heading)}\n", style=None if row.current else "dim")
+                if row.label:
+                    body.append(f"    {'Label':<10}", style="dim")
+                    body.append(f"{sanitize_terminal(row.label)}\n", style=None if row.current else "dim")
+
+    def drop_dossier(self, case_number: str) -> None:
+        self._event_cache.pop(case_number, None)
+        self._event_total.pop(case_number, None)
+        self._device_cache.pop(case_number, None)
+
+    def _case_devices(self, case_number: str) -> list[_LinkedDevice]:
+        """Devices ever filed under this case as (node, label, model, size, current).
+
+        The link table holds current state; the ledger holds history. A device that was
+        filed and then unlinked still has a DEVICE_LINKED event, so it stays in the record
+        dimmed rather than vanishing - unlinking removes the claim, not the history of it.
+
+        Model and size come from the newest observation, not the live adapter: what a disk
+        was recorded as outlives the disk being unplugged. A serial is deliberately absent -
+        it identifies a device to a machine, not a disk to someone reading a dossier, and it
+        is long enough to swamp the line.
+        """
+        if case_number in self._device_cache:
+            return self._device_cache[case_number]
+        from trace_core.devices.helpers import do_case_links, do_observed_devices
+
+        rows: list[_LinkedDevice] = []
+        try:
+            observed = do_observed_devices(self._manager)
+            current = do_case_links(self._manager, case_number)
+            rows = [
+                _device_row(link.node, link.label or "", observed, True, link.linked_at, link.linked_by)
+                for link in current
+            ]
+            linked_now = {row.node for row in rows}
+            for node, (at, who) in self._previously_linked(case_number).items():
+                if node not in linked_now:
+                    rows.append(_device_row(node, "", observed, False, at, who))
+            self._device_cache[case_number] = rows
+            return rows
+        except Exception:
+            return []
+
+    def _previously_linked(self, case_number: str) -> dict[str, tuple[datetime, str]]:
+        """node -> (linked at, linked by) from the ledger.
+
+        Device link events carry the case as their subject, so the linkage history is
+        queryable per case and survives the link row being deleted.
+        """
+        nodes: dict[str, tuple[datetime, str]] = {}
+        for event in AuditService(self._manager).list_events(
+            AuditFilterDto(case_number=case_number, action=AuditAction.DEVICE_LINKED, limit=500)
+        ):
+            try:
+                details = json.loads(event.payload_json).get("details", {})
+            except (TypeError, ValueError):
+                continue
+            node = details.get("node")
+            if node:
+                nodes.setdefault(str(node), (event.ts, event.actor))
+        return nodes
 
     def _dossier_events(self, case):  # type: ignore[no-untyped-def]
-        # Recent audit events for the dossier, cached per case. Cleared on refresh.
-        # None means the ledger could not be read, which is not the same as no records.
+        # Recent audit events for the dossier, cached per case; dropped when the row
+        # changes on refresh. None means the ledger could not be read, which is not
+        # the same as no records.
         if case.number not in self._event_cache:
             try:
                 self._event_cache[case.number] = AuditService(self._manager).list_events(

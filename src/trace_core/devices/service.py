@@ -22,12 +22,15 @@ from trace_core.core.errors import AuthorizationError, ValidationError
 from trace_core.core.operators import current_identity, require_mutator
 from trace_core.core.service import BaseService, UnitOfWork
 from trace_core.devices.domain import (
+    CaseDeviceLink,
     DeviceInfo,
     DeviceInspection,
     DeviceKind,
     DeviceNotFoundError,
     FingerprintMismatchError,
     GateCheck,
+    ObservedDevice,
+    StoredObservation,
     WpVerdict,
     WriteProtectionError,
 )
@@ -38,6 +41,27 @@ KIND_ALL = "all"
 ENV_ADAPTER = "TRACE_DEVICE_ADAPTER"
 ENV_DEVICE_ROOT = "TRACE_DEVICE_ROOT"
 _OVERRIDE_REASON = "accepted unverified source"
+
+
+def _case_or_none(case_number: str | None, manager: DatabaseSessionManager | None) -> tuple[str, Any] | None:
+    """Validate a case link before it is written.
+
+    An unresolvable case must fail loudly: a device observation filed under a case that
+    does not exist is evidence nobody can find later, and the case dossier would read
+    as though the link were trustworthy.
+    """
+    cleaned = (case_number or "").strip()
+    if not cleaned:
+        return None
+    if manager is None:
+        return cleaned, None
+    from trace_core.cases.service import CaseService
+
+    try:
+        case = CaseService(manager).get_case(cleaned)
+    except Exception as exc:
+        raise ValidationError(f"unknown case {cleaned}: {exc}") from exc
+    return case.number, case.id
 
 
 class DeviceService(BaseService):
@@ -51,8 +75,12 @@ class DeviceService(BaseService):
         super().__init__(session_manager)
         self.enumerator, self.inspector, self.probe = _fill_ports(enumerator, inspector, probe)
 
-    def list_devices(self, kind: str = KIND_ALL) -> list[DeviceInfo]:
-        """Zero persistence, zero audit events, zero evidentiary reads [D10], [D23]."""
+    def list_devices(self, kind: str = KIND_ALL, *, audit_recognition: bool = False) -> list[DeviceInfo]:
+        """Enumerate devices. Silent by default: no persistence, no audit, no evidentiary reads [D10], [D23].
+
+        Explicit user-invoked lists opt into one system-subject recognition row via
+        `audit_recognition`; background polls and completion never pass it.
+        """
         try:
             devices = self.enumerator.list_block_devices()
         except Exception as exc:
@@ -65,12 +93,103 @@ class DeviceService(BaseService):
                 f"Could not list devices: {exc.detail}. This is not the same as finding none."
             ) from exc
         if str(kind).strip().lower() == KIND_ALL:
-            return devices
-        wanted = _kind_or_error(kind)
-        return [d for d in devices if d.kind is wanted]
+            found = devices
+        else:
+            wanted = _kind_or_error(kind)
+            found = [d for d in devices if d.kind is wanted]
+        if audit_recognition:
+            self._record_recognition(found, str(kind).strip().lower())
+        return found
+
+    def _record_recognition(self, devices: list[DeviceInfo], kind: str) -> None:
+        from trace_core.audit.builder import for_device_recognized
+
+        with self.transaction() as uow:
+            actor = self._actor(uow)
+            observed = SqlAlchemyDeviceRepository(uow.session).observed_devices()
+            entries = [
+                {
+                    "node": device.node,
+                    "kind": device.kind.value,
+                    "serial": observed[device.node].serial if device.node in observed else None,
+                }
+                for device in devices
+            ]
+            uow.before_commit(self._ledger_hook(lambda: for_device_recognized(kind, entries), actor))
 
     def change_token(self) -> tuple[str, ...]:
         return self.enumerator.change_token()
+
+    def link_device(self, node: str, case_number: str, *, label: str | None = None) -> CaseDeviceLink:
+        """File a device under a case. Bookkeeping only: no device is opened.
+
+        Deliberately does not resolve or open the node. Tagging a bagged disk must work
+        before imaging it, and must not sit behind real-hardware consent.
+        """
+        resolved = _case_or_none(case_number, self.session_manager)
+        assert resolved is not None
+        case, sid = resolved
+        cleaned = str(node).strip()
+        if not cleaned:
+            raise ValidationError("device node must not be empty")
+        existing = {link.case_number for link in self.links_for_node(cleaned)}
+        if case in existing:
+            raise ValidationError(f"{cleaned} is already filed under {case}")
+
+        from trace_core.audit.builder import for_device_linked
+        from trace_core.core.clock import now_utc
+
+        with self.transaction() as uow:
+            actor = self._actor(uow)
+            link = CaseDeviceLink(
+                case_number=case,
+                node=cleaned,
+                label=label or None,
+                linked_at=now_utc(),
+                linked_by=actor,
+            )
+            SqlAlchemyDeviceRepository(uow.session).add_link(link)
+            uow.before_commit(self._ledger_hook(lambda: for_device_linked(case, sid, cleaned, label=label), actor))
+        return link
+
+    def unlink_device(self, node: str, case_number: str) -> None:
+        """Remove a device from a case. Audited, because the link is a claim."""
+        resolved = _case_or_none(case_number, self.session_manager)
+        assert resolved is not None
+        case, sid = resolved
+        cleaned = str(node).strip()
+        from trace_core.audit.builder import for_device_unlinked
+
+        with self.transaction() as uow:
+            actor = self._actor(uow)
+            if not SqlAlchemyDeviceRepository(uow.session).remove_link(case, cleaned):
+                raise ValidationError(f"{cleaned} is not filed under {case}")
+            uow.before_commit(self._ledger_hook(lambda: for_device_unlinked(case, sid, cleaned), actor))
+
+    def observation_history(self, serial: str, limit: int = 10) -> list[StoredObservation]:
+        """Every prior observation of one identity, newest first."""
+        with self.transaction() as uow:
+            self._actor(uow)
+            return SqlAlchemyDeviceRepository(uow.session).observation_history(serial, limit)
+
+    def observed_devices(self) -> dict[str, ObservedDevice]:
+        """What the newest observation recorded per node. A read; `list_devices` itself
+        stays persistence-free [D10], [D23], so the lookup lives on its own path."""
+        with self.transaction() as uow:
+            self._actor(uow)
+            return SqlAlchemyDeviceRepository(uow.session).observed_devices()
+
+    def links_for_case(self, case_number: str, limit: int = 100) -> list[CaseDeviceLink]:
+        """Devices filed under one case. Backs the case dossier's device section."""
+        with self.transaction() as uow:
+            self._actor(uow)
+            return SqlAlchemyDeviceRepository(uow.session).links_for_case(case_number, limit)
+
+    def links_for_node(self, node: str) -> list[CaseDeviceLink]:
+        """Cases a device is filed under. Backs the device dossier's case list."""
+        with self.transaction() as uow:
+            self._actor(uow)
+            return SqlAlchemyDeviceRepository(uow.session).links_for_node(node)
 
     def inspect_device(self, node: str, *, allow_real_hardware: bool = False) -> DeviceInspection:
         device = self._resolve(node, allow_real_hardware)
@@ -105,7 +224,7 @@ class DeviceService(BaseService):
                 f"inspection reports {captured.device.size_bytes} bytes, the enumerated device reports {device.size_bytes}"
             )
         gate = self.probe.verify(captured.device)
-        refusal = _refusal_for(gate, acknowledge_unverified_source)
+        refusal = _refusal_for(gate, acknowledge_unverified_source, node)
         from trace_core.audit.builder import for_device_gate_checked, for_device_override
 
         if refusal is not None:
@@ -126,6 +245,7 @@ class DeviceService(BaseService):
                             original_unknown_cause=_cause_value(gate),
                             authorized_by=actor,
                             reason=override_reason.strip() or _OVERRIDE_REASON,
+                            serial=captured.fingerprint.serial.value,
                         ),
                         actor,
                     )
@@ -158,7 +278,7 @@ class DeviceService(BaseService):
 
     def _permit(self, device: DeviceInfo, node: str, allow_real_hardware: bool) -> DeviceInfo:
         if device.requires_real_hardware_opt_in and not allow_real_hardware:
-            raise AuthorizationError(f"{node} is real hardware; pass --allow-real-hardware to proceed")
+            raise AuthorizationError(f"{node} is real hardware; pass --physical to proceed")
         return device
 
     def _actor(self, uow: UnitOfWork) -> str:
@@ -202,18 +322,23 @@ class DeviceService(BaseService):
         return AuditService().record_hook(build, actor)
 
 
-def _refusal_for(gate: GateCheck, acknowledge_unverified_source: bool) -> WriteProtectionError | None:
+def _refusal_for(gate: GateCheck, acknowledge_unverified_source: bool, node: str = "") -> WriteProtectionError | None:
     """The error this gate must raise, or None when it may proceed.
 
     Returned rather than raised so the caller can ledger the refusal before propagating
     it: an unrecorded attempt to image a writable source is exactly the gap [D2] exists
     to close.
+
+    An UNKNOWN refusal names the command that proceeds past it. The operator otherwise has
+    to re-derive the whole invocation from `--help` to find out how to continue.
     """
     if gate.verdict is WpVerdict.WRITABLE:
-        return WriteProtectionError("source is writable", gate.verdict, gate.evidence)
+        return WriteProtectionError("source is writable; this is never overridable", gate.verdict, gate.evidence)
     if gate.verdict is WpVerdict.UNKNOWN and not acknowledge_unverified_source:
+        retry = f"trace device check {_node_name(node) or node} --physical --ack-unverified"
         return WriteProtectionError(
-            f"write protection could not be established ({gate.evidence.unknown_cause})",
+            f"write protection could not be established ({gate.evidence.unknown_cause}); "
+            f"to proceed anyway, run: {retry}",
             gate.verdict,
             gate.evidence,
         )
@@ -317,7 +442,7 @@ def os_adapter() -> DeviceAdapter | None:
     """The real-hardware adapter for this platform, or None when there is none.
 
     [D27] `TRACE_DEVICE_ADAPTER` selects the adapter but never bypasses the
-    `--allow-real-hardware` opt-in, so selection is not a privilege decision.
+    `--physical` opt-in, so selection is not a privilege decision.
     """
     from trace_core.devices.linux import LinuxDevice
     from trace_core.devices.win32 import Win32Device

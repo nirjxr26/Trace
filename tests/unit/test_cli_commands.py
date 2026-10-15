@@ -1,3 +1,5 @@
+import pathlib
+
 import pytest
 from typer.testing import CliRunner
 
@@ -88,6 +90,32 @@ def test_cli_case_crud_flow() -> None:
     assert "Case Not Found" in res_missing.stdout
 
 
+def test_show_case_lists_linked_and_historical_devices(device_file_env) -> None:  # type: ignore[no-untyped-def]
+    number = "2026-LINK-0001"
+    assert (
+        runner.invoke(
+            app, ["case", "create", "--number", number, "--title", "Link Parity", "--examiner", "Ex"]
+        ).exit_code
+        == 0
+    )
+    disk_a = str(device_file_env / "disk-a.dd")
+    disk_b = str(device_file_env / "disk-b.dd")
+    assert runner.invoke(app, ["device", "inspect", disk_a, "--output", "json"]).exit_code == 0
+    assert runner.invoke(app, ["device", "link", disk_a, "--case", number, "--label", "bag-1"]).exit_code == 0
+    assert runner.invoke(app, ["device", "link", disk_b, "--case", number]).exit_code == 0
+    assert runner.invoke(app, ["device", "unlink", disk_b, "--case", number]).exit_code == 0
+    res = runner.invoke(app, ["case", "show", number])
+    assert res.exit_code == 0
+    assert "LINKED DEVICE" in res.stdout
+    assert "bag-1" in res.stdout
+    assert "disk-a.dd" in res.stdout
+    assert "disk-b.dd" in res.stdout
+    res_json = runner.invoke(app, ["case", "show", number, "--output", "json"])
+    assert res_json.exit_code == 0
+    assert "LINKED DEVICE" not in res_json.stdout
+    assert runner.invoke(app, ["device", "unlink", disk_a, "--case", number]).exit_code == 0
+
+
 def test_capture_cli_errors_shell_mode() -> None:
     from trace_core.core.cli.error_handler import capture_cli_errors
     from trace_core.core.errors import NotFoundError
@@ -120,3 +148,19 @@ def test_help_syntax_fits_shared_grid() -> None:
     assert entries
     for syntax, _alias, _desc in entries:
         assert len(syntax) <= HELP_GRID_SYNTAX_WIDTH, f"help syntax overflows the grid: {syntax!r}"
+
+
+def test_help_does_not_load_the_repl() -> None:
+    """prompt_toolkit and the shell stack cost ~0.5 s; only the bare REPL needs them."""
+    import subprocess
+    import sys
+
+    code = "import sys, trace_core.cli.main; print('shell' if 'trace_core.cli.shell' in sys.modules else 'clean')"
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        cwd=pathlib.Path(__file__).parents[2],
+    )
+    assert proc.returncode == 0, proc.stderr[-500:]
+    assert proc.stdout.strip() == "clean", "importing the CLI pulled in the REPL stack"

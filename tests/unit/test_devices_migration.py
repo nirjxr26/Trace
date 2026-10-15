@@ -15,6 +15,8 @@ from trace_core.core.database.migrations import (
 
 pytestmark = pytest.mark.unit
 
+# This file is migration 018's tribunal. 019 has its own, in
+# test_devices_case_link_migration.py.
 VERIFIER = MIGRATION_VERIFIERS[18]
 HEAD = 18
 
@@ -31,10 +33,11 @@ def empty() -> Engine:
     return create_engine("sqlite:///:memory:")
 
 
-def test_the_registry_head_is_this_migration() -> None:
+def test_this_migration_is_registered() -> None:
+    """018 must stay in the registry; later migrations build on it."""
     from trace_core.core.database.migrations import MIGRATIONS
 
-    assert max(version for version, _, _ in MIGRATIONS) == HEAD
+    assert HEAD in {version for version, _, _ in MIGRATIONS}
 
 
 def test_the_migration_declares_its_schema_effect() -> None:
@@ -54,7 +57,7 @@ def test_a_fresh_database_ends_up_with_the_index(fresh: Engine) -> None:
 
 def test_a_fresh_database_records_the_migration(fresh: Engine) -> None:
     with fresh.begin() as conn:
-        row = conn.execute(text(f"SELECT name FROM schema_migrations WHERE version = {HEAD}")).scalar()
+        row = conn.execute(text("SELECT name FROM schema_migrations WHERE version = 18")).scalar()
     assert row == "018_create_device_fingerprints"
 
 
@@ -140,10 +143,14 @@ def test_the_table_permits_a_repeated_serial(fresh: Engine) -> None:
     assert count == 2
 
 
-def test_the_table_carries_no_case_reference(fresh: Engine) -> None:
-    """[D29] observation history outlives the case it was captured during."""
-    columns = {col["name"] for col in inspect(fresh).get_columns(DEVICE_FINGERPRINTS_TABLE)}
-    assert not any("case" in name for name in columns)
+def test_no_cascade_can_reach_observation_history(fresh: Engine) -> None:
+    """[D29] observation history outlives the case it was captured during.
+
+    The table has no foreign key, so closing or purging a case cannot cascade into it.
+    The device/case link lives in its own table and is covered by
+    test_devices_case_link_migration.py.
+    """
+    assert inspect(fresh).get_foreign_keys(DEVICE_FINGERPRINTS_TABLE) == []
 
 
 def test_migration_is_idempotent_on_reapplication(fresh: Engine) -> None:
@@ -164,7 +171,8 @@ def test_applying_to_a_database_that_predates_the_table_still_creates_it(empty: 
 def test_an_existing_head_17_database_gains_the_table_on_upgrade(fresh: Engine) -> None:
     """The real deployment path: 17 already applied, this migration is new."""
     with fresh.begin() as conn:
-        conn.execute(text(f"DELETE FROM schema_migrations WHERE version = {HEAD}"))
+        conn.execute(text(f"DELETE FROM schema_migrations WHERE version >= {HEAD}"))
+        conn.execute(text("DROP INDEX IF EXISTS ix_device_fingerprints_case_number"))
         conn.execute(text(f"DROP TABLE {DEVICE_FINGERPRINTS_TABLE}"))
     with fresh.connect() as conn:
         assert DEVICE_FINGERPRINTS_TABLE not in inspect(conn).get_table_names()

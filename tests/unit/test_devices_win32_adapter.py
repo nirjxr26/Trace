@@ -250,7 +250,7 @@ def test_the_opt_in_gate_is_actually_exercised(session_manager, device_box: Path
     adapter = _Adapter()
     service = DeviceService(session_manager, adapter, adapter, adapter)
 
-    with pytest.raises(AuthorizationError, match="allow-real-hardware"):
+    with pytest.raises(AuthorizationError, match="--physical"):
         service.inspect_device(real.node)
 
     assert service.inspect_device(real.node, allow_real_hardware=True).device.node == real.node

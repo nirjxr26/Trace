@@ -388,9 +388,10 @@ class CaseShellCommandHandler(BaseShellHandler):
             "Show Case", exit_on_error=False, default_remediation="Use `case list` to inspect available cases."
         ):
             from trace_core.audit.helpers import fetch_case_with_history
+            from trace_core.devices.helpers import do_case_device_rows
 
             case, events = fetch_case_with_history(service, ident)
-            render_case(case, output_format, events)
+            render_case(case, output_format, events, do_case_device_rows(service.session_manager, case.number))
 
     def _interactive_edit_case(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:
         ident = self._resolve_or_prompt_identifier(sub_args, ctx, "to edit")

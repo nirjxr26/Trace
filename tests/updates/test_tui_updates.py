@@ -1,3 +1,5 @@
+import inspect
+
 import pytest
 from rich.text import Text
 
@@ -67,7 +69,7 @@ async def test_updates_tab_check_and_hint(session_manager: DatabaseSessionManage
 async def test_updates_card_shows_version_block(
     session_manager: DatabaseSessionManager, signed_release, monkeypatch
 ) -> None:
-    from textual.widgets import Button, Static
+    from textual.widgets import Static
 
     from trace_core.core.settings import settings
     from trace_core.tui.app import TraceApp
@@ -79,13 +81,15 @@ async def test_updates_card_shows_version_block(
         await _goto_settings_updates(pilot, app)
         detail = _text(app.query_one("#settings-detail", Static))
         assert "Current version" in detail
-        await _press_until(pilot, app, "c", "Press u")
+        await _press_until(pilot, app, "c", "trace update install --yes")
         detail = _text(app.query_one("#settings-detail", Static))
-        assert "Press u or pick Update below to install." in detail
-        assert app.query_one("#update-apply", Button) is not None
+        assert "Update available with version: v1.5.0" in detail
+        assert "trace update install --yes" in detail
+        assert not app.query("#update-apply"), "the update affordance is the CLI command, not a button"
 
 
 async def test_updates_install_guarded_without_update(session_manager: DatabaseSessionManager) -> None:
+    """The TUI no longer installs; it must point at the standalone CLI command instead."""
     from trace_core.tui.app import TraceApp
     from trace_core.tui.screens.settings import SettingsView
 
@@ -96,47 +100,65 @@ async def test_updates_install_guarded_without_update(session_manager: DatabaseS
         view.run_command("updates-install")
         await pilot.pause()
 
+        assert not view.query("UpdateProgressModal")
+        assert not hasattr(view, "_progress"), "the TUI must not open an update popup"
+        assert not hasattr(view, "action_install"), "the TUI must not install updates"
 
-async def test_install_panel_animates_only_past_the_delay(session_manager: DatabaseSessionManager) -> None:
-    """A long step must animate; a step under the delay must hold still.
 
-    The panel used to redraw only when the worker reported progress, so a stage that emits
-    nothing — verifying, installing, the health check — sat on one glyph for its whole run.
+async def test_check_spinner_animates_then_clears(session_manager: DatabaseSessionManager) -> None:
+    """The check spinner must animate on its own timer and stop once the check ends.
+
+    It used to be a static step_line glyph painted into the detail pane, so it never moved.
     """
-    from time import monotonic
-
-    from textual.widgets import Static
-
     from trace_core.tui.screens.settings import SettingsView
-    from trace_core.updates.stages import SPIN_DELAY_SECONDS, SPIN_FRAMES, Stage, StageStatus
+    from trace_core.tui.widgets import ThothSpinner
 
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         await _goto_settings_updates(pilot, app)
         view = app.query_one(SettingsView)
-        view._prev, view._current = "0.2.11", "0.2.12"
-        view._installing = True
-        view._install_state = {s: StageStatus.PENDING for s in Stage}
-        view._on_update_stage(Stage.DOWNLOAD, StageStatus.ACTIVE)
-        view._dl_total = 0
+        spin = app.query_one("#update-check-spin", ThothSpinner)
+
+        view._checking = True
+        view._render_detail()
+        await pilot.pause(0.15)
+        assert spin.display, "the spinner must show while a check runs"
+        assert "Checking for updates" in _text(spin)
+
+        seen = set()
+        for _ in range(12):
+            await pilot.pause(0.09)
+            seen.add(_text(spin)[0])
+        assert len(seen) > 1, "the spinner glyph must advance on its own timer"
+
+        view._checking = False
+        view._render_detail()
         await pilot.pause()
+        assert not spin.display, "the spinner must disappear once the check ends"
 
-        detail = app.query_one("#settings-detail", Static)
-        inside = _text(detail)
-        assert f"{SPIN_FRAMES[0]} Downloading" in inside
-        assert view._spin == 0
 
-        view._active_since = monotonic() - SPIN_DELAY_SECONDS - 0.01
-        for _ in range(5):
-            view._tick_spin()
-            await pilot.pause()
-        moved = _text(detail)
-        assert view._spin >= 1
-        assert f"{SPIN_FRAMES[0]} Downloading" not in moved
-        assert any(f"{frame} Downloading" in moved for frame in SPIN_FRAMES)
+async def test_tui_offers_no_install_gesture(session_manager: DatabaseSessionManager) -> None:
+    """Installing happens only in the standalone CLI, so no TUI affordance may remain."""
+    from textual.binding import Binding
 
-        view._stop_spin()
-        view._installing = False
+    from trace_core.tui.app import TraceApp
+    from trace_core.tui.screens import settings as settings_src
+    from trace_core.tui.screens.settings import SettingsView
+    from trace_core.tui.widgets import ThothSpinner
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await _goto_settings_updates(pilot, app)
+        view = app.query_one(SettingsView)
+        keys = [b.key if isinstance(b, Binding) else b[0] for b in SettingsView.BINDINGS]
+        assert "u" not in keys, "the install key must be gone from the updates tab"
+        assert not hasattr(view, "action_install")
+        assert not hasattr(view, "_install_worker")
+        assert not app.query("UpdateProgressModal")
+
+    source = inspect.getsource(settings_src)
+    assert "TRACE_TUI_DEMO_UPDATE" not in source
+    assert ThothSpinner.__module__.endswith("widgets")
 
 
 async def test_updates_tab_no_manifest_configured(session_manager: DatabaseSessionManager, monkeypatch) -> None:
@@ -148,3 +170,98 @@ async def test_updates_tab_no_manifest_configured(session_manager: DatabaseSessi
     async with app.run_test() as pilot:
         await _goto_settings_updates(pilot, app)
         await _press_until(pilot, app, "c", "TRACE_UPDATE_MANIFEST")
+
+
+async def test_integrity_verify_runs_once_per_ledger_head(session_manager, monkeypatch) -> None:
+    """Highlighting Integrity must not re-scan the ledger while its head stands still."""
+    from textual.widgets import ListView, Static
+
+    from trace_core.audit.service import AuditService
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="T", description="d", lead_examiner="Dana"))
+
+    real_verify = AuditService.verify
+    calls = 0
+
+    def counting(self):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        return real_verify(self)
+
+    monkeypatch.setattr(AuditService, "verify", counting)
+
+    async def _show_integrity(pilot, app) -> None:  # type: ignore[no-untyped-def]
+        for _ in range(10):
+            if "Chain Status" in _text(app.query_one("#settings-detail", Static)):
+                return
+            await pilot.press("down")
+            await pilot.pause()
+        assert "Chain Status" in _text(app.query_one("#settings-detail", Static))
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await _goto_settings_updates(pilot, app)
+        assert calls == 0
+        await _show_integrity(pilot, app)
+        assert calls == 1
+        app.query_one("#settings-sections", ListView).focus()
+        await pilot.press("up")
+        await pilot.pause()
+        await _show_integrity(pilot, app)
+        assert calls == 1, f"re-verified an unchanged ledger: {calls} scans"
+        CaseService(session_manager).create_case(CaseCreateDto(title="U", description="d", lead_examiner="Dana"))
+        app.query_one("#settings-sections", ListView).focus()
+        await pilot.press("up")
+        await pilot.pause()
+        await _show_integrity(pilot, app)
+        assert calls == 2, f"stale result shown after the ledger moved: {calls} scans"
+
+
+async def test_db_snapshot_fetch_runs_once_per_visit(session_manager, monkeypatch) -> None:
+    """Database and Diagnostics paint the same snapshot; wiggling sections must not
+    re-snapshot, but returning to the tab must."""
+    from textual.widgets import ListView, Static
+
+    from trace_core.core.database import health as health_mod
+
+    real_snapshot = health_mod.fetch_db_snapshot
+    calls = 0
+
+    def counting(manager=None):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        return real_snapshot(manager)
+
+    monkeypatch.setattr(health_mod, "fetch_db_snapshot", counting)
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await _goto_settings_updates(pilot, app)
+        app.query_one("#settings-sections", ListView).focus()
+        for _ in range(8):
+            await pilot.press("down")
+            await pilot.pause()
+        base = calls
+        assert base >= 1
+        for _ in range(8):
+            await pilot.press("up")
+            await pilot.pause()
+        assert calls == base, f"re-snapshotted on section wiggle: {calls} vs {base}"
+        assert "Online" in _text(app.query_one("#settings-detail", Static))
+        from trace_core.tui.screens.settings import SettingsView
+
+        for _ in range(10):
+            if app.query_one(SettingsView)._selected_section() == "Database":
+                break
+            await pilot.press("up")
+            await pilot.pause()
+        assert app.query_one(SettingsView)._selected_section() == "Database"
+        app.query_one(SettingsView).refresh_data()
+        await pilot.pause()
+        assert calls == base + 1, f"refresh did not renew the snapshot: {calls} vs {base}"
+        app.query_one(SettingsView)._render_detail()
+        await pilot.pause()
+        assert calls == base + 1, f"repaint re-snapshotted: {calls} vs {base}"
+        assert "Migration complete" in _text(app.query_one("#settings-detail", Static))

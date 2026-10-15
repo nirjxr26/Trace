@@ -6,6 +6,8 @@
 /docs
 process/
 CODE-AUDIT.md
+DEVICE-UX-FINDINGS.md
+FORENSIC-GAP-ASSESSMENT.md
 
 # --- Runtime Trust Store ---
 # Derived from storage_root's parent; lands here when TRACE_STORAGE_ROOT is a
@@ -66,6 +68,9 @@ auth.json
 /.trace/
 /.test_storage/
 /test_storage/
+# Seeded demo database/storage from scripts/seed_demo.py. Holds fabricated case
+# numbers that must never be committable or mistaken for real evidence.
+/.demo/
 
 # --- Local Databases & Transitory State ---
 *.db

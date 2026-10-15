@@ -55,8 +55,8 @@ def _subject_case(number: str, sid: UUID | None) -> Subject:
     return Subject(type=SUBJECT_TYPE_CASE, number=number, id=sid)
 
 
-def _subject_device() -> Subject:
-    return Subject(type=SUBJECT_TYPE_DEVICE, number=None, id=None)
+def _subject_device(serial: str | None = None) -> Subject:
+    return Subject(type=SUBJECT_TYPE_DEVICE, number=None, id=None, device_serial=serial)
 
 
 def _case_event(
@@ -140,9 +140,9 @@ def for_case_purged(
 
 
 def _device_event(
-    action: AuditAction, details: dict[str, Any], command: str
+    action: AuditAction, details: dict[str, Any], command: str, serial: str | None = None
 ) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
-    return (action, _subject_device(), details, _ctx(command))
+    return (action, _subject_device(serial), details, _ctx(command))
 
 
 def for_device_inspected(
@@ -169,7 +169,7 @@ def for_device_inspected(
         details["verdict"] = verdict
     if unknown_cause is not None:
         details["unknown_cause"] = unknown_cause
-    return _device_event(AuditAction.DEVICE_INSPECTED, details, command or f"device inspect {node}")
+    return _device_event(AuditAction.DEVICE_INSPECTED, details, command or f"device inspect {node}", serial=serial)
 
 
 def for_device_gate_checked(
@@ -184,6 +184,7 @@ def for_device_gate_checked(
         AuditAction.DEVICE_GATE_CHECKED,
         {"node": node, "verdict": verdict, "unknown_cause": unknown_cause, "evidence": evidence, "serial": serial},
         command or f"device check {node}",
+        serial=serial,
     )
 
 
@@ -193,6 +194,7 @@ def for_device_override(
     original_unknown_cause: str,
     authorized_by: str,
     reason: str,
+    serial: str | None = None,
     command: str | None = None,
 ) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
     """Accepting an unverified source. The pre-override verdict is preserved, never the post one [D19]."""
@@ -206,6 +208,20 @@ def for_device_override(
             "reason": reason,
         },
         command or f"device check {node} --acknowledge-unverified-source",
+        serial=serial,
+    )
+
+
+def for_device_recognized(
+    kind: str,
+    devices: list[dict[str, Any]],
+    command: str | None = None,
+) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
+    return (
+        AuditAction.DEVICE_RECOGNIZED,
+        _subject_system(),
+        {"kind": kind, "count": len(devices), "devices": devices},
+        _ctx(command or "device list"),
     )
 
 
@@ -246,3 +262,46 @@ def merge_details_context(details: dict[str, Any], ctx: Context) -> dict[str, An
     out["os_user"] = ctx.os_user
     out["session_id"] = ctx.session_id
     return out
+
+
+def for_device_linked(
+    case_number: str,
+    sid: UUID | None,
+    node: str,
+    serial: str | None = None,
+    label: str | None = None,
+    command: str | None = None,
+) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
+    """A device is filed under a case. The subject is the CASE, not the device.
+
+    Filing is a bookkeeping act that happens before any inspection, so it cannot be
+    recorded as an attribute of one. The node lands in details, where it is signed with
+    the row but never mistaken for a case number.
+    """
+    details: dict[str, Any] = {"node": node}
+    if serial is not None:
+        details["serial"] = serial
+    if label is not None:
+        details["label"] = label
+    return _case_event(
+        AuditAction.DEVICE_LINKED,
+        case_number,
+        sid,
+        details,
+        command or f"device link {node} --case {case_number}",
+    )
+
+
+def for_device_unlinked(
+    case_number: str,
+    sid: UUID | None,
+    node: str,
+    command: str | None = None,
+) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
+    return _case_event(
+        AuditAction.DEVICE_UNLINKED,
+        case_number,
+        sid,
+        {"node": node},
+        command or f"device unlink {node} --case {case_number}",
+    )

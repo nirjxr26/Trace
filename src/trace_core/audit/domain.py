@@ -28,6 +28,9 @@ class AuditAction(StrEnum):
     DEVICE_INSPECTED = "DEVICE_INSPECTED"
     DEVICE_GATE_CHECKED = "DEVICE_GATE_CHECKED"
     DEVICE_OVERRIDE = "DEVICE_OVERRIDE"
+    DEVICE_LINKED = "DEVICE_LINKED"
+    DEVICE_UNLINKED = "DEVICE_UNLINKED"
+    DEVICE_RECOGNIZED = "DEVICE_RECOGNIZED"
     UPDATE_POLICY_OVERRIDE = "UPDATE_POLICY_OVERRIDE"
 
 
@@ -41,6 +44,9 @@ ACTION_TITLES: Final[dict[str, str]] = {
     "DEVICE_INSPECTED": "Device inspected",
     "DEVICE_GATE_CHECKED": "Device write-protection checked",
     "DEVICE_OVERRIDE": "Device check overridden",
+    "DEVICE_LINKED": "Device filed under case",
+    "DEVICE_UNLINKED": "Device removed from case",
+    "DEVICE_RECOGNIZED": "Device recognized",
     "UPDATE_POLICY_OVERRIDE": "Update policy overridden",
 }
 
@@ -73,13 +79,14 @@ def build_payload(
     actor: str,
     details: dict[str, Any] | None = None,
     ts: datetime | None = None,
+    subject_device_serial: str | None = None,
 ) -> dict[str, Any]:
     """Build canonical payload dict for hashing."""
     ts_val = ts if ts is not None else now_utc()
     if is_naive(ts_val):
         raise InvariantViolationError("Audit ts must be timezone-aware UTC.")
     ts_utc = canonical_ts(ts_val)
-    return {
+    payload = {
         "action": action.value,
         "actor": actor,
         "subject_case_number": subject_case_number,
@@ -89,3 +96,6 @@ def build_payload(
         "hash_algo": HASH_ALGO,
         "details": details or {},
     }
+    if subject_device_serial is not None:
+        payload["subject_device_serial"] = subject_device_serial
+    return payload

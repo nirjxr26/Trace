@@ -11,29 +11,31 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.events import Resize
 from textual.timer import Timer
 from textual.widgets import DataTable, Input, Rule, Static
 
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.ui.renderers import format_india_datetime, sanitize_terminal
-from trace_core.core.ui.theme import THEME_TOKENS
-from trace_core.devices.dto import DeviceInfoDto, InspectionDto, WpCheckDto
-from trace_core.devices.renderers import format_bytes, verdict_style
-from trace_core.tui.widgets import DossierScroll, TablePane
+from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
+from trace_core.devices.dto import DeviceInfoDto, InspectionDto, ObservationDto, WpCheckDto
+from trace_core.devices.renderers import display_node, format_bytes, readable_model, verdict_style
+from trace_core.tui.actions import confirm_overwrite, run_guarded
+from trace_core.tui.widgets import DossierScroll, TablePane, active_tab
 
 TABLE_ID = "device-table"
 DEVICE_HEADER_ID = "device-header"
 DEVICE_DETAIL_ID = "device-detail"
 DEVICE_SUMMARY_ID = "device-summary"
-TABLE_COLUMNS = (("Device", 24), ("Size", 11))
+TABLE_COLUMNS = (("Device", 15), ("Size", 9))
+MAX_PICKER_ROWS = 200
 POLL_SECONDS = 1.0
 
 
 def _display_name(device: DeviceInfoDto) -> str:
-    """Human name first, node basename when the adapter knows nothing friendlier."""
     if device.model_hint:
-        return device.model_hint
-    return device.node.replace("\\", "/").rsplit("/", 1)[-1] or device.node
+        return readable_model(device.model_hint)
+    return display_node(device.node)
 
 
 class DevicesView(TablePane[DeviceInfoDto]):
@@ -43,6 +45,8 @@ class DevicesView(TablePane[DeviceInfoDto]):
         Binding("i", "inspect", "Inspect"),
         Binding("c", "check", "Check"),
         Binding("k", "kind", "Kind"),
+        Binding("l", "link", "Link case"),
+        Binding("u", "unlink", "Unlink case"),
     ]
 
     TABLE_ID = TABLE_ID
@@ -59,6 +63,10 @@ class DevicesView(TablePane[DeviceInfoDto]):
         self._gate_node: str | None = None
         self._inspected: InspectionDto | None = None
         self._refresh_timer: Timer | None = None
+        self._cases_cache: dict[str, list[str]] = {}
+        self._serials: dict[str, str] = {}
+        self._history: list[ObservationDto] = []
+        self._detail_width: int | None = None
 
     def on_mount(self) -> None:
         super().on_mount()
@@ -75,7 +83,6 @@ class DevicesView(TablePane[DeviceInfoDto]):
             with Vertical(id="device-left"):
                 yield Input(placeholder="Search node or model...", id="device-search")
                 yield Static("", id=DEVICE_SUMMARY_ID, classes="muted")
-                yield Rule()
                 yield Static("", id=DEVICE_HEADER_ID, classes="table-head")
                 yield Rule()
                 yield DataTable(id=TABLE_ID, cursor_type="row", show_header=False)
@@ -90,6 +97,8 @@ class DevicesView(TablePane[DeviceInfoDto]):
         self._render_list(devices)
 
     def _poll_devices(self) -> None:
+        if active_tab(self) != "devices":
+            return
         token = self._token()
         if token is not None and token == self._last_token:
             return
@@ -115,21 +124,37 @@ class DevicesView(TablePane[DeviceInfoDto]):
             if not quiet:
                 self.app.notify(str(exc), severity="error")
             return None
+        self._serials = {d.node: d.serial for d in devices if d.serial}
         query = self.query_one("#device-search", Input).value.strip() or None
         if query:
-            devices = [d for d in devices if query in d.node.lower() or query in (d.model_hint or "").lower()]
+            devices = [
+                d
+                for d in devices
+                if query in d.node.lower() or query in (d.model_hint or "").lower() or query in (d.serial or "").lower()
+            ]
         return devices
 
     def _render_list(self, devices: list[DeviceInfoDto]) -> None:
         summary = self.query_one(f"#{DEVICE_SUMMARY_ID}", Static)
-        summary.update(f"{len(devices)} device(s) · kind: {self._kind}")
+        summary.update(f"kind: {self._kind}")
         self.fill_table(devices, [d.node for d in devices])
 
     def row_cells(self, device: DeviceInfoDto, selected: bool) -> list:  # type: ignore[no-untyped-def]
+        from trace_core.core.ui.renderers import fit_text
         from trace_core.tui.theme import SELECT_PREFIX
 
         prefix = SELECT_PREFIX if selected else "  "
-        return [f"{prefix}{sanitize_terminal(_display_name(device))}", format_bytes(device.size_bytes)]
+        width = TABLE_COLUMNS[0][1] - len(prefix)
+        name = fit_text(sanitize_terminal(_display_name(device)), width)
+        return [f"{prefix}{name}", format_bytes(device.size_bytes)]
+
+    def on_resize(self, event: Resize) -> None:
+        """Dividers are baked for one width; rebuild them when the width moves."""
+        width = self.query_one("#device-right", DossierScroll).content_region.width
+        if width == self._detail_width:
+            return
+        self._detail_width = width
+        self.render_detail()
 
     def render_detail(self) -> None:
         from trace_core.tui.theme import detail_placeholder
@@ -142,26 +167,67 @@ class DevicesView(TablePane[DeviceInfoDto]):
             return
         pane = self.query_one("#device-right", DossierScroll)
         body = Text()
-        body.append(f"{sanitize_terminal(device.node)}\n", style=THEME_TOKENS["accent"])
+        body.append(f"{sanitize_terminal(_display_name(device))}\n", style=THEME_TOKENS["accent"])
         body.append(pane.divider())
         body.append("\n")
+        body.append("Node       ", style="dim")
+        body.append(f"{sanitize_terminal(device.node)}\n")
         body.append("Kind       ", style="dim")
         body.append(f"{device.kind.value}\n")
         body.append("Size       ", style="dim")
         body.append(f"{sanitize_terminal(format_bytes(device.size_bytes))}\n")
         body.append("Model      ", style="dim")
         body.append(f"{sanitize_terminal(device.model_hint or '-')}\n")
-        body.append("Real HW    ", style="dim")
-        body.append("yes - requires --allow-real-hardware\n" if device.requires_real_hardware_opt_in else "no\n")
+        body.append("Hardware   ", style="dim")
+        body.append(
+            "real device - access needs confirming\n"
+            if device.requires_real_hardware_opt_in
+            else "emulated or image-backed\n"
+        )
         if self._inspected is not None and self._inspected.device.node == device.node:
             body.append(pane.divider())
-            body.append("\nFINGERPRINT\n")
+            body.append("\nFINGERPRINT\n", style=THEME_TOKENS["accent"])
             self._append_fingerprint(body)
+        cases = self._cases_for(device.node)
+        if cases:
+            body.append(pane.divider())
+            body.append("\nCASES\n", style=THEME_TOKENS["accent"])
+            for number in cases:
+                body.append(f"  {sanitize_terminal(number)}\n", style=THEME_HEX["value"])
+        if self._history:
+            body.append(pane.divider())
+            body.append(f"\nHISTORY · {len(self._history)}\n", style=THEME_TOKENS["accent"])
+            for row in self._history:
+                verdict = row.verdict.value if row.verdict else "-"
+                body.append(
+                    f"  {format_india_datetime(row.inspected_at)}  {sanitize_terminal(verdict)}"
+                    f"  {sanitize_terminal(row.inspected_by)}\n"
+                )
         if self._gate is not None and self._gate_node == device.node:
             body.append(pane.divider())
-            body.append("\nWRITE PROTECTION\n")
+            body.append("\nWRITE PROTECTION\n", style=THEME_TOKENS["accent"])
             self._append_gate(body)
         self.query_one(f"#{DEVICE_DETAIL_ID}", Static).update(body)
+
+    def _refresh_node(self, node: str) -> None:
+        """Drop one node's cached cases and repaint. Every mutation that can change which
+        cases a device is filed under ends here."""
+        self._cases_cache.pop(node, None)
+        self.render_detail()
+
+    def _cases_for(self, node: str) -> list[str]:
+        """Cases this device is filed under. Cached per node so a dossier repaint never
+        hits the database."""
+        if node in self._cases_cache:
+            return self._cases_cache[node]
+        from trace_core.devices.helpers import do_node_links
+
+        try:
+            cases = [link.case_number for link in do_node_links(self._manager, node)]
+        except Exception:
+            cases = []
+        self._cases_cache[node] = cases
+        return cases
 
     def _append_fingerprint(self, body: Text) -> None:
         inspection = self._inspected
@@ -191,7 +257,7 @@ class DevicesView(TablePane[DeviceInfoDto]):
         if gate.unknown_cause:
             body.append("Cause      ", style="dim")
             body.append(f"{sanitize_terminal(gate.unknown_cause)}\n")
-        body.append("When       ", style="dim")
+        body.append("Timestamp  ", style="dim")
         body.append(f"{format_india_datetime(gate.checked_at)}\n")
         body.append("Platform   ", style="dim")
         body.append(f"{sanitize_terminal(gate.platform)} / {sanitize_terminal(gate.adapter_version)}\n")
@@ -241,7 +307,7 @@ class DevicesView(TablePane[DeviceInfoDto]):
         def _run() -> str:
             inspection = do_inspect(self._manager, node, allow_real_hardware=allow_real_hardware)
             self._inspected = inspection
-            self.render_detail()
+            self._refresh_node(node)
             return f"Recorded fingerprint for {sanitize_terminal(node)}."
 
         run_guarded(self, _run)
@@ -254,7 +320,7 @@ class DevicesView(TablePane[DeviceInfoDto]):
             check = do_check(self._manager, node, allow_real_hardware=allow_real_hardware)
             self._gate = check
             self._gate_node = node
-            self.render_detail()
+            self._refresh_node(node)
             return f"Write protection: {check.verdict.value}."
 
         run_guarded(self, _run)
@@ -264,14 +330,160 @@ class DevicesView(TablePane[DeviceInfoDto]):
         self._kind = cycle.get(self._kind, "all")
         self.refresh_data()
 
+    def _open_cases(self, term: str) -> list[tuple[str, str]]:
+        """Rows for the picker. Search is the service's, not the modal's, so it matches
+        lead_examiner and notes too and is not capped at one page."""
+        from trace_core.cases.dto import CaseFilterDto
+        from trace_core.cases.service import CaseService
+
+        listed = CaseService(self._manager).list_cases(
+            CaseFilterDto(search=term or None, include_deleted=False, limit=MAX_PICKER_ROWS)
+        )
+        return [(c.number, c.title or "") for c in listed]
+
+    def action_link(self) -> None:
+        node = self._selected_node()
+        if node is None:
+            self.app.notify("Select a device first.", severity="warning")
+            return
+        from trace_core.tui.forms import CasePicker
+
+        try:
+            if not self._open_cases(""):
+                self.app.notify("No open case to file this device under.", severity="warning")
+                return
+        except Exception as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        self.app.push_screen(
+            CasePicker(self._open_cases, title="File under case"),
+            lambda number: self._linked(node, number),
+        )
+
+    def _linked(self, node: str, case_number: str | None) -> None:
+        if not case_number:
+            return
+        from trace_core.devices.helpers import do_link
+
+        def _run() -> str:
+            from trace_core.tui.screens.cases import CasesView
+
+            link = do_link(self._manager, node, case_number)
+            self._refresh_node(node)
+            for cases_view in self.app.query(CasesView):
+                cases_view.drop_dossier(case_number)
+            return f"Filed {sanitize_terminal(link.node)} under {link.case_number}."
+
+        run_guarded(self, _run)
+
+    def action_unlink(self) -> None:
+        node = self._selected_node()
+        if node is None:
+            self.app.notify("Select a device first.", severity="warning")
+            return
+        cases = self._cases_for(node)
+        if not cases:
+            self.app.notify(f"{sanitize_terminal(node)} is not filed under any case.", severity="warning")
+            return
+        from trace_core.tui.forms import YesNoModal
+
+        self.app.push_screen(
+            YesNoModal(f"Remove {sanitize_terminal(node)} from {cases[0]}?"),
+            lambda answer: self._unlinked(node, cases[0], answer),
+        )
+
+    def _unlinked(self, node: str, case_number: str, answer: bool | None) -> None:
+        if not answer:
+            return
+        from trace_core.devices.helpers import do_unlink
+
+        def _run() -> str:
+            from trace_core.tui.screens.cases import CasesView
+
+            do_unlink(self._manager, node, case_number)
+            self._refresh_node(node)
+            for cases_view in self.app.query(CasesView):
+                cases_view.drop_dossier(case_number)
+            return f"Removed {sanitize_terminal(node)} from {case_number}."
+
+        run_guarded(self, _run)
+
     def run_command(self, command: str) -> None:
         action = command.removeprefix("device-")
         if action == "inspect":
             self.action_inspect()
         elif action == "check":
             self.action_check()
+        elif action == "history":
+            self._show_history()
+        elif action == "link":
+            self.action_link()
+        elif action == "unlink":
+            self.action_unlink()
+        elif action == "export":
+            self.action_export()
         else:
             self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")
+
+    def _show_history(self) -> None:
+        """Every prior observation of the selected device, newest first."""
+        node = self._selected_node()
+        if node is None:
+            self.app.notify("Select a device first.", severity="warning")
+            return
+        serial = self._history_key(node)
+        if not serial:
+            return
+
+        from trace_core.devices.helpers import do_history
+
+        def _history() -> str:
+            rows = do_history(self._manager, serial, 50)
+            self._history = rows
+            self.render_detail()
+            return f"{len(rows)} observation(s) for {sanitize_terminal(node)}."
+
+        run_guarded(self, _history)
+
+    def _history_key(self, node: str) -> str:
+        """History is keyed by serial, which the listing now carries.
+
+        The current session's inspection is authoritative; otherwise the serial the
+        device list already shows is used, so history is reachable without inspecting.
+        A device never seen before has no history yet.
+        """
+        inspection = self._inspected
+        if inspection is not None and inspection.device.node == node:
+            return inspection.fingerprint.serial
+        serial = self._serials.get(node)
+        if serial:
+            return serial
+        self.app.notify(
+            f"No recorded observation for {sanitize_terminal(node)} yet. Press i to inspect it.",
+            severity="warning",
+        )
+        return ""
+
+    def action_export(self) -> None:
+        from trace_core.tui.forms import TextInputModal
+
+        self.app.push_screen(TextInputModal("Export device observations to", "devices.jsonl"), self._exported)
+
+    def _exported(self, path: str | None) -> None:
+        if not path:
+            return
+        confirm_overwrite(self, path, lambda: self._do_export(path))
+
+    def _do_export(self, path: str) -> None:
+        from trace_core.core.database.session import db_manager
+        from trace_core.devices.exporter import export_observations
+
+        def _export() -> str:
+            with db_manager.session() as session:
+                out = export_observations(session, path)
+            return f"Exported device observations to {out}."
+
+        run_guarded(self, _export)
 
     def focus_default(self) -> None:
         self._table().focus()

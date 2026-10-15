@@ -13,7 +13,7 @@ Ed25519 signature.
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -22,6 +22,20 @@ from trace_core.core.errors import ApplicationError
 
 MAX_DEVICE_STRING = 512
 MAX_NODE_LENGTH = 4096
+MAX_CASE_NUMBER = 64
+
+
+class ObservedDevice(NamedTuple):
+    """What the newest observation recorded about one node.
+
+    Read as a narrow projection rather than a full `DeviceFingerprint`: the observation
+    table is append-only and unbounded, and only these three columns are ever needed to
+    describe a device in a list or a dossier.
+    """
+
+    serial: str
+    model: str | None
+    capacity_bytes: int | None
 
 
 class DeviceInterface(StrEnum):
@@ -231,6 +245,40 @@ class StoredObservation(_DeviceModel):
     @field_validator("inspected_at")
     @classmethod
     def validate_inspected_at(cls, v: datetime) -> datetime:
+        return _utc(v)
+
+
+class CaseDeviceLink(_DeviceModel):
+    """One device filed under one case. Bookkeeping, not evidence.
+
+    Separate from `StoredObservation` because the two are different acts: tagging a bagged
+    disk needs no device access, while reading its identity does. Fusing them forced
+    attachment behind real-hardware consent and inverted the examiner's workflow.
+    """
+
+    case_number: str
+    node: str
+    serial: str | None = None
+    label: str | None = None
+    linked_at: datetime
+    linked_by: str
+
+    @field_validator("case_number")
+    @classmethod
+    def validate_case_number(cls, v: str) -> str:
+        cleaned = _bounded(v.strip(), MAX_CASE_NUMBER)
+        if not cleaned:
+            raise ValueError("case number must not be empty")
+        return cleaned
+
+    @field_validator("node")
+    @classmethod
+    def validate_link_node(cls, v: str) -> str:
+        return _bounded(v, MAX_NODE_LENGTH)
+
+    @field_validator("linked_at")
+    @classmethod
+    def validate_linked_at(cls, v: datetime) -> datetime:
         return _utc(v)
 
 

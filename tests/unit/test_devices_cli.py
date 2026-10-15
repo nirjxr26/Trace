@@ -1,5 +1,6 @@
 """CLI tribunal: the device sub-app is registered, reachable, and exits semantically."""
 
+import inspect
 import json
 from datetime import UTC
 from pathlib import Path
@@ -60,6 +61,47 @@ def test_list_rejects_an_unknown_kind(device_file_env: Path) -> None:
     result = runner.invoke(app, ["device", "list", "--kind", "floppy"])
     assert result.exit_code != EXIT_SUCCESS
     assert "unknown device kind" in result.stdout
+
+
+def test_list_records_a_recognition_row(device_file_env: Path) -> None:
+    from sqlalchemy import select
+
+    from trace_core.audit.domain import AuditAction
+    from trace_core.audit.models import AuditEventModel
+    from trace_core.core import service as core_service
+
+    def _recognized() -> int:
+        with core_service.db_manager.session() as session:
+            return len(
+                session.scalars(
+                    select(AuditEventModel).where(AuditEventModel.action == AuditAction.DEVICE_RECOGNIZED.value)
+                ).all()
+            )
+
+    before = _recognized()
+    result = runner.invoke(app, ["device", "list"])
+    assert result.exit_code == EXIT_SUCCESS
+    assert _recognized() == before + 1
+
+
+def test_inspect_names_the_cases_holding_the_device(device_file_env: Path) -> None:
+    number = "2026-INSPECT-0001"
+    assert (
+        runner.invoke(
+            app, ["case", "create", "--number", number, "--title", "Inspect Parity", "--examiner", "Ex"]
+        ).exit_code
+        == 0
+    )
+    disk_a = str(device_file_env / "disk-a.dd")
+    plain = runner.invoke(app, ["device", "inspect", disk_a])
+    assert plain.exit_code == EXIT_SUCCESS
+    assert "CASES" not in plain.stdout
+    assert runner.invoke(app, ["device", "link", disk_a, "--case", number]).exit_code == 0
+    linked = runner.invoke(app, ["device", "inspect", disk_a])
+    assert linked.exit_code == EXIT_SUCCESS
+    assert "CASES" in linked.stdout
+    assert number in linked.stdout
+    assert runner.invoke(app, ["device", "unlink", disk_a, "--case", number]).exit_code == 0
 
 
 def test_inspect_captures_and_reports(device_file_env: Path) -> None:
@@ -237,6 +279,39 @@ def test_the_documented_tui_behaviour_is_what_the_tui_offers() -> None:
     assert not unbound, f"hint advertises unbound keys: {unbound}"
 
 
+def test_both_cards_of_a_tab_share_one_padding() -> None:
+    """Mismatched padding made the right dossier sit inset from the left table."""
+    from trace_core.tui.app import TraceApp
+
+    css = TraceApp.CSS
+    blocks = css.split("}")
+    both_cards = next(b for b in blocks if "#cases-left" in b and "#cases-right" in b)
+    assert both_cards.count("padding:") == 1, "the two cards must take their padding from one rule"
+
+    overrides = {"#cases-right", "#audit-right", "#settings-right", "#device-right"}
+    for block in blocks:
+        if block is both_cards or "padding:" not in block:
+            continue
+        hit = next((p for p in overrides if p in block), None)
+        assert hit is None, f"{hit} overrides the padding the two cards now share: {block.strip()[:60]}"
+
+
+def test_the_cases_search_box_has_no_divider_under_it() -> None:
+    """A rule between the search box and the header read as a second, unrelated box edge."""
+    from trace_core.tui.screens.cases import CasesView
+
+    source = inspect.getsource(CasesView.compose)
+    after_search = source.split('id="case-search"')[1]
+    head = after_search.split('classes="table-head"')[0]
+    assert "Rule()" not in head, "no divider may sit between the search box and the table header"
+
+
+def test_the_cases_hint_does_not_advertise_enter_open() -> None:
+    from trace_core.tui.app import TAB_HINTS
+
+    assert "Enter Open" not in TAB_HINTS["cases"], "the cases hint must not advertise Enter Open"
+
+
 def test_the_key_reference_documents_every_tab_and_device_keys() -> None:
     from textual.binding import Binding
 
@@ -258,7 +333,13 @@ def test_help_documents_only_flags_the_handler_accepts() -> None:
     from trace_core.devices import shell_handler as handler_module
     from trace_core.devices.shell_handler import DeviceShellCommandHandler
 
-    accepted = set(handler_module._LIST_FLAGS) | set(handler_module._CHECK_FLAGS) | set(handler_module._SHOW_FLAGS)
+    accepted = (
+        set(handler_module._LIST_FLAGS)
+        | set(handler_module._CHECK_FLAGS)
+        | set(handler_module._SHOW_FLAGS)
+        | set(handler_module._HISTORY_FLAGS)
+        | set(handler_module._EXPORT_FLAGS)
+    )
     for usage, _alias, _desc in DeviceShellCommandHandler().get_help_entries():
         for token in usage.split()[1:]:
             if token.startswith("-"):
@@ -290,6 +371,27 @@ def test_the_shell_handler_dispatches_list(device_file_env: Path) -> None:
     assert DeviceShellCommandHandler().execute("list", ["--output", "json"], None) is True
 
 
+def test_the_shell_inspect_names_the_cases_holding_the_device(
+    device_file_env: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from trace_core.devices.shell_handler import DeviceShellCommandHandler
+
+    number = "2026-SHL-0001"
+    assert (
+        runner.invoke(
+            app, ["case", "create", "--number", number, "--title", "Shell Inspect", "--examiner", "Ex"]
+        ).exit_code
+        == 0
+    )
+    disk_a = str(device_file_env / "disk-a.dd")
+    assert runner.invoke(app, ["device", "link", disk_a, "--case", number]).exit_code == 0
+    assert DeviceShellCommandHandler().execute("inspect", [disk_a], None) is True
+    out = capsys.readouterr().out
+    assert "CASES" in out
+    assert number in out
+    assert runner.invoke(app, ["device", "unlink", disk_a, "--case", number]).exit_code == 0
+
+
 def test_the_shell_handler_reports_an_unknown_action() -> None:
     from trace_core.devices.shell_handler import DeviceShellCommandHandler
 
@@ -308,7 +410,7 @@ def test_the_shell_handler_completes_actions_and_flags() -> None:
     handler = DeviceShellCommandHandler()
     assert ("check", "Verify write protection") in handler.get_completions("device ch", None)
     flags = [value for value, _meta in handler.get_completions("device check --", None)]
-    assert any(f.startswith("--allow-real-hardware") for f in flags)
+    assert any(f.startswith("--physical") for f in flags)
 
 
 def test_no_handler_offers_completions_for_another_command() -> None:
@@ -423,4 +525,4 @@ def test_the_shell_completes_device_nodes(device_file_env: Path) -> None:
     values = [value for value, _ in handler.get_completions("device check disk", None)]
     assert any("disk-a.dd" in v for v in values)
     flags = [value for value, _ in handler.get_completions("device check --", None)]
-    assert "--allow-real-hardware" in flags
+    assert "--physical" in flags

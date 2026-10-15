@@ -28,7 +28,7 @@ SUMMARY_COLUMNS = (
 
 
 def _common_fields(m: AuditEventModel, *, ts: Any, action: Any, subject_case_id: Any) -> dict[str, Any]:
-    """Single source for the 12 ledger keys the DTO and the export bundle share."""
+    """Single source for the 13 ledger keys the DTO and the export bundle share."""
     return {
         "seq": m.seq,
         "ts": ts,
@@ -36,6 +36,7 @@ def _common_fields(m: AuditEventModel, *, ts: Any, action: Any, subject_case_id:
         "actor": m.actor,
         "subject_case_number": m.subject_case_number,
         "subject_case_id": subject_case_id,
+        "subject_device_serial": m.subject_device_serial,
         "payload_json": m.payload_json,
         "payload_hash": m.payload_hash,
         "prev_chain": m.prev_chain,
@@ -96,6 +97,7 @@ class SqlAlchemyAuditRepository:
         payload_details: dict[str, Any] | None = None,
         *,
         subject_type: str,
+        subject_device_serial: str | None = None,
     ) -> AuditEventDto:
         """Append one event. Retries transient head/seq collisions on a savepoint.
 
@@ -111,7 +113,13 @@ class SqlAlchemyAuditRepository:
             try:
                 with self.session.begin_nested():
                     return self._append_locked(
-                        action, actor, subject_case_number, subject_case_id, payload_details, subject_type
+                        action,
+                        actor,
+                        subject_case_number,
+                        subject_case_id,
+                        payload_details,
+                        subject_type,
+                        subject_device_serial,
                     )
             except (IntegrityError, OperationalError) as e:
                 errors.append(e)
@@ -125,6 +133,7 @@ class SqlAlchemyAuditRepository:
         subject_case_id: UUID | None,
         payload_details: dict[str, Any] | None,
         subject_type: str,
+        subject_device_serial: str | None,
     ) -> AuditEventDto:
         from trace_core.audit.signing import sign_bytes
         from trace_core.core.canonical import canonical_json_str
@@ -132,7 +141,7 @@ class SqlAlchemyAuditRepository:
 
         ts_val = now_utc()
         details = dict(payload_details or {})
-        payload = build_payload(action, subject_case_number, actor, details, ts_val)
+        payload = build_payload(action, subject_case_number, actor, details, ts_val, subject_device_serial)
         payload_json_str = canonical_json_str(payload)
         p_hash = payload_hash(payload)
         key_id, signature = sign_bytes(payload_json_str.encode("utf-8"))
@@ -150,6 +159,7 @@ class SqlAlchemyAuditRepository:
             subject_type=subject_type,
             subject_case_number=subject_case_number,
             subject_case_id=subject_case_id,
+            subject_device_serial=subject_device_serial,
             payload_json=payload_json_str,
             payload_hash=p_hash,
             prev_chain=prev,
@@ -182,6 +192,8 @@ class SqlAlchemyAuditRepository:
             stmt = stmt.where(AuditEventModel.action == filt.action.value)
         if filt.actor:
             stmt = stmt.where(ilike_literal(AuditEventModel.actor, filt.actor.strip()))
+        if filt.device_serial:
+            stmt = stmt.where(AuditEventModel.subject_device_serial == filt.device_serial.strip())
         term = (filt.search or "").strip()
         if term:
             if _SEQ_SEARCH_RE.match(term):
@@ -189,6 +201,7 @@ class SqlAlchemyAuditRepository:
             else:
                 stmt = stmt.where(
                     ilike_literal(AuditEventModel.subject_case_number, term)
+                    | ilike_literal(AuditEventModel.subject_device_serial, term)
                     | ilike_literal(AuditEventModel.actor, term)
                     | ilike_literal(AuditEventModel.action, term)
                 )
@@ -200,7 +213,7 @@ class SqlAlchemyAuditRepository:
         return int(self.session.execute(stmt).scalar_one())
 
     def list_events(self, f: AuditFilterDto | None = None) -> list[AuditEventDto]:
-        """Newest-first. Contract: seq/case_number exact, actor/action/search substring."""
+        """Newest-first. Contract: seq/case_number/device exact, actor/action/search substring."""
         filt = f or AuditFilterDto()
         stmt = paginate(self._filtered(filt), filt.limit, filt.offset)
         rows = self.session.scalars(stmt).all()

@@ -31,6 +31,7 @@ _AUDIT_VALUE_FLAGS = (
     "--case",
     "--action",
     "--actor",
+    "--device",
     "--search",
     "-q",
     "--output",
@@ -205,6 +206,7 @@ class AuditShellCommandHandler(BaseShellHandler):
         case_number = extract_flag_value(args, "--case")
         action_raw = extract_flag_value(args, "--action")
         actor = extract_flag_value(args, "--actor")
+        device_serial = extract_flag_value(args, "--device")
         search = extract_flag_value(args, "--search", "-q")
         output = parse_output_format(args)
         limit = extract_int_flag(args, 50, "--limit")
@@ -221,6 +223,7 @@ class AuditShellCommandHandler(BaseShellHandler):
             case_number=case_number,
             action=act,
             actor=actor,
+            device_serial=device_serial,
             search=search,
             limit=limit,
             offset=offset,

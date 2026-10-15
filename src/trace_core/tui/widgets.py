@@ -4,19 +4,26 @@ One rule engine per behavior: dividers, header mounting, O(1) selection
 repaint, cursor-to-item resolution.
 """
 
+from __future__ import annotations
+
+import io
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from rich.console import Console
 from rich.text import Text
 from textual import on
 from textual.containers import Vertical, VerticalScroll
+from textual.content import Content
 from textual.coordinate import Coordinate
 from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import DataTable, Input, Static
+from textual.widgets import DataTable, Input, Static, TabbedContent
+from thothspinner import MessageComponent, SpinnerComponent
 
-from trace_core.core.ui.theme import THEME_TOKENS
+from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
 from trace_core.tui.theme import table_head_text
+from trace_core.updates.renderers import SHIMMER_HIGHLIGHT, SHIMMER_SPEED, SHIMMER_WIDTH
 
 
 class DossierScroll(VerticalScroll):
@@ -36,6 +43,11 @@ class DossierScroll(VerticalScroll):
         return Text("─" * self.rule_width(), style=THEME_TOKENS["border"])
 
 
+def active_tab(view: Widget) -> str | None:
+    tabs = list(view.app.query(TabbedContent))
+    return tabs[0].active if tabs else None
+
+
 def mount_header_table(view: Widget, table_id: str, header_id: str, columns: Sequence[tuple[str, int]]) -> DataTable:
     """Set the manual header row and fixed columns from one constant.
 
@@ -45,6 +57,8 @@ def mount_header_table(view: Widget, table_id: str, header_id: str, columns: Seq
     """
     view.query_one(f"#{header_id}", Static).update(table_head_text(list(columns)))
     table = view.query_one(f"#{table_id}", DataTable)
+    if table.columns:
+        return table
     for label, width in columns:
         table.add_column(label, width=width)
     return table
@@ -102,6 +116,77 @@ class PagedTable(DataTable):
             self.on_scrolled()
 
 
+_SPIN_RICH = Console(file=io.StringIO(), width=120, force_terminal=True, color_system="truecolor", legacy_windows=False)
+
+
+def _thoth_parts(renderable: Any) -> list[str | tuple[str, str]]:
+    parts: list[str | tuple[str, str]] = []
+    for seg in _SPIN_RICH.render(renderable):
+        style = seg.style
+        color = style.color if style is not None else None
+        if color is None or not isinstance(color.triplet, tuple):
+            parts.append(seg.text)
+            continue
+        r, g, b = color.triplet
+        parts.append((seg.text, f"#{r:02X}{g:02X}{b:02X}"))
+    return parts
+
+
+def _flat(parts: list[str | tuple[str, str]]) -> list[str | tuple[str, str]]:
+    """Drop the newlines Rich puts at the end of each renderable so they share one line."""
+    out: list[str | tuple[str, str]] = []
+    for part in parts:
+        if isinstance(part, tuple):
+            text = part[0].replace("\n", "")
+            if text:
+                out.append((text, part[1]))
+        else:
+            text = part.replace("\n", "")
+            if text:
+                out.append(text)
+    return out
+
+
+class ThothSpinner(Static):
+    """thothspinner's npm_dots glyph and shimmer band on one line, in a Textual widget.
+
+    Textual cannot render Rich and does not interpret ANSI escapes, so each frame is taken
+    from the component as Segments and rebuilt as Textual Content in a single assemble call.
+    The base is the dim token and the band that sweeps through it is the title token.
+    """
+
+    def __init__(self, text: str = "", *, interval: float = 0.08, id: str | None = None) -> None:
+        super().__init__(id=id)
+        self._tick_timer: Timer | None = None
+        self._spinner = SpinnerComponent(color=THEME_HEX["muted"], interval=interval, speed=SHIMMER_SPEED)
+        self._message = MessageComponent(
+            action_words=[text],
+            color=THEME_HEX["muted"],
+            pinned_text=text,
+            shimmer={"light_color": SHIMMER_HIGHLIGHT, "width": SHIMMER_WIDTH, "speed": SHIMMER_SPEED},
+            suffix="",
+        )
+
+    def on_mount(self) -> None:
+        self._tick_timer = self.set_interval(0.08, self.tick)
+        self.tick()
+
+    def on_unmount(self) -> None:
+        if self._tick_timer is not None:
+            self._tick_timer.stop()
+            self._tick_timer = None
+
+    def set_text(self, text: str) -> None:
+        self._message.configure(pinned_text=text)
+        self.tick()
+
+    def tick(self) -> None:
+        if not self.display:
+            return
+        parts = _flat(_thoth_parts(self._spinner)) + [" "] + _flat(_thoth_parts(self._message))
+        self.update(Content.assemble(*parts, end=""))
+
+
 class TablePane[T](Vertical):
     """Filterable list pane shared by the Cases/Audit tabs. Single source for the table.
 
@@ -120,6 +205,7 @@ class TablePane[T](Vertical):
     def __init__(self) -> None:
         super().__init__()
         self._items: list[T] = []
+        self._keys: list[str] = []
         self._search_timer: Timer | None = None
         self._last_cursor: int | None = None
 
@@ -134,7 +220,10 @@ class TablePane[T](Vertical):
 
     def on_mount(self) -> None:
         mount_header_table(self, self.TABLE_ID, self.HEADER_ID, self.COLUMNS)
-        self.refresh_data()
+        active = active_tab(self)
+        parent_id = getattr(self.parent, "id", None)
+        if parent_id is None or active is None or parent_id == active:
+            self.refresh_data()
 
     def focus_default(self) -> None:
         self._table().focus()
@@ -148,9 +237,29 @@ class TablePane[T](Vertical):
         self.query_one(f"#{self.HEADER_ID}", Static).update(header_with_count(self.COLUMNS, self.displayed_count()))
 
     def fill_table(self, rows: Sequence[T], keys: Sequence[str]) -> None:
-        """Replace the table body and restore the cursor onto the same row index."""
-        self._items = list(rows)
+        """Replace the table body and restore the cursor onto the same row index.
+
+        Same rows in the same order patch in place: clearing flashes an empty table
+        and drops the cursor, which every unchanged refresh would then replay.
+        """
+        new_items = list(rows)
+        new_keys = list(keys)
         table = self._table()
+        if new_keys and new_keys == self._keys:
+            cursor = table.cursor_row if table.cursor_row is not None else 0
+            for idx, row in enumerate(new_items):
+                self._items[idx] = row
+                for col, value in enumerate(self.row_cells(row, idx == cursor)):
+                    try:
+                        table.update_cell_at(Coordinate(idx, col), value)
+                    except Exception:
+                        pass
+            self._last_cursor = table.cursor_row if table.cursor_row is not None else 0
+            self._update_header()
+            self.render_detail()
+            return
+        self._items = new_items
+        self._keys = new_keys
         table.clear()
         cursor = table.cursor_row if table.cursor_row is not None else 0
         for idx, row in enumerate(self._items):
@@ -175,6 +284,7 @@ class TablePane[T](Vertical):
         cursor = table.cursor_row if table.cursor_row is not None else 0
         start = len(self._items)
         self._items.extend(rows)
+        self._keys.extend(keys)
         for offset, row in enumerate(rows):
             table.add_row(*self.row_cells(row, start + offset == cursor), key=keys[offset])
         self._update_header()

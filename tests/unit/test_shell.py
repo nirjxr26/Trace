@@ -145,6 +145,53 @@ def test_shell_audit_positional_case(service: CaseService, capsys: pytest.Captur
     assert "2026-POS-0001" in capsys.readouterr().out
 
 
+def test_shell_audit_filters_by_device(service: CaseService, capsys: pytest.CaptureFixture[str]) -> None:
+    from trace_core.audit.domain import AuditAction
+    from trace_core.audit.repository import SqlAlchemyAuditRepository
+    from trace_core.cli.shell import InteractiveShell
+
+    with service.session_manager.session() as session:
+        repo = SqlAlchemyAuditRepository(session)
+        repo.append(
+            AuditAction.DEVICE_INSPECTED, "Ex", None, None, {}, subject_type="device", subject_device_serial="SYNTH-9"
+        )
+        repo.append(
+            AuditAction.DEVICE_INSPECTED, "Ex", None, None, {}, subject_type="device", subject_device_serial="SYNTH-1"
+        )
+        session.commit()
+    shell = InteractiveShell()
+    shell.service = service
+    shell.execute_line("audit show --device SYNTH-9 --output json")
+    out = capsys.readouterr().out
+    assert "SYNTH-9" in out
+    assert "SYNTH-1" not in out
+
+
+def test_shell_case_show_lists_linked_devices(device_file_env, capsys) -> None:  # type: ignore[no-untyped-def]
+    from typer.testing import CliRunner
+
+    from trace_core.cases.shell_handler import CaseShellCommandHandler
+    from trace_core.cli.main import app
+    from trace_core.core.cli.registry import ShellContext
+
+    number = "2026-SHC-0001"
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            app, ["case", "create", "--number", number, "--title", "Shell Link", "--examiner", "Ex"]
+        ).exit_code
+        == 0
+    )
+    disk_a = str(device_file_env / "disk-a.dd")
+    assert runner.invoke(app, ["device", "link", disk_a, "--case", number, "--label", "bag-9"]).exit_code == 0
+    assert CaseShellCommandHandler().execute("show", [number], ShellContext()) is True
+    out = capsys.readouterr().out
+    assert "LINKED DEVICE" in out
+    assert "bag-9" in out
+    assert "disk-a.dd" in out
+    assert runner.invoke(app, ["device", "unlink", disk_a, "--case", number]).exit_code == 0
+
+
 def test_shell_edit_clear_rules(service: CaseService, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify blank required fields keep values while blank optionals clear."""
     from trace_core.cases.dto import CaseCreateDto

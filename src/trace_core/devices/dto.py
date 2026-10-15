@@ -12,6 +12,7 @@ from pydantic import Field
 
 from trace_core.core.dto import BaseDto
 from trace_core.devices.domain import (
+    CaseDeviceLink,
     DeviceFingerprint,
     DeviceInfo,
     DeviceInspection,
@@ -19,6 +20,7 @@ from trace_core.devices.domain import (
     DeviceKind,
     GateCheck,
     ProtectionCheck,
+    StoredObservation,
     WpVerdict,
 )
 
@@ -29,15 +31,17 @@ class DeviceInfoDto(BaseDto):
     requires_real_hardware_opt_in: bool
     size_bytes: int | None = None
     model_hint: str | None = None
+    serial: str | None = None
 
     @classmethod
-    def from_domain(cls, device: DeviceInfo) -> "DeviceInfoDto":
+    def from_domain(cls, device: DeviceInfo, serial: str | None = None) -> "DeviceInfoDto":
         return cls(
             node=device.node,
             kind=device.kind,
             requires_real_hardware_opt_in=device.requires_real_hardware_opt_in,
             size_bytes=device.size_bytes,
             model_hint=device.model_hint,
+            serial=serial,
         )
 
 
@@ -81,6 +85,64 @@ class InspectionDto(BaseDto):
             device=DeviceInfoDto.from_domain(inspection.device),
             fingerprint=FingerprintDto.from_domain(inspection.fingerprint),
             inspected_at=inspection.inspected_at,
+        )
+
+
+class CaseDeviceLinkDto(BaseDto):
+    """A device filed under a case. Bookkeeping, not an observation."""
+
+    case_number: str
+    node: str
+    serial: str | None = None
+    label: str | None = None
+    linked_at: datetime
+    linked_by: str
+
+    @classmethod
+    def from_domain(cls, link: CaseDeviceLink) -> "CaseDeviceLinkDto":
+        return cls(
+            case_number=link.case_number,
+            node=link.node,
+            serial=link.serial,
+            label=link.label,
+            linked_at=link.linked_at,
+            linked_by=link.linked_by,
+        )
+
+
+class ObservationDto(BaseDto):
+    """One persisted observation, as history and export read it back."""
+
+    node: str
+    serial: str
+    model: str
+    capacity_bytes: int
+    firmware: str | None = None
+    interface: str
+    wwn: str | None = None
+    source: str
+    inspected_at: datetime
+    inspected_by: str
+    verdict: WpVerdict | None = None
+    unknown_cause: str | None = None
+
+    @classmethod
+    def from_domain(cls, stored: "StoredObservation") -> "ObservationDto":
+        fp = stored.fingerprint
+        cause = stored.unknown_cause
+        return cls(
+            node=stored.node,
+            serial=fp.serial.value,
+            model=fp.model,
+            capacity_bytes=fp.capacity_bytes,
+            firmware=fp.firmware,
+            interface=str(fp.interface),
+            wwn=fp.wwn,
+            source=fp.source,
+            inspected_at=stored.inspected_at,
+            inspected_by=stored.inspected_by,
+            verdict=stored.verdict,
+            unknown_cause=None if cause is None else cause.value,
         )
 
 

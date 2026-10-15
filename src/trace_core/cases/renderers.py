@@ -171,6 +171,26 @@ def _case_dossier_fields(case: CaseResponseDto) -> list[tuple[str, Any]]:
     return fields
 
 
+def _render_case_devices(device_rows: list[dict[str, Any]] | None, divider: Text) -> None:
+    """LINKED DEVICE block mirroring the TUI dossier: current links plus dimmed
+    ledger-surviving history. None means unreadable (already announced), [] means none."""
+    if not device_rows:
+        return
+    from trace_core.core.ui.renderers import console, render_section_title
+    from trace_core.core.ui.theme import THEME_TOKENS as TOK
+
+    render_section_title("LINKED DEVICE")
+    console.print("")
+    for row in device_rows:
+        style = "" if row["current"] else TOK["muted"]
+        console.print(Text(f"    {sanitize_terminal(str(row['heading']))}", style=style))
+        if row["label"]:
+            console.print(
+                Text.assemble((f"    {'Label':<10}", TOK["muted"]), (sanitize_terminal(str(row["label"])), style))
+            )
+    console.print(divider)
+
+
 def _render_case_history(case: CaseResponseDto, events: list[Any] | None, divider: Text) -> None:
     """HISTORY proof block: newest 5 ledger events with a pointer to the full timeline."""
     if not events:
@@ -193,7 +213,9 @@ def _render_case_history(case: CaseResponseDto, events: list[Any] | None, divide
     console.print(divider)
 
 
-def render_case_detail(case: CaseResponseDto, events: list[Any] | None = None) -> None:
+def render_case_detail(
+    case: CaseResponseDto, events: list[Any] | None = None, device_rows: list[dict[str, Any]] | None = None
+) -> None:
     """Forensic case dossier in the audit-detail language: identity block, grouped
     metadata, DESCRIPTION/NOTES sections, and a HISTORY proof block."""
     from trace_core.core.ui.renderers import (
@@ -235,6 +257,7 @@ def render_case_detail(case: CaseResponseDto, events: list[Any] | None = None) -
         console.print(Text(f"    {sanitize_terminal(section_body.strip())}", style=TOK["value"]))
         console.print(divider)
 
+    _render_case_devices(device_rows, divider)
     _render_case_history(case, events, divider)
     _render_case_next(case)
 
@@ -276,9 +299,14 @@ def _closed_value(case: CaseResponseDto) -> Any:
     return _local_only(case.closed_at)
 
 
-def render_case(case: CaseResponseDto, output: str = "table", events: list[Any] | None = None) -> None:
+def render_case(
+    case: CaseResponseDto,
+    output: str = "table",
+    events: list[Any] | None = None,
+    device_rows: list[dict[str, Any]] | None = None,
+) -> None:
     """Render a single case in table dossier or raw JSON form."""
-    render_output(output, case, lambda: render_case_detail(case, events))
+    render_output(output, case, lambda: render_case_detail(case, events, device_rows))
 
 
 def render_cases(cases: list[CaseResponseDto], output: str = "table", active_number: str | None = None) -> None:

@@ -55,6 +55,7 @@ class AuditEventModel(Base):
     subject_type: Mapped[str] = mapped_column(String(32), default="case", nullable=False, index=True)
     subject_case_number: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     subject_case_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    subject_device_serial: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     prev_chain: Mapped[str] = mapped_column(String(64), nullable=False)

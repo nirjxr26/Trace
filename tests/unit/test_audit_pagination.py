@@ -534,3 +534,83 @@ def test_the_pane_reports_a_total_separate_from_the_loaded_window() -> None:
 
     assert hasattr(TablePane, "displayed_count")
     assert TablePane.displayed_count is not TablePane._update_header
+
+
+def test_every_event_label_is_short_and_readable() -> None:
+    """No underscore ever reaches the Event column, and the two genuinely verbose actions
+    are shortened. Asserting the labels themselves, because the width check below passes
+    just as happily on the long forms."""
+    from trace_core.audit.renderers import short_action_label
+
+    expected = {
+        "CASE_CREATED": "Case Created",
+        "CASE_UPDATED": "Case Updated",
+        "CASE_CLOSED": "Case Closed",
+        "CASE_ARCHIVED": "Case Archived",
+        "CASE_RESTORED": "Case Restored",
+        "CASE_PURGED": "Case Purged",
+        "DEVICE_INSPECTED": "Device Inspected",
+        "DEVICE_GATE_CHECKED": "Gate Checked",
+        "DEVICE_OVERRIDE": "Override",
+        "DEVICE_LINKED": "Device Linked",
+        "DEVICE_UNLINKED": "Device Unlinked",
+        "DEVICE_RECOGNIZED": "Device Recognized",
+        "UPDATE_POLICY_OVERRIDE": "Policy Override",
+    }
+    for action in AuditAction:
+        label = short_action_label(action.value)
+        assert label == expected[action.value], f"{action.value} renders as {label!r}"
+        assert "_" not in label, f"{action.value} leaks an underscore: {label!r}"
+
+
+def test_an_unknown_action_label_still_reads_as_words() -> None:
+    """A future action this build has never seen must not render as SOME_NEW_ACTION."""
+    from trace_core.audit.renderers import short_action_label
+
+    assert short_action_label("SOME_NEW_ACTION") == "Some New Action"
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_audit_window_stops_at_five_pages(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scrolling must not retain the ledger unboundedly: five windows, then stop with
+    the truth told once. The header keeps reporting the whole ledger, not the window."""
+    from trace_core.tui.app import TraceApp
+    from trace_core.tui.screens.audit import AuditView
+
+    monkeypatch.setattr("trace_core.core.service.db_manager", session_manager)
+    seqs = _seed(session_manager, 1200)
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(110, 40)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.pause()
+        view = app.query_one(AuditView)
+        table = app.query_one("#audit-table", DataTable)
+        for _ in range(20):
+            if len(view._items) >= 1000 or view._exhausted:
+                break
+            table.move_cursor(row=len(view._items) - 1)
+            await pilot.pause()
+            view._extend()
+        assert len(view._items) == 1000, f"window not bounded: {len(view._items)}"
+        assert table.row_count == 1000
+        assert view._items[0].seq == max(seqs)
+        assert view._items[-1].seq == max(seqs) - 999
+        table.move_cursor(row=len(view._items) - 1)
+        await pilot.pause()
+        view._extend()
+        assert len(view._items) == 1000, "kept growing past the cap"
+        notes = [n.message for n in app._notifications]
+        assert any("refine search or export" in m for m in notes), f"cap hit silently: {notes[-3:]}"
+        table.move_cursor(row=0)
+        await pilot.pause()
+        table.move_cursor(row=len(view._items) - 1)
+        await pilot.pause()
+        view._extend()
+        retold = [n.message for n in app._notifications]
+        assert sum("refine search or export" in m for m in retold) == sum(
+            "refine search or export" in m for m in notes
+        ), "cap notice spammed"

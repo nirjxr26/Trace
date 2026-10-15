@@ -15,42 +15,13 @@ TRACE_LIST_VERSIONS=0
 TRACE_REINSTALL=0
 TRACE_UNINSTALL=0
 TRACE_PURGE_DATA=0
-TRACE_PHASE_TOTAL=4
-TRACE_PHASE_DONE=0
-TRACE_BG_PID=""
-TRACE_STEP_INDEX=0
-TRACE_STEP_PAINTED=0
-TRACE_DOT_IDX=0
-TRACE_GREEN='\033[0;32m'
-TRACE_CYAN='\033[0;36m'
-TRACE_AMBER='\033[0;33m'
-TRACE_MUTED='\033[0;90m'
-TRACE_RED='\033[0;31m'
-TRACE_RESET='\033[0m'
-TRACE_CURSOR_HIDE='\033[?25l'
-TRACE_CURSOR_SHOW='\033[?25h'
-TRACE_DONE_GLYPH='●'
-TRACE_PEND_GLYPH='▲'
-TRACE_FAIL_GLYPH='✕'
-TRACE_TICK_GLYPH='✓'
-TRACE_STEP_GUTTER='│ '
-TRACE_DOT_FRAMES=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-TRACE_SPIN_DELAY_TICKS=4
-TRACE_STEP_TICKS=0
-TRACE_STEP_LABELS=(
-  "Verifying"
-  "Downloading"
-  "Installing"
-  "Finishing setup"
-)
-TRACE_STEP_STATES=(pending pending pending pending)
+TRACE_TICK='✓'
 TRACE_PY_WIN=0
 case "$(uname -s 2>/dev/null || printf '')" in
   MINGW*|MSYS*|CYGWIN*) TRACE_PY_WIN=1 ;;
 esac
 
-trap 'type trace_steps_release >/dev/null 2>&1 && trace_steps_release; [ -n "$TRACE_BG_PID" ] && kill "$TRACE_BG_PID" 2>/dev/null; true' EXIT HUP INT TERM
-TRACE_CURRENT_LABEL=""
+trap 'true' EXIT HUP INT TERM
 PHASE_SOURCE="source"
 PHASE_DEPENDENCIES="dependencies"
 TRACE_HOME="${HOME}/.trace"
@@ -110,117 +81,6 @@ trace_resolve_venv() {
   return 0
 }
 
-trace_steps_render() {
-  local i glyph colour label frame='' last=$(( ${#TRACE_STEP_LABELS[@]} - 1 ))
-  for i in 0 1 2 3; do
-    glyph="$TRACE_PEND_GLYPH"
-    colour="$TRACE_AMBER"
-    label="${TRACE_STEP_LABELS[$i]}"
-    case "${TRACE_STEP_STATES[$i]}" in
-      done)
-        glyph="$TRACE_DONE_GLYPH"
-        colour="$TRACE_GREEN"
-        ;;
-      active)
-        glyph="${TRACE_DOT_FRAMES[$((TRACE_DOT_IDX % ${#TRACE_DOT_FRAMES[@]}))]}"
-        colour="$TRACE_GREEN"
-        ;;
-      fail)
-        glyph="$TRACE_FAIL_GLYPH"
-        colour="$TRACE_RED"
-        ;;
-      *)
-        glyph="$TRACE_PEND_GLYPH"
-        colour="$TRACE_AMBER"
-        ;;
-    esac
-    frame="${frame}\\r\\033[2K  ${colour}${TRACE_STEP_GUTTER}${glyph}  ${TRACE_RESET}${label}"
-    if [ "$i" -lt "$last" ]; then
-      frame="${frame}\\n"
-    fi
-  done
-  printf '%b' "$frame"
-}
-
-trace_steps() {
-  [ "$VERBOSE" = "1" ] && return 0
-  trace_is_tty || return 0
-  if [ "$TRACE_STEP_PAINTED" = "1" ]; then
-    printf '\r\033[%dA' "$(( ${#TRACE_STEP_LABELS[@]} - 1 ))"
-  else
-    printf '%b' "$TRACE_CURSOR_HIDE"
-  fi
-  trace_steps_render
-  TRACE_STEP_PAINTED=1
-}
-
-trace_steps_release() {
-  if [ "$TRACE_STEP_PAINTED" = "1" ]; then
-    printf '\n%b' "$TRACE_CURSOR_SHOW"
-    TRACE_STEP_PAINTED=0
-  fi
-}
-
-trace_animate() {
-  [ "$VERBOSE" = "1" ] && return 0
-  trace_is_tty || return 0
-  TRACE_STEP_TICKS=$((TRACE_STEP_TICKS + 1))
-  if [ "$TRACE_STEP_TICKS" -gt "$TRACE_SPIN_DELAY_TICKS" ]; then
-    TRACE_DOT_IDX=$((TRACE_DOT_IDX + 1))
-  fi
-  trace_steps
-}
-
-trace_step_start() {
-  local index="$1"
-  TRACE_STEP_STATES[$index]="active"
-  TRACE_STEP_INDEX=$index
-  TRACE_STEP_TICKS=0
-  TRACE_DOT_IDX=0
-  if [ "$VERBOSE" = "1" ] || ! trace_is_tty; then
-    printf '  |  ... %s\n' "${TRACE_STEP_LABELS[$index]}"
-    return 0
-  fi
-  trace_steps
-}
-
-trace_step_done() {
-  local index="$1"
-  TRACE_STEP_STATES[$index]="done"
-  if [ "$VERBOSE" = "1" ] || ! trace_is_tty; then
-    printf '  |  [OK] %s\n' "${TRACE_STEP_LABELS[$index]}"
-    return 0
-  fi
-  trace_steps
-}
-
-trace_step_fail() {
-  local index="$1"
-  TRACE_STEP_STATES[$index]="fail"
-  if [ "$VERBOSE" = "0" ] && trace_is_tty; then
-    trace_steps
-    trace_steps_release
-  fi
-}
-
-trace_to() {
-  TRACE_TARGET="$1"
-}
-
-trace_title() {
-  local ver="${TRACE_DISPLAY_VERSION:-main}"
-  ver="${ver#v}"
-  [ "$VERBOSE" = "1" ] && return 0
-  trace_is_tty || return 0
-  printf '\n  Trace %s\n\n' "$ver"
-}
-
-trace_phase() {
-  local phase_index="$1"
-  TRACE_PHASE_DONE=$((TRACE_PHASE_DONE + 1))
-  trace_step_start "$phase_index"
-}
-
 trace_collect_tmp() {
   cat "$TRACE_TMP" >>"$TRACE_INSTALL_LOG" 2>/dev/null || true
   rm -f "$TRACE_TMP"
@@ -240,38 +100,8 @@ trace_run() {
   return $TRACE_STATUS
 }
 
-trace_run_live() {
-  shift
-  if [ "$VERBOSE" = "1" ] || ! trace_is_tty; then
-    if trace_run "$@"; then
-      TRACE_STATUS=0
-    else
-      TRACE_STATUS=$?
-    fi
-    return $TRACE_STATUS
-  fi
-  TRACE_TMP="$(mktemp)"
-  "$@" >"$TRACE_TMP" 2>&1 &
-  TRACE_BG_PID=$!
-  while kill -0 "$TRACE_BG_PID" 2>/dev/null; do
-    trace_animate
-    sleep 0.12 2>/dev/null || sleep 1
-  done
-  if wait "$TRACE_BG_PID"; then
-    TRACE_STATUS=0
-  else
-    TRACE_STATUS=$?
-  fi
-  TRACE_BG_PID=""
-  trace_collect_tmp
-  return $TRACE_STATUS
-}
-
 trace_fail() {
   TRACE_STEP="$1"
-  if trace_is_tty && [ "$VERBOSE" = "0" ]; then
-    trace_step_fail "$TRACE_STEP_INDEX"
-  fi
   printf "Install failed at '%s' - see %s\n" "$TRACE_STEP" "$TRACE_INSTALL_LOG" >&2
   if [ -f "$TRACE_INSTALL_LOG" ]; then
     tail -n 12 "$TRACE_INSTALL_LOG" >&2 2>/dev/null || true
@@ -281,13 +111,12 @@ trace_fail() {
 
 trace_success() {
   TRACE_VER="$1"
-  if trace_is_tty && [ "$VERBOSE" = "0" ]; then
-    trace_steps_release
-    printf '\n'
-  fi
   if trace_is_tty; then
-    printf '\033[1;32m  %s Installation complete\033[0m\n' "$TRACE_TICK_GLYPH"
-    printf '\n  Run trace to get started\n\n'
+    printf '\n'
+    printf '%s Installation complete\n' "$TRACE_TICK"
+    printf '\n'
+    printf 'Run `trace` to get started.\n'
+    printf '\n'
   else
     printf '%s\n' "Installation complete"
     printf '%s\n' "Trace $TRACE_VER installed successfully."
@@ -583,9 +412,10 @@ if [ "$VERBOSE" = "1" ]; then
   printf "\n"
 fi
 
-trace_title
+TRACE_SHORT_VER="${TRACE_DISPLAY_VERSION#v}"
+printf '\n'
+printf 'Installing Trace v%s\n' "$TRACE_SHORT_VER"
 
-trace_phase 0
 if [ "$VERBOSE" = "1" ]; then
   printf "[1/6] Searching for Python 3.12+...\n"
 fi
@@ -615,41 +445,57 @@ if [ -z "$FOUND_PYTHON" ]; then
     printf "      Arch Linux:     sudo pacman -S python\n"
     trace_fail "python"
 fi
-trace_step_done 0
 
-trace_phase 1
 trace_say "Source ready at $REPO_ROOT"
-trace_step_done 1
 
 VENV_DIR="$SCRIPT_DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
 
-trace_phase 2
 if [ "$VERBOSE" = "1" ]; then
-  printf "[3/6] Configuring virtual environment...\n"
+  printf "[2/6] Configuring virtual environment...\n"
 fi
 if ! trace_resolve_venv; then
     trace_say "  Creating virtual environment at '$VENV_DIR'..."
     VENV_CREATE_DIR="$(trace_winpath "$VENV_DIR")"
-    trace_run_live "$FOUND_PYTHON" -m venv "$VENV_CREATE_DIR" || trace_fail "venv"
+    trace_run "$FOUND_PYTHON" -m venv "$VENV_CREATE_DIR" || trace_fail "venv"
     trace_resolve_venv || trace_fail "venv"
 else
     trace_say "  [OK] Existing virtual environment detected."
 fi
 
+if ! trace_run "$VENV_PYTHON" -m pip --version; then
+    trace_say "  [i] The virtual environment has no pip; bootstrapping it with ensurepip."
+    trace_run "$VENV_PYTHON" -m ensurepip --upgrade || trace_fail "pip"
+fi
+
 if [ "$VERBOSE" = "1" ]; then
-  printf "[4/6] Installing locked dependencies...\n"
+  printf "[3/6] Installing locked dependencies...\n"
   printf "  Using pip with cryptographic hash verification...\n"
 fi
-trace_run_live "$VENV_PYTHON" -m pip install --quiet "pip==26.2.1" || trace_fail "$PHASE_DEPENDENCIES"
-trace_run_live "$VENV_PYTHON" -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt || trace_fail "$PHASE_DEPENDENCIES"
-trace_run_live "$VENV_PYTHON" -m pip install --quiet --no-deps -e . || trace_fail "$PHASE_DEPENDENCIES"
+if ! trace_run "$VENV_PYTHON" -m pip install --quiet "pip==26.2.1"; then
+    trace_say "  [i] Could not upgrade pip; continuing with the one bundled in the environment."
+fi
+if ! trace_run "$VENV_PYTHON" -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt; then
+    trace_fail "$PHASE_DEPENDENCIES"
+fi
+TRACE_ATTEMPT=0
+while [ "$TRACE_ATTEMPT" -lt 3 ]; do
+    TRACE_ATTEMPT=$((TRACE_ATTEMPT + 1))
+    if trace_run "$VENV_PYTHON" -m pip install --quiet --no-deps -e .; then
+        break
+    fi
+    if [ "$TRACE_ATTEMPT" -lt 3 ]; then
+        trace_say "  [!] Editable install attempt $TRACE_ATTEMPT of 3 failed; retrying."
+        sleep 2
+    fi
+done
+if [ "$TRACE_ATTEMPT" -ge 3 ]; then
+    trace_fail "$PHASE_DEPENDENCIES"
+fi
 trace_say "  [OK] Dependencies installed successfully."
-trace_step_done 2
 
-trace_phase 3
 if [ "$VERBOSE" = "1" ]; then
-  printf "[5/6] Verifying environment & storage directories...\n"
+  printf "[4/6] Verifying environment & storage directories...\n"
 fi
 if [ ! -f "$SCRIPT_DIR/.env" ]; then
     if [ -f "$SCRIPT_DIR/.env.example" ]; then
@@ -674,7 +520,7 @@ TRUST_DIR="${HOME}/.trace/trust/releases"
 TRACE_BOOTSTRAP_KEY_IDS="53712e8bb8a774e6"
 if mkdir -p "$TRUST_DIR" 2>/dev/null; then
     BUNDLE_FILE="$(mktemp)"
-    if trace_run_live curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$BUNDLE_FILE" "https://github.com/nirjxr26/Trace/releases/latest/download/trusted-keys.bundle"; then
+    if trace_run curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$BUNDLE_FILE" "https://github.com/nirjxr26/Trace/releases/latest/download/trusted-keys.bundle"; then
         if ! command -v sha256sum >/dev/null 2>&1; then
             trace_say "  [!] sha256sum missing: cannot derive trust key ids, so no key was provisioned. Verification stays fail-closed."
         else
@@ -728,9 +574,12 @@ else
 fi
 
 DOCTOR_FAILED=0
+if [ "$VERBOSE" = "1" ]; then
+  printf "[5/6] Verifying the forensic ledger...\n"
+fi
 if [ "${SKIP_DB_MIGRATION:-0}" != "1" ]; then
     trace_resolve_venv || trace_fail "config"
-    if trace_run_live "$TRACE_BIN" doctor; then
+    if trace_run "$TRACE_BIN" doctor; then
         trace_say "  [OK] Database verified and up to date."
     else
         # Reported and carried into the exit status. It used to be swallowed into a log
@@ -757,7 +606,5 @@ exec "$TRACE_BIN" "\$@"
 EOF
 chmod +x "$LAUNCHER_SCRIPT"
 trace_say "  [OK] Installed launcher script to '$LAUNCHER_SCRIPT'."
-trace_step_done 3
 
-TRACE_SHORT_VER="$TRACE_DISPLAY_VERSION"
 trace_success "v$TRACE_SHORT_VER"
