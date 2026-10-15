@@ -19,6 +19,7 @@ class AuditEventDto(BaseDto):
     subject_type: str
     subject_case_number: str | None
     subject_case_id: UUID | None = None
+    subject_device_serial: str | None = None
     payload_json: str
     # Lowercase-hex charset, not length alone: the verifier compares these with
     # case-sensitive hmac.compare_digest, so an uppercase value would fail as
@@ -43,6 +44,7 @@ class AuditFilterDto(BaseFilterDto):
     case_number: str | None = None
     action: AuditAction | None = None
     actor: str | None = None
+    device_serial: str | None = None
     before_seq: int | None = Field(default=None, ge=1)
     after_seq: int | None = Field(default=None, ge=1)
 
@@ -54,8 +56,9 @@ AUDIT_SHOW_FLAGS = [
     ("--case", "Filter by case number"),
     ("--action", "Filter by action"),
     ("--actor", "Filter by actor"),
-    ("--search", "Search actor/action/case, or exact seq"),
-    ("-q", "Search actor/action/case, or exact seq"),
+    ("--device", "Filter by device serial"),
+    ("--search", "Search actor/action/case/device, or exact seq"),
+    ("-q", "Search actor/action/case/device, or exact seq"),
     ("--output", _OUTPUT_DESC),
     ("-o", _OUTPUT_DESC),
     ("--limit", "Max rows"),

@@ -9,10 +9,10 @@ from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.tui.theme import TRACE_THEME
 
 TAB_HINTS: dict[str, str] = {
-    "cases": "↑↓ Navigate   Enter Open   / Search   r Recent   q Quit",
-    "devices": "↑↓ Navigate   i Inspect   c Check   k Kind   / Search   q Quit",
+    "cases": "↑↓ Navigate   / Search   r Recent   q Quit",
+    "devices": "↑↓ Navigate   i Inspect   c Check   l Link   k Kind   / Search   q Quit",
     "audit": "↑↓ Navigate   Enter Open   / Search   r Refresh   q Quit",
-    "settings": "↑↓ Sections   Enter Run   m Migrate   u Install update   q Quit",
+    "settings": "↑↓ Sections   Enter Run   m Migrate   c Check updates   q Quit",
 }
 
 _TAB_ORDER = ("cases", "devices", "audit", "settings")
@@ -39,24 +39,24 @@ class TraceApp(App[None]):
     #cases-left, #cases-right, #audit-left, #audit-right, #settings-left, #settings-right, #device-left, #device-right {
         border: round $panel;
         background: $surface;
-        padding: 0 1;
-    }
-    #cases-right, #audit-right, #settings-right, #device-right {
         padding: 1 2;
     }
     #cases-left, #audit-left, #settings-left, #device-left { width: 1fr; margin-right: 1; }
     #cases-right, #audit-right, #settings-right, #device-right { width: 2fr; }
     #settings-sections { height: 1fr; background: transparent; }
     #settings-sections:focus { background-tint: transparent; }
-    #settings-left .card-title { padding: 1 1 1 1; }
+    #settings-left .card-title { padding: 0; }
     #settings-sections ListItem { height: auto; padding: 0 1; margin-bottom: 1; background: transparent; background-tint: transparent; color: $text-muted; }
     #settings-sections ListItem.-hovered, #settings-sections ListItem.-highlight { background: transparent; background-tint: transparent; border: none; color: $text; text-style: bold; }
     .table-head { text-style: bold; color: $text; height: 1; }
     #settings-left Rule, #cases-left Rule, #audit-left Rule, #device-left Rule { color: $panel; margin: 0 0 1 0; }
     #case-search, #audit-search, #device-search { border: round $panel; margin-bottom: 1; background: transparent; }
-    #device-table { scrollbar-size-horizontal: 0; }
+    #audit-table, #case-table, #device-table { scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }
+    #device-right, #cases-right, #audit-right { scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }
     #case-search:focus, #audit-search:focus, #device-search:focus { background: transparent; background-tint: transparent; }
     #audit-scope { height: 1; color: $muted; }
+    #device-summary { height: 1; color: $muted; padding-left: 1; margin: 1 0; }
+    #device-search { margin-bottom: 0; padding: 0 2; }
     VerticalScroll { scrollbar-size: 1 1; }
     * { scrollbar-background: transparent; scrollbar-color: $panel; scrollbar-corner-color: transparent; }
     .card {
@@ -100,6 +100,7 @@ class TraceApp(App[None]):
     def __init__(self, session_manager: DatabaseSessionManager | None = None) -> None:
         super().__init__()
         self._session_manager = session_manager
+        self._last_tab: str | None = None
         self.register_theme(TRACE_THEME)
         self.theme = "trace"
 
@@ -182,6 +183,9 @@ class TraceApp(App[None]):
         from textual.css.query import NoMatches
 
         tab = event.pane.id or "cases"
+        if tab == self._last_tab:
+            return
+        self._last_tab = tab
         try:
             self.query_one("#hint", Static).update(TAB_HINTS.get(tab, ""))
         except NoMatches:

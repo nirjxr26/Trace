@@ -35,6 +35,7 @@ def _show_list(
     case_number: str | None,
     action: str | None,
     actor: str | None,
+    device_serial: str | None,
     search: str | None,
     limit: int,
     offset: int,
@@ -48,6 +49,7 @@ def _show_list(
         case_number=case_number,
         action=act,
         actor=actor,
+        device_serial=device_serial,
         search=search,
         limit=limit,
         offset=offset,
@@ -64,7 +66,8 @@ def audit_show(
     case_number: str = typer.Option(None, "--case", help="Filter by case number"),
     action: str = typer.Option(None, "--action", help="Filter by action"),
     actor: str = typer.Option(None, "--actor", help="Filter by actor (substring)"),
-    search: str = typer.Option(None, "--search", "-q", help="Search actor/action/case, or exact seq"),
+    device_serial: str = typer.Option(None, "--device", help="Filter by device serial"),
+    search: str = typer.Option(None, "--search", "-q", help="Search actor/action/case/device, or exact seq"),
     output: str = typer.Option("table", "--output", "-o", help=OUTPUT_HELP),
     limit: int = typer.Option(50, "--limit", help="Max rows (1..500)"),
     offset: int = typer.Option(0, "--offset", help="Offset"),
@@ -80,7 +83,7 @@ def audit_show(
             if not show_seq_view(svc, seq, output):
                 raise typer.Exit(EXIT_ERROR)
             return
-        _show_list(svc, case_number, action, actor, search, limit, offset, before_seq, after_seq, output)
+        _show_list(svc, case_number, action, actor, device_serial, search, limit, offset, before_seq, after_seq, output)
 
 
 @audit_app.command("verify")

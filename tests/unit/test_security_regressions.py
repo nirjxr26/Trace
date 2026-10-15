@@ -1450,8 +1450,10 @@ def test_install_ps1_enforces_tls12_before_first_webrequest() -> None:
     tls = next(i for i, line in enumerate(lines) if "SecurityProtocol" in line and "Tls12" in line)
     first_net = next(i for i, line in enumerate(lines) if "Invoke-WebRequest" in line)
     assert tls < first_net, "install.ps1 downloads before enforcing TLS 1.2"
-    job = next(i for i, line in enumerate(lines) if line.startswith("function Invoke-LiveCommand"))
-    assert any("Tls12" in line for line in lines[job:]), "background downloads run without a TLS floor"
+    assert not any("Start-Job" in line for line in lines), (
+        "install.ps1 must not spawn a background PowerShell for downloads: every fetch would "
+        "run in a separate process outside the TLS floor set at the top of this script"
+    )
 
 
 def test_channel_cannot_introduce_a_new_trust_root() -> None:
@@ -1463,3 +1465,36 @@ def test_channel_cannot_introduce_a_new_trust_root() -> None:
     attacker_id = key_id_for_pubkey(attacker_key).removeprefix("ed25519:")
     assert attacker_id not in embedded
     assert not Path("install.sh").read_text(encoding="utf-8").count(f'"{attacker_id}"')
+
+
+def test_ed25519_verify_reads_the_pubkey_once(temp_storage_root, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The pubkey file was re-read on every verified event; rotation still works because
+    the cache key includes the file mtime, and forgery still dies."""
+    import pathlib as _pathlib
+
+    from trace_core.audit import signing
+
+    assert signing.active_key_id() == "hmac-v1"
+    key_id = signing.init_key("cache-test")
+    data = b"forensic bytes"
+    _, signature = signing.sign_bytes(data)
+
+    reads = 0
+    real_read_text = _pathlib.Path.read_text
+
+    def counting(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal reads
+        if str(self).endswith(".pub"):
+            reads += 1
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(_pathlib.Path, "read_text", counting)
+    assert signing.verify_bytes(key_id, data, signature) is True
+    assert signing.verify_bytes(key_id, data, signature) is True
+    assert reads == 1, f"pubkey re-read per verify: {reads}"
+
+    second = signing.rotate_keys("cache-test-two")
+    _, signature2 = signing.sign_bytes(data)
+    assert signing.verify_bytes(second, data, signature2) is True
+    assert signing.verify_bytes(key_id, data, signature) is True
+    assert signing.verify_bytes(key_id, data, "00" * 64) is False

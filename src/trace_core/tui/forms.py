@@ -4,12 +4,15 @@ Every modal backs out on Esc with cancel semantics. Scrollable bodies keep butto
 reachable on short terminals.
 """
 
+from collections.abc import Callable
+
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Static
+from textual.timer import Timer
+from textual.widgets import Button, Input, Label, ListView, Static
 
 ESCAPES: list[Binding | tuple[str, str] | tuple[str, str, str]] = [("escape", "dismiss_cancel", "Back")]
 
@@ -278,3 +281,100 @@ class YesNoModal(_BaseModal):
     @on(Button.Pressed, "#no")
     def _no(self) -> None:
         self.dismiss(False)
+
+
+class CasePicker(_BaseModal):
+    """Searchable chooser over a caller-supplied loader. Returns the chosen key, or None.
+
+    A text box was rejected: an operator standing at a bagged drive knows the case, not
+    its number, and the number is a lookup. Rows carry the title so the choice is made
+    by name. Composed from the ListView + Input the Cases tab already uses.
+    """
+
+    CSS = """
+    CasePicker { align: center middle; }
+    #case-pick-box { width: 70; height: auto; border: round $panel 50%; background: $surface; padding: 1 2; }
+    #case-pick-box #case-pick-title { color: $accent; text-style: bold; }
+    #case-pick-box Input { border: round $panel; height: 3; background: transparent; }
+    #case-pick-box Input:focus { background: transparent; background-tint: transparent; }
+    #case-pick-filter { margin-bottom: 1; }
+    #case-pick-list { height: 14; background: transparent; scrollbar-size-vertical: 1; }
+    #case-pick-list > ListItem { background: transparent; }
+    #case-pick-list > ListItem.-highlight { background: $surface-active; }
+    #case-pick-empty { color: $text-muted; height: 1; }
+    """
+
+    def __init__(self, load: Callable[[str], list[tuple[str, str]]], title: str = "Choose an item") -> None:
+        super().__init__()
+        self._load = load
+        self._title = title
+        self._rows: list[tuple[str, str]] = []
+        self._pending = ""
+        self._search_timer: Timer | None = None
+
+    def compose(self) -> ComposeResult:
+        from textual.widgets import Input, ListView
+
+        with Vertical(id="case-pick-box"):
+            yield Label(self._title, id="case-pick-title")
+            yield Input(placeholder="Filter cases", id="case-pick-filter")
+            yield ListView(id="case-pick-list")
+            yield Static("", id="case-pick-empty")
+
+    def on_mount(self) -> None:
+        self._rebuild("")
+        self.query_one("#case-pick-filter", Input).focus()
+
+    def _rebuild(self, term: str) -> None:
+        from textual.widgets import ListItem, ListView
+
+        try:
+            self._rows = self._load(term.strip())
+        except Exception as exc:  # boundary: a failed lookup must not kill the modal
+            self._rows = []
+            self.query_one("#case-pick-empty", Static).update(f"  {exc}")
+            return
+        listing = self.query_one("#case-pick-list", ListView)
+        listing.clear()
+        for number, title in self._rows:
+            listing.append(ListItem(Label(f"{number}  {title}".rstrip())))
+        listing.index = 0 if self._rows else None
+        self.query_one("#case-pick-empty", Static).update("" if self._rows else "  no case matches")
+
+    @on(Input.Changed, "#case-pick-filter")
+    def _filtered(self, event: Input.Changed) -> None:
+        self._pending = event.value
+        if self._search_timer is not None:
+            self._search_timer.stop()
+        self._search_timer = self.set_timer(0.25, self._apply_pending)
+
+    def _apply_pending(self) -> None:
+        self._rebuild(self._pending)
+
+    def _flush_pending(self) -> None:
+        if self._search_timer is not None:
+            self._search_timer.stop()
+            self._search_timer = None
+            self._rebuild(self._pending)
+
+    @on(Input.Submitted, "#case-pick-filter")
+    def _submitted(self, event: Input.Submitted) -> None:
+        self._flush_pending()
+        if self._rows:
+            self.dismiss(self._rows[0][0])
+
+    @on(ListView.Selected, "#case-pick-list")
+    def _chosen(self, event: ListView.Selected) -> None:
+        self._flush_pending()
+        if event.list_view.index is not None and 0 <= event.list_view.index < len(self._rows):
+            self.dismiss(self._rows[event.list_view.index][0])
+
+    def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
+        """Hand the first Down to the list, then let the list own the arrow keys.
+
+        Stopping every "down" swallowed the event before ListView could move its cursor,
+        so the list could be focused but never traversed.
+        """
+        if event.key == "down" and self.query_one("#case-pick-filter", Input).has_focus:
+            self.query_one("#case-pick-list", ListView).focus()
+            event.stop()

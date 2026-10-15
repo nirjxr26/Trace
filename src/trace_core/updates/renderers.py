@@ -1,9 +1,8 @@
-import time
-
 from rich.live import Live
-from rich.text import Text
+from thothspinner.rich import ThothSpinner
 
 from trace_core.core.ui.renderers import closing_block, console, safe_text, step_line
+from trace_core.core.ui.theme import THEME_HEX
 from trace_core.updates.domain import UpdateFailureStage
 from trace_core.updates.dto import UpdateResultDto
 from trace_core.updates.manifest import ReleaseManifest
@@ -13,15 +12,15 @@ from trace_core.updates.stages import (
     Stage,
     StageStatus,
     format_mb,
-    format_speed,
-    stage_glyph,
-    stage_is_spinning,
     stage_label,
 )
 
-BAR_WIDTH = 28
-DRAW_INTERVAL = 0.25
+DIM = THEME_HEX["muted"]
+SHIMMER_HIGHLIGHT = THEME_HEX["title"]
+SHIMMER_WIDTH = 7
+SHIMMER_SPEED = 1.0
 RESTART_REQUIRED_MESSAGE = "Trace will restart to complete this update."
+UPDATE_INSTALLED_MESSAGE = "Update installed successfully. Restart to view changes."
 
 _FAILED_STAGE = {
     "staging": Stage.VERIFY,
@@ -125,53 +124,66 @@ class UpdateProgressDisplay(ProgressCallback):
         self.statuses = {stage: StageStatus.PENDING for stage in STAGE_ORDER}
         self.download_total = 0
         self.download_read = 0
-        self.download_started = 0.0
         self.tty = console.is_terminal
         self._live: Live | None = None
-        self._last_draw = 0.0
-        self._spin = 0
-        self._active_since: float | None = None
+        self._spinner: ThothSpinner | None = None
 
     def begin_update(self) -> None:
         console.print("")
         # product/target/current come from the (signature-verified) manifest, but a
         # verified manifest still controls these strings — escape before markup.
-        console.print(f"Updating {safe_text(self.product)} to v{safe_text(self.target)}")
+        console.print(f"Updating {safe_text(self.product)}")
         console.print("")
-        if self.tty:
-            # transient=True erases the live region on stop, so the single final frame
-            # printed by finish() is the only copy. transient=False left Rich's own copy
-            # on screen and printed a second one over it.
-            self._live = Live(self._frame(), console=console, transient=True, refresh_per_second=8)
-            self._live.start()
+        if not self.tty:
+            return
+        self._spinner = ThothSpinner(
+            spinner_style="npm_dots",
+            message_text=f"Installing {safe_text(self.product)} v{safe_text(self.target)}",
+            message_shimmer=True,
+        )
+        self._spinner.set_shimmer_direction(direction="left-to-right")
+        # The hint advertises an esc-to-cancel this CLI does not implement.
+        self._spinner.get_component("hint").visible = False
+        self._spinner.get_component("timer").visible = False
+        self._spinner.get_component("progress").visible = False
+        # The widget ships an amber highlight that is not a colour this product uses. The line
+        # reads dim with a brighter band travelling across it, both from the shared theme
+        # so the CLI cannot drift away from the TUI.
+        message = self._spinner.get_component("message")
+        message.color = DIM
+        message.shimmer_light_color = SHIMMER_HIGHLIGHT
+        message.shimmer_width = SHIMMER_WIDTH
+        message.shimmer_speed = SHIMMER_SPEED
+        self._spinner.get_component("spinner").color = DIM
+        # message_text only seeds a rotating list the component then cycles through on
+        # its own, so the line has to be pinned or it drifts to unrelated text.
+        self._spinner.set_message_pinned(text=f"Installing {safe_text(self.product)} v{safe_text(self.target)}")
+        # transient=True erases the live region on stop, so the closing block is the
+        # only surviving copy and nothing is printed twice.
+        self._live = Live(self._spinner, console=console, transient=True, refresh_per_second=12)
+        self._live.start()
+        self._spinner.start()
 
     def begin_download(self, total: int) -> None:
         self.download_total = total
         self.download_read = 0
-        self.download_started = time.monotonic()
         self.statuses[Stage.DOWNLOAD] = StageStatus.ACTIVE
-        self._active_since = self.download_started
-        self._draw(force=True)
 
     def on_bytes(self, read: int, total: int) -> None:
         self.download_read = read
         self.download_total = total
-        now = time.monotonic()
-        if now - self._last_draw >= DRAW_INTERVAL:
-            self._draw()
 
     def on_stage(self, stage: Stage, status: StageStatus) -> None:
         self.statuses[stage] = status
-        if status is StageStatus.ACTIVE:
-            self._active_since = time.monotonic()
-        elif status is not StageStatus.PENDING:
-            self._active_since = None
         if not self.tty and status is not StageStatus.PENDING:
             label = stage_label(stage)
             if stage is Stage.DOWNLOAD and self.download_total > 0:
                 label = f"{label} — {format_mb(self.download_read)} of {format_mb(self.download_total)}"
             console.print(step_line(status, label))
-        self._draw(force=True)
+
+    def _show_stage(self, stage: Stage) -> None:
+        if self._spinner is not None:
+            self._spinner.set_message_pinned(text=f"Installing {safe_text(self.product)} v{safe_text(self.target)}")
 
     def finish(self, dto: UpdateResultDto, current: str) -> None:
         # `current` is the version captured before the update ran. After the pointer flips,
@@ -189,11 +201,10 @@ class UpdateProgressDisplay(ProgressCallback):
             for stage in STAGE_ORDER:
                 self.statuses[stage] = StageStatus.DONE
             self._stop()
-            self._print_final_frame()
             closing_block(
                 "✓",
-                f"Trace updated to v{safe_text(dto.to_version)}",
-                "Run `trace case list` to resume work.",
+                UPDATE_INSTALLED_MESSAGE,
+                token="title",
             )
             return
         if dto.rollback:
@@ -201,14 +212,13 @@ class UpdateProgressDisplay(ProgressCallback):
             self.statuses[Stage.VERIFY] = StageStatus.DONE
             self.statuses[Stage.INSTALL] = StageStatus.FAILED
             self._stop()
-            self._print_final_frame()
             closing_block("▲", "The update was rolled back.", version_note, token="warning")
             return
         failed_stage = _FAILED_STAGE.get(str(dto.failure_stage or ""))
         if failed_stage is not None:
             self.statuses[failed_stage] = StageStatus.FAILED
         self._stop()
-        self._print_final_frame()
+        self._print_failed_stages()
         closing_block("✕", "Update failed", None, token="danger")
         # Plain string arg, not an f-string: Rich only interprets markup in the
         # format string, but escape anyway so a crafted reason can never render as markup.
@@ -221,48 +231,20 @@ class UpdateProgressDisplay(ProgressCallback):
         )
         console.print("")
 
-    def _print_final_frame(self) -> None:
-        """The one surviving copy of the step block. Live is transient, so it has already
-        erased itself; printing here is what leaves the finished block on screen."""
-        if any(status is not StageStatus.PENDING for status in self.statuses.values()):
-            console.print(self._frame())
-            console.print("")
-
-    def _frame(self) -> Text:
-        body = Text()
-        if self.statuses[Stage.DOWNLOAD] == StageStatus.ACTIVE and self.download_total > 0:
-            filled = min(BAR_WIDTH, self.download_read * BAR_WIDTH // self.download_total)
-            body.append("Downloading\n")
-            body.append("[" + "█" * filled + "░" * (BAR_WIDTH - filled) + "]", style="green")
-            body.append(f" {self.download_read * 100 // self.download_total}%\n")
-            speed, eta = format_speed(self.download_read, self.download_total, time.monotonic() - self.download_started)
-            body.append(f"{format_mb(self.download_read)} / {format_mb(self.download_total)}   {speed}   ETA {eta}\n")
-            body.append("\n")
-        for stage in STAGE_ORDER:
-            status = self.statuses[stage]
-            body.append_text(step_line(status, stage_label(stage), glyph=stage_glyph(status, self._spin)))
-            body.append("\n")
-        return body
-
-    def _draw(self, force: bool = False) -> None:
-        if not self.tty or self._live is None:
+    def _print_failed_stages(self) -> None:
+        """Which stage failed was shown by the stage block the spinner replaced."""
+        failed = [stage for stage in STAGE_ORDER if self.statuses[stage] is StageStatus.FAILED]
+        if not failed:
             return
-        now = time.monotonic()
-        if not force and now - self._last_draw < DRAW_INTERVAL:
-            return
-        self._last_draw = now
-        # The spinner advances once per drawn frame, and only once the running step has
-        # been going long enough to be worth animating. Two rows can never share a frame,
-        # one frame never advances twice, and a step that finishes immediately never
-        # shows a frame of motion that reads as a flicker.
-        if stage_is_spinning(self._active_since, now):
-            self._spin += 1
-        self._live.update(self._frame())
+        for stage in failed:
+            console.print(step_line(StageStatus.FAILED, stage_label(stage)))
+        console.print("")
 
     def _stop(self) -> None:
         if self._live is not None:
             self._live.stop()
             self._live = None
+        self._spinner = None
 
     def close(self) -> None:
         self._stop()

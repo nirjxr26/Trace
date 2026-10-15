@@ -7,7 +7,6 @@ from trace_core.updates.domain import UpdateState
 from trace_core.updates.dto import UpdateResultDto
 from trace_core.updates.stages import (
     SPIN_DELAY_SECONDS,
-    SPIN_FRAMES,
     STAGE_ORDER,
     Stage,
     StageStatus,
@@ -141,19 +140,16 @@ def test_install_summary_hides_trust_details(capsys, signed_release):
 
 
 def test_finish_success_frame(capsys):
-    from trace_core.updates.renderers import UpdateProgressDisplay
+    from trace_core.updates.renderers import UPDATE_INSTALLED_MESSAGE, UpdateProgressDisplay
 
     dto = UpdateResultDto(from_version="0.2.3", to_version="0.2.4", result="SUCCESS")
     display = UpdateProgressDisplay(current="0.2.3", target="0.2.4")
     display.finish(dto, "0.2.3")
     out = capsys.readouterr().out
-    # The target version rides on the closing line; it used to be a second line of its
-    # own, so the success path stated the outcome twice.
-    assert "Trace updated to v0.2.4" in out
-    assert "Trace updated successfully." not in out
-    assert out.count("Verifying") == 1
-    assert "  ✓ Trace updated to v0.2.4" in out
-    assert "  Run `trace case list` to resume work." in out
+    assert "✓ Update installed successfully. Restart to view changes." in out
+    assert "Trace updated to v0.2.4" not in out
+    assert out.count("Verifying") == 0
+    assert UPDATE_INSTALLED_MESSAGE == "Update installed successfully. Restart to view changes."
 
 
 def test_finish_rolled_back_frame(capsys):
@@ -232,70 +228,115 @@ def test_an_unreadable_pointer_does_not_claim_the_old_version_is_still_active(ca
     assert "Still on" not in out, out
 
 
-def test_frame_checklist_states():
+def test_stage_state_is_tracked_independently_of_rendering():
     from trace_core.updates.renderers import UpdateProgressDisplay
 
     display = UpdateProgressDisplay(current="0.2.3", target="0.2.4")
     display.on_stage(Stage.VERIFY, StageStatus.DONE)
     display.on_stage(Stage.DOWNLOAD, StageStatus.ACTIVE)
-    frame = display._frame()
-    lines = frame.plain.splitlines()
-    assert lines == [
-        "│ ● Verifying",
-        f"│ {SPIN_FRAMES[0]} Downloading",
-        "│ ▲ Installing",
-        "│ ▲ Finishing setup",
-    ]
+    assert display.statuses[Stage.VERIFY] is StageStatus.DONE
+    assert display.statuses[Stage.DOWNLOAD] is StageStatus.ACTIVE
+    assert display.statuses[Stage.INSTALL] is StageStatus.PENDING
 
 
-def test_frame_is_pure_and_draw_owns_the_spinner():
-    """Building a frame must not change it. The spinner advances in _draw, once per
-    drawn frame, never as a side effect of rendering.
-
-    It used to advance inside the row loop, so rendering the same state twice returned
-    two different glyphs and calling _frame() twice desynced the animation from the screen.
-    """
+def _tty_display():
     from trace_core.updates.renderers import UpdateProgressDisplay
 
     display = UpdateProgressDisplay(current="0.2.3", target="0.2.4")
-    display.on_stage(Stage.DOWNLOAD, StageStatus.ACTIVE)
-    first = display._frame().plain
-    second = display._frame().plain
+    display.tty = True
+    display.begin_update()
+    return display
+
+
+def _rendered(display) -> str:
+    """What the spinner actually paints, rather than its private fields.
+
+    The shimmer styles each character separately, so the raw output interleaves escape
+    codes between letters; they are stripped here to recover the text a user reads.
+    """
+    import io
+    import re
+
+    from rich.console import Console
+
+    buffer = io.StringIO()
+    console = Console(file=buffer, width=100, force_terminal=True)
+    console.print(display._spinner)
+    return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", buffer.getvalue())
+
+
+def test_the_spinner_names_the_product_and_target_and_holds_still_across_stages():
+    """One line for the whole run. It previously retexted itself per stage, so the
+    display flickered between Downloading / Verifying / Installing."""
+    display = _tty_display()
+    display.on_stage(Stage.VERIFY, StageStatus.ACTIVE)
+    first = _rendered(display)
+    display.on_stage(Stage.INSTALL, StageStatus.ACTIVE)
+    second = _rendered(display)
+    assert "Installing Trace v0.2.4" in first
     assert first == second
-    assert SPIN_FRAMES[0] in first
-
-    display.tty = True
-    before = display._spin
-    display._frame()
-    assert display._spin == before
+    for label in ("Downloading", "Verifying", "Finishing setup"):
+        assert label not in first, f"{label} leaked into the live line"
+    display.close()
 
 
-def test_spinner_waits_until_the_step_has_been_running():
-    """A step that finishes immediately must never show a frame of motion.
+def test_the_spinner_advertises_no_hint_this_cli_cannot_honour():
+    """The widget's default hint offers esc-to-cancel. Nothing in this CLI handles that
+    key, so the line would promise a way out that does nothing."""
+    display = _tty_display()
+    painted = _rendered(display)
+    assert "esc to" not in painted
+    assert "esc to cancel" not in painted
+    display.close()
 
-    Animating from the first frame meant a step completing in a few tens of milliseconds
-    flashed a spinner for a single frame, which reads as a glitch rather than as progress.
-    """
+
+def test_the_spinner_is_pinned_so_the_stage_cannot_drift_to_other_text():
+    """message_text only seeds a rotating word list the widget cycles through on its own,
+    which showed unrelated text in place of the line."""
+    import time
+
+    display = _tty_display()
+    display.on_stage(Stage.DOWNLOAD, StageStatus.ACTIVE)
+    time.sleep(0.2)
+    painted = _rendered(display)
+    assert "Installing Trace v0.2.4" in painted
+    for foreign in ("Decrypting", "Compiling", "Fetching", "Analyzing"):
+        assert foreign not in painted, f"line drifted to {foreign!r}"
+    display.close()
+
+
+def test_the_spinner_uses_theme_colours_and_not_the_widget_default():
+    """The widget ships an amber highlight; this product has no amber in its palette."""
+    from trace_core.updates import renderers
+
+    assert renderers.DIM == renderers.THEME_HEX["muted"]
+    assert renderers.SHIMMER_HIGHLIGHT == renderers.THEME_HEX["title"]
+
+    display = _tty_display()
+    message = display._spinner.get_component("message")
+    assert message.color == renderers.DIM
+    assert message.shimmer_light_color == renderers.SHIMMER_HIGHLIGHT
+    assert message.shimmer_light_color != "#FFA500"
+    assert message.shimmer_width == renderers.SHIMMER_WIDTH
+    assert message.shimmer_speed == renderers.SHIMMER_SPEED
+    assert renderers.SHIMMER_SPEED >= 1.0, "the sweep was slowed down and asked to stay fast"
+    assert display._spinner.get_component("spinner").color == renderers.DIM
+    display.close()
+
+
+def test_a_non_tty_console_prints_one_line_per_stage(capsys):
     from trace_core.updates.renderers import UpdateProgressDisplay
 
     display = UpdateProgressDisplay(current="0.2.3", target="0.2.4")
-    display.on_stage(Stage.DOWNLOAD, StageStatus.ACTIVE)
-    display.tty = True
-
-    class _Sink:
-        def update(self, _frame):  # noqa: ANN001, ANN202
-            return None
-
-    display._live = _Sink()
-    for _ in range(4):
-        display._draw(force=True)
-    assert display._spin == 0
-    assert display._frame().plain.splitlines()[1] == f"│ {SPIN_FRAMES[0]} Downloading"
-
-    display._active_since -= SPIN_DELAY_SECONDS + 0.01
-    display._draw(force=True)
-    assert display._spin == 1
-    assert display._frame().plain.splitlines()[1] == f"│ {SPIN_FRAMES[1]} Downloading"
+    display.tty = False
+    display.begin_update()
+    display.begin_download(2048)
+    display.on_bytes(2048, 2048)
+    display.on_stage(Stage.DOWNLOAD, StageStatus.DONE)
+    display.on_stage(Stage.VERIFY, StageStatus.ACTIVE)
+    out = capsys.readouterr().out
+    assert "Downloading" in out
+    assert "Verifying" in out
 
 
 def test_stage_is_spinning_bounds():

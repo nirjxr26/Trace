@@ -5,6 +5,7 @@ from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.events import Resize
 from textual.widgets import DataTable, Input, Rule, Static
 
 from trace_core.audit.dto import AuditEventDto, AuditEventSummaryDto, AuditFilterDto
@@ -47,9 +48,12 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         self._manager = session_manager
         self._scope: str | None = None
         self._exhausted = False
+        self._capped = False
         self._total = 0
         self._detail_seq: int | None = None
         self._detail: AuditEventDto | None = None
+        self._observed_cache: dict | None = None
+        self._detail_width: int | None = None
 
     @property
     def _svc(self) -> AuditService:
@@ -62,9 +66,8 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         table.on_scrolled = self._extend
         with Horizontal(id="audit-main"):
             with Vertical(id="audit-left"):
-                yield Input(placeholder="Search actor, action, case, seq...", id="audit-search")
+                yield Input(placeholder="Search actor, action, case, device, seq...", id="audit-search")
                 yield Static("", id="audit-scope")
-                yield Rule()
                 yield Static("", id=AUDIT_HEADER_ID, classes="table-head")
                 yield Rule()
                 yield table
@@ -96,6 +99,7 @@ class AuditView(TablePane[AuditEventSummaryDto]):
             self.app.notify(str(exc), severity="error")
             return
         self._exhausted = len(rows) < PAGE_ROWS
+        self._capped = False
         self.fill_table(rows, [str(e.seq) for e in rows])
         self._total = self._total_ledger()
         self._update_header()
@@ -116,6 +120,14 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         if not (at_last_row or near_end):
             return
         oldest = self._items[-1].seq
+        if len(self._items) >= PAGE_ROWS * 5:
+            if not self._capped:
+                self._capped = True
+                self.app.notify(
+                    f"Showing newest {PAGE_ROWS * 5} — refine search or export for older records.",
+                    severity="warning",
+                )
+            return
         try:
             rows = self._window(oldest)
         except Exception as exc:
@@ -139,6 +151,47 @@ class AuditView(TablePane[AuditEventSummaryDto]):
 
         prefix = SELECT_PREFIX if selected else "  "
         return [f"{prefix}{event.seq}", short_action_label(event.action)]
+
+    def _append_device(self, body, details, rule: Text) -> None:  # type: ignore[no-untyped-def]
+        """DEVICE section for an event about a device.
+
+        A DEVICE_LINKED row names the case but not the drive, so selecting one showed a
+        link with nothing on the other end of it. The node lives in the payload details;
+        the model and capacity come from the newest observation for that node.
+        """
+        node = str(details.get("node") or "")
+        if not node:
+            return
+        from trace_core.devices.renderers import device_heading
+
+        record = self._observed().get(node)
+        body.append(rule)
+        body.append("\nDevice Linked\n", style=THEME_TOKENS["accent"])
+        heading = device_heading(node, record.model if record else None, record.capacity_bytes if record else None)
+        body.append(f"  {sanitize_terminal(heading)}\n")
+        label = details.get("label")
+        if label:
+            body.append(f"  {'Label':<10}", style="dim")
+            body.append(f"{sanitize_terminal(str(label))}\n")
+
+    def _observed(self):  # type: ignore[no-untyped-def]
+        """Newest observation per node, fetched once per session for this view."""
+        if self._observed_cache is None:
+            from trace_core.devices.helpers import do_observed_devices
+
+            try:
+                self._observed_cache = do_observed_devices(self._manager)
+            except Exception:
+                self._observed_cache = {}
+        return self._observed_cache
+
+    def on_resize(self, event: Resize) -> None:
+        """Dividers are baked for one width; rebuild them when the width moves."""
+        width = self.query_one("#audit-right", DossierScroll).content_region.width
+        if width == self._detail_width:
+            return
+        self._detail_width = width
+        self.render_detail()
 
     def render_detail(self) -> None:
         from trace_core.audit.verifier import verify_event
@@ -171,18 +224,19 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         body.append(f"#{e.seq}  {action_title(e.action.value)}\n", style=THEME_TOKENS["accent"])
         body.append(rule)
         body.append("\n")
-        body.append("Case    ", style="dim")
+        body.append("Case      ", style="dim")
         body.append(f"{sanitize_terminal(subject_case_label(e.subject_case_number))}\n")
-        body.append("Actor   ", style="dim")
+        body.append("Actor     ", style="dim")
         body.append(f"{sanitize_terminal(e.actor)}\n")
-        body.append("When    ", style="dim")
+        body.append("Timestamp ", style="dim")
         body.append(f"{format_india_datetime(e.ts)}\n")
-        body.append("Event   ", style="dim")
+        body.append("Event     ", style="dim")
         body.append(f"{e.action.value}\n")
         reason = (details.get("reason") or "").strip()
         if reason:
-            body.append("Reason  ", style="dim")
+            body.append("Reason    ", style="dim")
             body.append(f"{sanitize_terminal(reason)}\n")
+        self._append_device(body, details, rule)
         changed = details.get("changed", [])
         if changed:
             from trace_core.audit.renderers import format_change_value

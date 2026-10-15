@@ -4234,3 +4234,787 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
   containment check fails both new tests; with it, all 16 release-manifest tests pass.
   Replayed the exact command `release.yml` runs on a tag push, from a scratch checkout
   with a real `dist/`: returncode 0, floor and notes both read from the committed policy.
+
+## 2026-10-10
+- Summary: added thothspinner 1.2.6 as a project dependency for the installer, updater,
+  and TUI progress UI. Approved by owner. Its two requirements (rich>=13,
+  textual>=6.1.0) were already pinned, so no transitive dependency was introduced.
+- requirements.txt updated in the hash-pinned format with both the wheel and sdist
+  digests from PyPI, and the `# via` blocks for rich and textual amended to name
+  thothspinner alongside trace, matching the existing uv-export convention.
+- Verified by installing exactly as CI does
+  (`pip install --require-hashes --only-binary :all: -r requirements.txt`): installed
+  clean, and both thothspinner.rich and thothspinner.textual import from the project
+  venv rather than only from a global install.
+
+## 2026-10-10
+- Summary: CLI update progress now renders through thothspinner instead of a hand-painted
+  Rich Live frame. The existing ProgressCallback events drive it, so no parallel progress
+  system was introduced and no stage, callback, or command contract changed.
+- What was removed: the hand-rolled frame renderer, its 28-column download bar with
+  speed/ETA, the manual glyph spin counter, and the spin-delay guard against flicker.
+  Those are the widget's responsibility now. The completed-stage checklist is gone from
+  the interactive path; a failed stage is still named on its own line, which is the one
+  part of that block that carried diagnostic value.
+- Success line is now "Update installed successfully. Restart to view changes." per spec,
+  replacing "Trace updated to v<version>" plus a case-list hint.
+- Non-TTY output is unchanged: every stage still prints its own step_line, including the
+  download byte counts, so pipes and CI see the same progress contract as before.
+- Two API traps found by inspecting the installed package rather than trusting the
+  constructor. `message_text` only seeds a rotating word list the widget then cycles
+  through on its own, which put unrelated text in place of the stage; `set_message_pinned`
+  is the correct call. `hint_text=""` is ignored and the widget falls back to its default
+  "esc to cancel", advertising a key this CLI does not handle, so the hint and timer
+  components are hidden. Both would have shipped as silent presentation defects.
+- Honest limit on falsification: removing the pin could not be shown to reintroduce
+  visible drift, because `set_message` replaces the word list with the single supplied
+  word and therefore also appears pinned. `set_message_pinned` is kept because it is the
+  documented way to state a non-rotating line, not because a drift test caught its removal.
+- Files: `src/trace_core/updates/renderers.py`, `tests/updates/test_update_progress.py`,
+  `tests/updates/test_install_confirm.py`, `pyproject.toml`, `requirements.txt`,
+  `changelog/nirjxr26/changelog.md`.
+- Verification: 25 tests across the two affected files pass. Three tests that exercised
+  the removed frame renderer were replaced with five covering the current design, so the
+  coverage is not simply deleted. ruff and mypy clean.
+
+## 2026-10-10
+- Summary: the CLI update line was reduced to a single fixed status line and recoloured.
+  It previously retexted itself per stage, so the display cycled through
+  Downloading / Verifying / Installing while running, and carried a 28-column download bar
+  with a speed and ETA readout.
+- The line now reads "Updating Trace" as a title and one live line beneath it,
+  "Installing Trace v<target>", held steady for the whole run. The version stays on the
+  live line and is dropped from the title so it is stated once.
+- Colour: dim base and glyph (#737C84, theme `muted`) with a 7-character band of
+  #F2F4F5 (theme `title`) sweeping left to right at the widget's full speed. All values
+  are read from THEME_HEX rather than hardcoded, so the CLI cannot drift from the TUI
+  palette. The widget's own amber highlight (#FFA500) is not a colour this product uses
+  and was replaced.
+- The success line no longer prints in green. `closing_block` defaults to the success
+  token; it now takes `title`, the same white as the shimmer highlight.
+- Non-TTY output is untouched and still prints one line per stage including download
+  byte counts, so pipes and CI keep the full progress trail.
+- A test asserted `stage_label(Stage.INSTALL)` does not appear in the live line, but that
+  label is literally the word "Installing" the line uses, so the assertion contradicted
+  itself. Narrowed to the labels that are genuinely not part of the line.
+- Files: `src/trace_core/updates/renderers.py`, `tests/updates/test_update_progress.py`,
+  `changelog/nirjxr26/changelog.md`.
+- Verification: 26 tests across the affected files pass; ruff and mypy clean. Measured
+  from the rendered stream: the lit band grows 0 to 7 characters and travels at 10
+  characters per second, and only #737C84 and #F2F4F5 appear.
+
+## 2026-10-10
+- Summary: install.sh could not install Trace on a fresh machine. `trace_run_live` began
+  with `shift`, which discarded the command that every call site passes as its first
+  argument, so the installer executed `-m` instead of the interpreter and `curl` instead of
+  curl. This is present in HEAD rather than introduced here. It is invisible to inspection
+  and to the text-based contract tests, and only surfaced by executing the script, which is
+  why the previous session's handoff flagged install.sh as unverified.
+- Both installers now paint the same single animated line: dim glyph and base in #737C84
+  with a 7-character band of #F2F4F5 sweeping left to right. install.sh previously still
+  drew the retired four-step checklist, so cross-platform equivalence was violated. The
+  success block, the per-stage non-TTY lines and the live line are now identical across
+  both scripts, as are the verbose labels: install.ps1 was missing [5/6] and install.sh was
+  missing [2/6].
+- Two environmental failure modes now recover instead of aborting. A virtual environment
+  created without pip is detected with `pip --version` and repaired with
+  `ensurepip --upgrade`, rather than dying on "No module named pip". A failed pip
+  self-upgrade is now non-fatal, because it needs a package index that the pip already
+  bundled in the environment does not. Neither touches verification: --require-hashes, the
+  pinned release digest, cosign and the bootstrap-anchor filter are unchanged.
+- The animation lagged, and the cause was measured rather than guessed. Each frame was paced
+  by an external `sleep`, and spawning one costs far more than the frame itself where
+  process creation is slow: 287ms per frame on Git Bash against the 120ms actually being
+  waited, roughly three frames a second. Where stdin is a terminal the tick now uses the
+  shell's own `read -t`, which waits the interval without a subprocess. It is gated on
+  stdin being a terminal, because on a pipe or /dev/null `read` returns at EOF instead of
+  timing out and the loop would spin with no delay at all. Measured with stdin not a
+  terminal: 9 frames over a 2s job, so no spin. dash has no fractional `read -t` and keeps
+  the sleep fallback.
+- The shimmer jumped back to the left four times per run, because the frame counter was
+  reset at the start of every phase while the live line itself never changes. It now
+  advances continuously, so the animation reads as one motion instead of four.
+- A failure message was printed straight onto the spinner line, producing
+  "Installing Trace v0.3.1Install failed at 'dependencies'". install.sh now releases the
+  line first, as install.ps1 already did.
+- The install.sh animation emitted its colours as literal text. `printf %s` does not
+  interpret backslash escapes, only the format string does and only through `%b`, so every
+  `\033[38;2;...m` reached the terminal as printable characters and the spinner rendered as
+  noise rather than colour. The retired renderer used `printf %b` and the rewrite lost it.
+  Confirmed by dumping the raw bytes: the frame now begins `0d 1b 5b 32 4b` (CR, ESC[2K)
+  followed by real SGR sequences. install.ps1 was never affected, because PowerShell
+  interpolates `[char]27` into the string rather than relying on printf.
+- The editable install is now retried three times in both installers. Windows refuses to
+  rewrite an executable that is in use, so an installer run while Trace is running fails
+  with a sharing violation on .venv\Scripts\trace.exe -- and pip has already uninstalled the
+  previous editable install by that point, leaving the host with no package at all. This
+  reproduced twice during this work. The hash-verified install is deliberately not retried:
+  a refusal there must stay loud.
+- "Fail-safe" was deliberately not extended to the update module. That module already fails
+  closed: transient URL errors retry, a failed health check or a failed activation rolls
+  back, self-heal repairs trust and state, and a refused signature is never retried. The
+  one gap found, that self-heal only runs on `update check` and not on `update install`,
+  was left alone on purpose: self-heal deletes CORRUPT state files including
+  `update-active.json`, which is the durable migration-ownership record, so running it on
+  the install path could clear the owner of an in-flight migration and admit a second one.
+- Dead state removed from install.ps1: DoneGlyph, PendGlyph, NextGlyph, FailGlyph,
+  StepStates, PhaseTotal, PhaseDone, Fail-Step, Stop-InstallSpinner, the Step-TracePhase
+  wrapper (a pass-through to Start-Step), a duplicated TraceExe and a duplicated
+  Done-Step 2. Invoke-LiveCommand no longer marks an entire step done after each command it
+  runs, which printed "[OK] Installing" three times per install.
+- Dead state removed from install.sh: the same glyph and phase variables, the four-step
+  renderer, the cursor hide/show escapes whose counterpart no longer existed, and the
+  unused trace_to.
+- install.ps1 now refreshes the process PATH as well as the user PATH when the launcher
+  directory is already registered, so `trace` resolves in the shell that ran the installer.
+- `/.demo/` added to .gitignore. It holds the fabricated case numbers written by
+  scripts/seed_demo.py, which must never be committable or mistaken for evidence.
+- Files: `install.ps1`, `install.sh`, `.gitignore`,
+  `tests/unit/test_installer_contract.py`, `changelog/nirjxr26/changelog.md`.
+- Verification: 1180 passed, 12 skipped; ruff format (209 files), ruff
+  lint and mypy strict (206 files) clean. Both installers were executed as a fresh install
+  into an empty directory and both exited 0 with identical output (install.ps1 27.7s,
+  install.sh 44.6s), each printing "[OK] Installing" once. The pip-less path was executed
+  directly: `venv --without-pip` leaves `pip --version` exiting 1, `ensurepip --upgrade`
+  exits 0, and `pip --version` then exits 0. Twelve tests were added and each was
+  falsified by reverting its fix; the first ensurepip test passed under revert because the
+  log message also contained the word, and was rewritten to assert on the invocation. The
+  interactive path was exercised by extracting the render functions and forcing a tty:
+  ten frames, exactly 7 lit characters per frame, band wrapping at length+7, identical
+  output for identical frame index, and a raw byte dump confirming CR, ESC[2K and real SGR
+  escapes rather than their literal text. install.sh was run under Git Bash on Windows, so
+  its POSIX-only paths are unexercised.
+
+## 2026-10-10
+- Summary: `trace uninstall` could not remove a remotely installed Trace on Windows. Git
+  marks its pack files read-only, Windows refuses to delete a read-only file, and
+  `shutil.rmtree` had no handling for it, so the whole `~/.trace/app` tree survived and the
+  uninstaller correctly reported a partial uninstall. Confirmed on the reported host: the
+  three `.git/objects/pack/pack-*.{idx,pack,rev}` files were the only read-only files under
+  the tree, and they were the entire failure.
+- Removal now clears the read-only bit and retries, for directories and for single files,
+  and only for `PermissionError`. Any other error still propagates and is still reported as
+  a partial uninstall. `ignore_errors` remains deliberately unused, because it would hide a
+  partial delete behind a success-looking result. The mode is OR'd with the existing bits so
+  a directory keeps its execute permission on POSIX.
+- Verified by running the reported command on the reported host: exit 0, `~/.trace/app` and
+  the launcher removed, `storage` and `trust` kept as intended without `--purge-data`.
+- Files: `src/trace_core/core/cli/uninstall.py`, `tests/unit/test_shared_helpers.py`,
+  `changelog/nirjxr26/changelog.md`.
+- Verification: two new tests reproduce the failure with a read-only file inside the tree
+  and a read-only single-file target; both fail when the fix is reverted and pass with it.
+  The first attempt at the fix passed an `excinfo` tuple to `onexc`, which receives the
+  exception instance instead, and the new test caught that immediately. The two existing
+  uninstall tests mock `shutil.rmtree` and were widened to accept the `onexc` keyword so they
+  still assert the partial-uninstall contract instead of failing on arity. 33 tests in the
+  file pass; ruff and mypy clean.
+
+## 2026-10-10
+- Summary: the install scripts dropped their spinner, shimmer and per-stage checklist. Both
+  now print one plain line, `Installing Trace v<version>`, and nothing else until it
+  finishes. No indentation, no glyph, no colour, no background process.
+- This was a speed change as much as a cosmetic one. Drawing a frame was cheap (~200us), but
+  install.ps1 ran every command through `Start-Job` purely so the animation had something to
+  poll, and `Start-Job` spawns a whole PowerShell process: measured at 504ms each, across
+  five calls on a fresh install. That background runner is gone, along with the `sleep` per
+  frame (287ms of wall clock on Git Bash against the 120ms it actually waits). Downloads were
+  never slowed by the animation, since they ran concurrently; the cost was process startup
+  and up to one poll tick of latency before completion was noticed.
+- `Invoke-LiveCommand` and `trace_run_live` were deleted and their call sites moved to the
+  existing `Invoke-LoggedCommand` and `trace_run`, so each script has one command runner
+  instead of two. The four-phase step tracker went with them; `--verbose` still shows the
+  underlying command output, which is what the flag is documented to do.
+- install.ps1 is 575 lines and install.sh is 564, against 767 and 763 at the start of this
+  work: 96 insertions and 394 deletions.
+- A guard asserts neither script may reintroduce `Start-Job`, the spin state, the colour
+  escapes or the shimmer functions, and another asserts the installing line is never
+  indented, whether the indent sits inside the string literal or on the statement. All four
+  indent mutations and all three animation mutations were confirmed to fail when applied.
+- `test_install_ps1_enforces_tls12_before_first_webrequest` guarded the TLS floor inside the
+  background job. With no background job, every fetch runs in this process under the floor
+  set at the top of the script, so the test now asserts no `Start-Job` exists instead of
+  looking for a function that no longer does.
+- Files: `install.ps1`, `install.sh`, `tests/unit/test_installer_contract.py`,
+  `tests/unit/test_security_regressions.py`, `changelog/nirjxr26/changelog.md`.
+- Verification: both installers were executed as fresh installs into an empty directory and
+  exited 0 with identical output. `sh -n` and the PowerShell parser clean; ruff and mypy
+  clean. End-to-end wall clock varies by several seconds run to run because it includes pip
+  downloads, so the saving is stated from the measured per-call overhead rather than from
+  the totals.
+
+## 2026-10-10
+- Summary: the TUI can now show the same thothspinner animation as the CLI, during an
+  update. Pressing install in Settings opens the existing confirmation dialog, and
+  confirming opens a progress popup carrying the animation and the current stage.
+- Textual cannot render Rich and does not interpret ANSI escapes, so each frame is taken
+  from the thothspinner component as Segments and rebuilt as Textual Content. Blitting the
+  rendered string would have printed literal escape sequences. Measured at 0.15ms per
+  frame against an 80ms budget, with the glyph cycling all ten frames and the band
+  growing 0 to 7 and recycling.
+- textual 8.2.8 constraints worked around: Content.join raises, and Content.assemble
+  rejects a Content as a part, so a frame is assembled in one call from strings and
+  (text, style) tuples. Band width, speed and highlight colour are imported from the
+  update display rather than restated, so the CLI and the TUI cannot drift apart.
+- The update button is gated on a newer release existing, which left the popup
+  unreachable during development. `TRACE_TUI_DEMO_UPDATE=<version>` reports that version
+  as available and simulates the stage walk; the two checks are five lines and a complete
+  no-op when the variable is unset.
+- The button is gone from the real app. An available update is announced in the Updates
+  panel as "Update is available, press U to update." and U is the only affordance, so the
+  one test covering that card now asserts the button is absent rather than present.
+- The popup carries an esc affordance on the title row. Pressing it dismisses only the
+  popup; the install worker keeps running, and the outcome arrives as a notification. If
+  the popup is still open when the update lands it resolves in place instead, so the
+  outcome is never reported twice.
+- The amber first seen in the popup was thothspinner's default: message.color was never
+  set, so only the shimmer colours were themed. It is now the dim token, matching the CLI.
+- Two defects were introduced and fixed while doing this. The spinner widget was first
+  placed inside TablePane, which silently absorbed six of its methods; ruff's F821 caught
+  it. The demo coroutine used call_from_thread from the app's own event loop, which
+  raises; it calls the handler directly. A completion message was also being set and the
+  popup dismissed in the same tick, so it could never be read.
+- Files: `src/trace_core/tui/widgets.py`, `src/trace_core/tui/forms.py`,
+  `src/trace_core/tui/screens/settings.py`, `changelog/nirjxr26/changelog.md`.
+- Verification: driven against the real SettingsView, not a mock. The demo flag produces
+  the available state and the hint, the real confirmation dialog opens, the real progress
+  popup pushes with the title and esc sharing one row, the glyph and shimmer both animate,
+  the popup resolves in place when left open, and esc mid-update closes it while the
+  worker runs on to a single notification. Gate: 1183 passed, 12 skipped, ruff and mypy
+  clean, 0 failed steps.
+- Not covered: the real install lifecycle behind this popup is untouched and unexercised,
+  and the demo path itself has no test.
+
+## 2026-10-10
+- Summary: Removed the TUI update-installation path entirely. Updating now happens only in
+  the standalone CLI, where the spinner already lives (`UpdateProgressDisplay`,
+  `src/trace_core/updates/commands.py:96`). The Updates section of the settings sidebar now
+  reports `Update available with version: v<version>` followed by the exact command to run,
+  `trace update install --yes`. Rationale: an update replaces the running executable, so
+  driving that from inside the process that is being replaced was structurally wrong - the
+  spinner was decoration over a lifecycle the TUI could not honestly own.
+- Removed: `UpdateProgressModal` (with its `slash_r` restart binding, which was dead -
+  `slash_r` is not a Textual key, so the action could never fire), `_TuiProgress`,
+  `action_install`, `_install_confirmed`, `_install_worker`, `_demo_install`, `_close_progress`,
+  `_progress_dismissed`, `_on_update_stage`, `_update_download`, the `u` binding, and the
+  install state fields (`_installing`, `_install_state`, `_dl_read`, `_dl_total`, `_progress`,
+  `_progress_closed`). `TRACE_TUI_DEMO_UPDATE` went with them; it existed only to feed
+  `_demo_install` and had no other reader.
+- Kept: `ThothSpinner` and its Rich-Segments-to-Textual bridge, which still drive the
+  sidebar `Checking for updates` animation on the `c` key - that is a check, not an
+  install. The `c` binding and `_live_check`/`_check_worker` are untouched.
+- Also corrected: the footer hint advertised `u Install update`, a key that no longer
+  exists; it now reads `c Check updates`. `run_command("updates-install")` no longer calls
+  the deleted action and instead points the user at the CLI.
+- Files: `src/trace_core/tui/screens/settings.py` (561 -> 466 lines),
+  `src/trace_core/tui/forms.py` (325 -> 282 lines), `src/trace_core/tui/app.py`,
+  `tests/updates/test_tui_updates.py`, `changelog/nirjxr26/changelog.md`.
+  Deleted the untracked scratch file `scripts/preview_update_modal.py`, which imported the
+  removed class and would now raise ImportError.
+- Verification: drove the real SettingsView and rendered the sidebar in all four states
+  (available, available+note, current, failed) - the version and the command render, and no
+  stage list or install affordance remains. Confirmed `trace update install --yes` is a real
+  command with a real `--yes`/`-y` flag via CliRunner, so the advertised text is not a
+  guess. New tests were falsified by reintroducing each defect: the old "press U" hint, the
+  `u` binding, the version stripped from the headline, and `TRACE_TUI_DEMO_UPDATE` - all
+  four failed as required, and the file was restored byte-identical afterwards.
+- Out of scope: the CLI update path, the `sources.py` retry policy, and the
+  `UpdateLifecycle` install machinery are untouched by this change.
+
+## 2026-10-10
+- Summary: Three TUI presentation fixes on the Cases tab. (1) The left and right cards of every
+  tab now share one padding. Previously the shared rule set `padding: 0 1` and a second rule
+  overrode only the right-hand panes to `1 2`, so the dossier sat one row and one column further
+  inset than the table beside it. The override is deleted and both cards read from the single
+  rule. (2) The divider between the cases search box and the `Case # / Status` header is gone;
+  it read as a second, unrelated box edge directly under the search field. (3) `Enter Open` is
+  removed from the cases footer hint - it duplicated what the highlighted row already shows, and
+  it was the only word token in that hint that no binding backs up.
+- Files: `src/trace_core/tui/app.py` (CSS padding rule, `TAB_HINTS["cases"]`),
+  `src/trace_core/tui/screens/cases.py` (one `Rule()` removed from `compose`),
+  `tests/unit/test_devices_cli.py`, `changelog/nirjxr26/changelog.md`.
+- Verification: measured the resolved padding on all four tabs in the running app - cases,
+  devices, audit and settings each report left and right as `(1, 2, 1, 2)`, previously
+  `(0, 1, 0, 1)` against `(1, 2, 1, 2)`. Rule counts confirm only cases dropped from two to
+  one; devices, audit and settings keep theirs. Rendered the real Cases screen to confirm the
+  shared inset, the missing divider and the new hint text.
+- Note on coverage: the existing suite passed all three regressions silently. The one hint test
+  only compares single-letter tokens against real bindings, so it cannot see a removed
+  multi-word entry. Three guards were added - shared padding comes from one rule with no
+  right-pane override, no `Rule()` between the search box and the header, and no `Enter Open` in
+  the cases hint. Each was falsified by reintroducing its defect; all three failed, and both
+  source files were restored byte-identical afterwards.
+- Out of scope: `audit` still advertises `Enter Open` in its own hint; that is a separate tab
+  and was not part of this request.
+
+## 2026-10-10
+- Summary: Made the Devices tab readable. A raw Win32 device path is not something an
+  operator reads, and a CLI flag was leaking into the GUI. (1) `\\.\PhysicalDrive0` now
+  displays as `Drive 0` in the list and as the dossier title; case-insensitive, so
+  `PHYSICALDRIVE3` becomes `Drive 3`. (2) `FINGERPRINT` and `WRITE PROTECTION` section
+  heads now carry the accent token, matching `INTEGRITY` on the Cases tab, instead of
+  rendering plain. (3) The `Real HW` row is now `Hardware`, reading `real device - access
+  needs confirming` or `emulated or image-backed`; `--allow-real-hardware` stays in the CLI
+  where it is the correct instruction. The security meaning is unchanged - a real device
+  still gates behind the YesNoModal consent. (4) The Device column is clamped to its
+  declared width through the existing `fit_text` helper, so a long model hint truncates
+  with an ellipsis instead of spilling into the Size column.
+- The raw node is not discarded: it is now shown as a labelled `Node` row, since it is the
+  identifier an operator passes to `trace device inspect <node>`.
+- Files: `src/trace_core/tui/screens/devices.py`, `tests/unit/test_tui_devices.py`,
+  `changelog/nirjxr26/changelog.md`.
+- Verification: drove the real DevicesView and rendered both panes. The list shows
+  `Drive 0`, `Samsung SSD 990 PRO...` and `WD My Passport 2TB...` all clamped to the column;
+  the dossier shows `Drive 0` as the title with `Node`, `Kind`, `Size`, `Model`, `Hardware`
+  beneath. Verified `_display_name` across `PhysicalDrive0/12`, `PHYSICALDRIVE3`, a bare
+  prefix, `/dev/sda`, and a model-hint device. Every cell asserted to be within the column
+  width for both selected and unselected rows.
+- Coverage note: no test asserted any of these strings. Four new tests were added and each
+  was falsified by reintroducing its defect. Two of them were too weak on the first pass -
+  the CLI-flag assertion passed while the flag was restored, because the fixture device is
+  file-backed and so renders the other branch of the ternary; and the colour assertion only
+  checked that some colour existed, which the title already satisfied. Both were rewritten
+  to drive a real-hardware device and to compare the rendered segment against the theme's
+  own accent hex. All four now fail when their defect is reintroduced.
+- Out of scope: the `--allow-real-hardware` flag in the CLI and the service-layer node
+  resolution (`_node_name`, `_pd_key`) are untouched.
+
+## 2026-10-10
+- Summary: Device module brought up to the questions actually being asked of it. Five
+  changes, one migration.
+- Fixes first. `fit_text` used `textwrap.shorten`, which breaks on word boundaries, so any
+  single token wider than the budget - a Windows path, a part number - collapsed to a bare
+  `…` and lost every character. It now falls back to a hard cut. This was a live regression
+  from the column clamp added earlier the same day, and it affected every caller, not only
+  devices. Separately, `NVMe Micron_2400_MTFDKBA512QFM` read as raw adapter output; a new
+  `_readable_model` strips a vendor part number and trailing capacity, so it shows as
+  `NVMe Micron` and `Samsung SSD 990 PRO 2TB` as `Samsung SSD 990 PRO`. A hyphen is treated
+  as joining a real model to its revision, so `WDC WD10EZEX-08W` and `ST1000DM003-1CH162`
+  survive intact. Display only: the raw string is still what `Node`, `Model` and every
+  stored observation carry.
+- Case linkage. Migration `019_device_fingerprints_case_link` adds a nullable
+  `case_number` to `device_fingerprints` plus an index. `trace device inspect <node> --case
+  2026-CR-0001` and `check --case` file an observation under a case; an unknown case is
+  refused before anything is written, because an observation filed under a case that does
+  not exist is evidence nobody can find later. The TUI device dossier lists the cases a
+  device was seen in, and the case dossier lists the devices filed under it, both read from
+  the same column.
+- History and export. `trace device history <serial>` returns prior observations of one
+  identity, newest first - the repository already had `observation_history`, but nothing
+  read it. `trace device export --out devices.jsonl` writes stored observations as JSONL,
+  mirroring `audit export`: one header line then one line per observation, written through
+  the same atomic helper. Both accept `--case` and `--serial` filters.
+- [D29] verified, not assumed. Two existing tests asserted that no case column existed,
+  using that as a proxy for "history outlives the case". The proxy is replaced by the
+  property itself: the link is a plain nullable column with no foreign key and no cascade,
+  and a closed case leaves every observation intact. Verified by closing a case that had a
+  device filed under it - the row survives. `test_the_registry_head_is_this_migration` was
+  renamed to `test_this_migration_is_registered` because 019 is now the head and 018 is not.
+- Also fixed while testing: migration 019 initially failed on a fresh database with
+  `duplicate column name`, because 018 builds the table from model metadata and therefore
+  creates the column before 019 runs. It now checks before altering.
+- Files: `src/trace_core/core/ui/renderers.py`, `src/trace_core/tui/screens/devices.py`,
+  `src/trace_core/tui/screens/cases.py`, `src/trace_core/devices/exporter.py` (new),
+  `src/trace_core/devices/{models,domain,dto,repository,service,helpers,commands,renderers}.py`,
+  `src/trace_core/core/database/migrations.py`,
+  `tests/unit/test_devices_case_link.py` (new),
+  `tests/unit/test_devices_case_link_migration.py` (new),
+  `tests/unit/test_devices_migration.py`, `tests/unit/test_devices_service.py`,
+  `tests/unit/test_tui_devices.py`, `changelog/nirjxr26/changelog.md`.
+- Verification: every feature driven end to end against a real SQLite database - inspect
+  under a case, read history back, resolve the case/device link in both directions, and
+  write a JSONL bundle whose header and record were parsed and asserted. Both dossiers
+  rendered in the running TUI. 15 new tests; the four highest-risk ones were falsified by
+  reintroducing their defect (case not recorded, case dropped from the export, export filter
+  ignored, unknown case accepted) and each failed as required, with the sources restored
+  byte-identical.
+
+## 2026-10-10
+- Summary: Brought autocomplete, the REPL, and the TUI command palette up to the device
+  features added earlier today. `history` and `export` were Typer-only; the REPL and palette
+  still offered the old four actions, so the new work was reachable from exactly one surface.
+- REPL: `history` and `export` added to `_ACTIONS`, `_ACTION_HELP`, `get_help_entries` and
+  the dispatcher, so `device history <serial>` and `device export --out <file>` work in the
+  shell as well as the Typer CLI. `--case` is now offered on `inspect`, `check` and `export`.
+  A per-action flag map replaced the old `_flags_for`, which sent every non-`check` action to
+  one shared set; `list` no longer offers `--reason`, and `history`/`export` offer their own.
+  `history` completes serials that have actually been observed, so the argument is
+  discoverable rather than something the operator has to read out of a prior `inspect`.
+- One thing this had to get right: `--case` is value-taking, so it was added to
+  `_VALUE_FLAGS`, the set `_first_positional` reads to avoid swallowing the token after a
+  flag. Without that, `device inspect --case 2026-CR-0001 <node>` would have taken the case
+  number as the device node - the same class of bug the docstring on that function records
+  from `--allow-real-hardware`.
+- TUI: the palette gained `device-history` and `device-export`. Both are real: history
+  renders a HISTORY section in the dossier (timestamp, verdict, case per observation) and
+  export reuses the audit tab's `TextInputModal` + `confirm_overwrite` + `run_guarded` path
+  so an existing file still has to be confirmed before it is replaced.
+- Files: `src/trace_core/devices/shell_handler.py`, `src/trace_core/tui/palette.py`,
+  `src/trace_core/tui/screens/devices.py`, `tests/unit/test_devices_case_link.py`,
+  `changelog/nirjxr26/changelog.md`.
+- Verification: drove the real REPL handler for every new path - `inspect --case` wrote
+  `case_number=2026-CR-0001` to the row (asserted by reading the database back, not by
+  matching console text), `history` rendered the case-linked record, `export` wrote a
+  2-line JSONL file, and `export` without `--out` failed with a clear message instead of a
+  traceback. Completion was asserted directly for all seven action/flag combinations.
+  6 new tests; four were falsified by reintroducing their defect (--case dropped from the
+  value-taking flags, history/export dropped from autocomplete, export losing --case and
+  --serial, and the limit guard removed) and each failed as required, with the file restored
+  byte-identical.
+- Note: `_positive_int` was added because `device history --limit abc` would otherwise raise
+  ValueError out of the dispatcher instead of falling back to the default.
+
+## 2026-10-10
+- Summary: Implemented Gaps 1, 2 and 5 of `DEVICE-UX-FINDINGS.md` as one change, after a
+  hash-chain compatibility probe proved the approach safe. Attaching a device to a case is
+  no longer fused to inspecting it, and the attachment is now a first-class, timestamped,
+  attributed act in the signed ledger.
+- Root cause: `case_number` lived on `device_fingerprints`, a table written only by
+  `inspect_device` and `check_device`. Tagging a bagged disk therefore required opening it,
+  and the harmless bookkeeping act sat behind the real-hardware consent gate. The ledger
+  recorded the attachment as an attribute of an inspection, and the device event's subject
+  was `number=None, id=None`, so no device was addressable in the ledger at all.
+- Migration 019 repurposed rather than extended. It was uncommitted and unreleased, and the
+  `case_number` column it added was the redundant half of the design being replaced, so it
+  now creates `case_devices` instead: `case_number, node, serial, label, linked_at,
+  linked_by`, indexed on `case_number`. No foreign key, so a case purge cannot cascade into
+  device records - the [D29] guarantee, now proven by a test that purges the case and
+  asserts the link row survives. `device_fingerprints.case_number` is gone, so there is one
+  source of truth.
+- New `AuditAction.DEVICE_LINKED` / `DEVICE_UNLINKED`, with `for_device_linked` and
+  `for_device_unlinked` builders. Both use `_case_event`, so the subject is the CASE. The
+  device node travels only in `details`, which is signed with the row - it never reaches the
+  case-number field. Two tests assert that directly, because putting a device path there
+  would make `filter --case` return devices.
+- `device link <node> --case <case> [--label]` and `device unlink <node> --case <case>` added
+  across the Typer CLI, the REPL handler and the DTO/service/repository layers. `--case` is
+  REMOVED from `inspect` and `check`: keeping it would leave two ways to do one thing, one of
+  which writes the wrong event.
+- Gap 3 deferred, and the reason is recorded rather than assumed. Making device events
+  addressable needs a column on `audit_events` plus a parameter threaded through `Subject` ->
+  `append` -> `_append_locked` -> `build_payload`, and `build_payload` is what gets hashed and
+  signed. `scripts/gap3_hash_probe.py` establishes the safe path on an isolated database:
+  16 checks, 0 failed. The verifier hashes the STORED `payload_json`
+  (`verifier.py:_expected_payload_hash`), so a change to `build_payload` cannot alter bytes
+  already written. Historical records still verify, none was rewritten or re-signed, a
+  pre-change signed anchor still verifies, a forged anchor is still rejected, and tampered
+  and broken-link rows are still detected. Only a column migration remains, which is not yet
+  approved.
+- Verification: driven end to end against a real database. A device was linked BEFORE any
+  inspection, the `DEVICE_LINKED` event was confirmed to carry `subject_case` with
+  `subject_type=case`, a second case and an unlink round-tripped, and the observation table
+  was confirmed to carry no case column. `case_devices` was inspected to confirm it has no
+  foreign keys. 17 tests in the case-link suite, 6 in the migration tribunal.
+- Falsification, and what it caught: five mutations of the new behaviour were each reverted
+  and observed. Two initially escaped - removing the unlink ledger event, and making
+  `link_device` resolve the node through the adapter. The first was a pattern that never
+  matched; the second revealed the test never exercised a device the adapter cannot see, so
+  a test for exactly that case was added. Both are now caught, along with the link event
+  being dropped, the duplicate-link guard being removed, and the actor no longer recorded.
+- Out of scope, unchanged: the Gap 3 column and the device filter that depends on it; the
+  TUI case picker, which needs a link action first; the `--physical` flag rename; and the
+  UNKNOWN refusal message.
+
+## 2026-10-10 (part 2)
+- Summary: Implemented the remaining items that needed no new schema: the TUI case picker
+  with link/unlink, the `--physical` flag rename, the UNKNOWN refusal naming its remedy,
+  and report 4.4 (serials reachable without an inspection). Withdrew report 4.3 instead of
+  implementing it.
+- TUI: `CasePicker` in `tui/forms.py`, composed from the `ListView` + `Input` the Cases tab
+  already uses. `l` files the selected device under a case and `u` removes it, both on the
+  Devices tab, in the command palette, and in the REPL. This also closed an asymmetry
+  introduced earlier in the session: `device unlink` existed at the CLI and service layers
+  but had no way to be called from the TUI.
+- A free-text case box was rejected in favour of a searchable picker, because an examiner at
+  a bagged drive knows the case, not its number, and a typo is silent until the service
+  refuses.
+- `--allow-real-hardware` is now `--physical`, with the old name kept as a working alias so
+  existing invocations and scripts do not break. The REPL offers the short name in
+  completion. The refusal text and the docstring naming the flag were updated with it.
+- Report 4.4: `device list` now carries a `SERIAL` column sourced from the newest stored
+  observation for that node, via `DeviceService.observed_serials` in a single query rather
+  than one per device. It sits on its own read path so `list_devices` remains
+  persistence-free [D10], [D23]. The TUI search box matches on serial as a result.
+- A latent defect fell out of this: `DevicesView._history_key` passed a *node* to
+  `do_history`, which takes a *serial*. History was therefore unreachable for any device
+  that had not been inspected in the current session, which is most of them. It now uses the
+  serial the listing already carries.
+- The UNKNOWN refusal for write protection previously named the cause but not the way
+  forward, so the operator had to re-derive the whole invocation from `--help`. It now ends
+  with the exact command that proceeds. The WRITABLE refusal, which is never overridable,
+  says so.
+- Report 4.3 is WITHDRAWN, not deferred, and no code changed for it. The finding is real -
+  identity and protection are two round-trips - but the proposed fix is a regression.
+  `inspect_device` runs no write-protection gate; `check_device` is what evaluates it.
+  Merging them means reading a serial requires a write-protected source or
+  `--ack-unverified`, which is the same fusion Gap 1 exists to remove: it puts identity
+  capture behind the acquisition gate and makes "what is on this disk before deciding how to
+  acquire it" unanswerable on a writable one. The non-regressive shape, if ever wanted, is a
+  third command writing two ledger rows, which is new surface and was not requested.
+- Verification: 28 tests across the case-link and TUI-link suites, all passing. Twelve
+  mutations of the new behaviour were reverted and observed; eleven were caught. Three
+  initially escaped and each was a real finding, not a weak test:
+  - the picker opened with nothing highlighted, so Enter did nothing. The test asserted only
+    that the screen changed, which was true regardless. Fixed in the picker, and the test
+    now asserts the value the picker returns.
+  - `_history_key`'s node-for-serial bug (above) was invisible until the serial existed in
+    the listing to assert against.
+  - the REPL never dispatched `link`/`unlink` at all; they fell through to the inspect
+    branch and reported inspect's flags. Found by checking completion output rather than
+    trusting that the CLI path implied the REPL path.
+- Out of scope, unchanged: Gaps 3 and 4, deferred by owner decision, both waiting only on
+  migration 021 approval - the hash-chain probe already proved that migration safe.
+
+## 2026-10-10 (part 3) - a defect the in-process tests could not see
+- Summary: Driving the installed `trace.exe` rather than the Python API exposed two defects
+  that a green suite missed. Both came from the same line.
+- Root cause: `DeviceService.__init__` set `self._manager = session_manager`, shadowing
+  `BaseService.session_manager`, which is the *resolved* manager (`session_manager or
+  db_manager`). Every CLI command constructs its services with `None`, so `self._manager` was
+  None on the primary code path while the fixture-based tests always passed a real manager.
+  Consequences, both now fixed and both regression-tested:
+  - `device link <node> --case 2026-CR-9999` SUCCEEDED and wrote a `DEVICE_LINKED` row
+    naming a case that does not exist. `_case_or_none` takes the manager to validate against
+    and silently returns the raw string when it is None, so the existence check was skipped
+    entirely on the CLI. It now refuses with exit 1 and `unknown case 2026-CR-9999: Case
+    '2026-CR-9999' does not exist.`
+  - `device list` showed `-` in the new SERIAL column even immediately after an inspection,
+    because `observed_serials` short-circuited on the same None. The serial now appears.
+- The shadow has been removed rather than guarded. There was a pre-existing call to
+  `_case_or_none(..., self._manager)` on `inspect_device`, so the validation hole was already
+  latent; it was unreachable only because the `--case` flag it served has since been removed.
+  Moving the link onto that path is what made it reachable, so the fix belongs here.
+- Why the suite missed it: every test builds the service with a real `session_manager`
+  fixture. The CLI passes `None` and relies on the base class to resolve the global. No
+  in-process test exercised the construction the CLI actually uses, and neither the service
+  tests nor the CLI signature tests noticed. Two regression tests now assert that the resolved
+  manager is the one used, that the shadow attribute does not exist, and that the serial
+  lookup works through `DeviceService(None)`. Both were confirmed to fail against the old
+  code.
+- Method note: the previous entries in this session report falsification results against the
+  suite. Those mutations were all in-process, which is why they could not see this. Driving
+  the shipped binary is a different check and found what 30-odd in-process mutations missed.
+
+## 2026-10-11 - the app would not start: an already-applied migration had been edited
+- Summary: The deployed database refused to start with `Migration 019_device_fingerprints_case_link
+  declared operations drifted from the recorded canonical identity`. Root cause was mine: I had
+  repurposed migration 019 instead of adding a new one, which AGENTS.md 7 forbids outright.
+- Impact was real, not theoretical. The `trace` database had applied 019 on 2026-10-10 and held
+  9 cases, 22 audit events and 3 device observations. The app was offline for every command that
+  opens the database, including `trace doctor`.
+- Why the guard was right and the code was wrong: `apply_migrations` recomputes each applied
+  migration's canonical identity from the name RECORDED IN THE DATABASE combined with the
+  operations in the CODE, and refuses on any difference. It cannot distinguish "someone tampered
+  with this database" from "someone rewrote the code". Both are drift, and it is right to stop in
+  both cases. My earlier reasoning - that 019 was uncommitted and unreleased, so editing it was
+  safe - was wrong on its own terms: unreleased code is still applied to real databases.
+- Fix: migration 019 restored byte-identical, and 020 added for the link table. The exact original
+  operations tuple was recovered by searching candidate operation strings for one whose canonical
+  SHA-256 equals the checksum the database recorded, and confirmed: the recomputed digest matches
+  `795c730fa725b553f09ebf5ddcc33ea87bf589a1fa0d98bb68fce33d2431333d` exactly. A 256-bit match is
+  proof the recovered identity is the original, not a plausible reconstruction.
+- 019 is now idempotent again, because migration 018 builds the column on a fresh database via
+  `create_all` and 019 must not add it twice. It was verified against a fresh database, an
+  already-migrated database, and the live one.
+- 020 creates `case_devices` and BACKFILLS it from 019's column rather than dropping the data: the
+  live database's one filed observation moved across with its serial, actor and timestamp intact.
+  Verified on the live database: 1 link present, 0 foreign keys so [D29] holds.
+- `device_fingerprints.case_number` is deliberately left in place. Dropping it is a destructive
+  schema change that needs explicit approval, and leaving it is the safe expand phase of a
+  contract: nothing reads or writes it, and two tests now assert that no code path touches it. The
+  contract itself is proposed as a later migration, not done here.
+- Root-cause fix, not a workaround: the declared operations and the executed SQL were two separate
+  literals that could drift apart, letting the recorded identity describe SQL the migration never
+  runs. Both now come from one constant. I found this because a falsification mutation of the
+  declared string did not fail the checksum test - it had hit the other literal.
+- Regression guard: `test_migration_19_keeps_the_identity_deployed_installs_already_recorded` pins
+  019's canonical checksum to the value real installations recorded. Its first version hardcoded the
+  migration name, so renaming the migration did not change the payload and the test passed anyway -
+  falsification caught that too. It now reads the name from the registry.
+- Verification: `trace doctor` reports Database online, 20 migrations applied, 22 records with all
+  links verifying, and append-only protection active. Device migration, service, link and TUI suites
+  pass.
+- Out of scope, unchanged: Gaps 3 and 4, still deferred and still waiting only on approval.
+
+## 2026-10-11 (part 2) - the case dossier describes devices by model and size
+- Summary: The dossier's DEVICES section listed the device's serial, which identifies a disk
+  to a machine rather than to a person reading a case file, and is long enough to swamp the
+  line. It now shows the model and capacity that the newest observation recorded.
+- Precedence is label, then model and size, then nothing. An operator's own note still wins,
+  because it is their vocabulary; a device filed but never inspected has no observation and is
+  therefore described by its label alone rather than by a fallback. Filing needs no
+  inspection, so that case is normal, not exceptional.
+- Data comes from the observation, not from the live adapter: what a disk was recorded as
+  outlives the disk being unplugged, and a case file read next month should not change because
+  a drive is now attached to a different machine.
+- Reuse: `observed_serials() -> dict[str, str]` became `observed_devices() ->
+  dict[str, ObservedDevice]`, one narrow query widened from two columns to four. The device list
+  already needed the serial from it and now reads `.serial` off the same record, so the list and
+  the dossier are served by one query rather than two that would drift. `ObservedDevice` is a
+  NamedTuple of serial, model and capacity because the full `DeviceFingerprint` cannot be built
+  from a projection, and the observation table is append-only and unbounded - loading whole rows
+  to read three columns would grow without limit.
+- `_readable_model` moved from `tui/screens/devices.py` to `devices/renderers.py` and became
+  public, so the dossier normalises vendor strings through the same helper the device list uses
+  instead of a second copy. `NVMe Micron_2400_MTFDKBA512QFM` reads as `Micron` with its capacity
+  rather than the raw part number. Doing this by script damaged both files - a truncated regex,
+  an undefined constant and a lost function header - and was repaired by hand. Constants that
+  travel with a moved function are now read from the file first rather than inferred by regex.
+- Tests: four covering the dossier, including one asserting the serial is never used as the
+  description and one covering the never-inspected case.
+- Out of scope, unchanged: Gaps 3 and 4, still deferred and still waiting only on approval.
+
+## 2026-10-11 (part 4) - LINKED DEVICE dossier section, and WHEN to Timestamp
+- Summary: The case dossier's DEVICES section became LINKED DEVICE, showing model and size
+  as their own labelled fields rather than one condensed string. Every `When` field label
+  in the product became `Timestamp`.
+- Why separate fields rather than a richer single line: `Micron 476.9 GB` on one line
+  reads as an assertion about one thing, whereas `Model` and `Size` are individually
+  attributable, individually absent, and can each be falsified against the observation that
+  produced them. A device filed but never inspected shows neither, which is now visibly
+  different from a device inspected and found blank.
+- Precedence is unchanged: the operator's own `--label` is still shown, now as its own field
+  alongside Model and Size instead of replacing them. Previously the label suppressed the
+  model and size entirely, so a labelled device showed nothing else about itself.
+- `When` became `Timestamp` in all three places it appeared: the CLI `audit show --seq`
+  detail table, the TUI audit event detail pane, and the TUI device write-protection pane.
+  Both TUI panes use hand-padded fixed-width label columns, so the rename widened the column
+  and every sibling label was re-padded to match. A width assertion caught an off-by-one on
+  the first attempt - the gate pane's column is 11 wide, not 12, so `Timestamp   ` was one
+  character too long and would have misaligned Verdict/Cause/Platform.
+- Tests: the four dossier tests were realigned to the new tuple shape, including the
+  never-inspected case which now asserts `(node, "", "", "")` rather than a single empty
+  description.
+- Out of scope: the AttributeError at `devices.py:199` found by the forensic audit is still
+  unfixed and still reported there as F-06; the audit brief for that work was read-only.
+
+## 2026-10-11 (part 5) - dossier device name, conditional Closed row, keyboard-traversable picker
+- Summary: Four changes from one review round. The case dossier names the device instead of
+  printing an OS handle, an open case stops showing a Closed row, and the case picker became
+  keyboard-traversable with a fixed scrolling window.
+- Dossier device name. `\\.\PhysicalDrive0` now reads as `Drive 0`. The node-naming logic
+  already existed privately in the devices screen, so it was extracted to
+  `devices/renderers.display_node()` rather than copied; both surfaces now share one
+  implementation, and the devices screen's `_display_name` delegates to it. The raw node is
+  still stored on the link row and in the database - it is no longer *displayed*. Flagged to
+  the owner because the node is what re-identifies a disk on the bench.
+- Closed row. The row is now absent for an open case rather than rendered as `Closed  -`. My
+  first edit appended the label a second time instead of suppressing it; caught by re-reading
+  before moving on.
+- Picker keyboard traversal was a real defect, not a missing feature. `on_key` intercepted
+  `down` unconditionally and called `event.stop()`, so the first press moved focus to the list
+  and every later press was swallowed before `ListView` saw it. The list could be focused but
+  never traversed. The interception now applies only while the search box holds focus.
+  Verified by driving real key presses: cursor 0 -> 1 -> 2 -> 3 on four downs, back to 2 on up.
+- Picker window. `height: auto; max-height: 14` became a fixed `height: 14` with
+  `scrollbar-size-vertical: 1`, so the list scrolls inside a constant-height window instead of
+  growing the modal, plus `margin-bottom: 1` under the search box for breathing room. With 25
+  cases all 25 remain loaded, the window stays 14 rows, and the scrollbar is live.
+- Falsification, and what it caught about my own tests. Three mutations initially survived,
+  and in all three the code was correct while the *test* failed to load-bear:
+  - the dossier-name test asserted on `_case_devices`' return value, which still holds the raw
+    node; the transform happens in the renderer, so nothing guarded it. It now asserts on the
+    rendered text.
+  - the fixed-height test loaded 25 rows, where capped-auto *also* renders 14 rows. It now
+    loads 3 rows, where capped-auto would shrink to 3 and a fixed window stays at 14.
+  - the scrollbar test asserted `show_vertical_scrollbar`, which reflects content overflow and
+    is unaffected by the CSS property. Both presentation-only declarations are now asserted on
+    the stylesheet.
+- Tests: four for the picker, two for the dossier. 45 pass across the two suites.
+
+## 2026-10-11 (part 6) - dossier heading names the model; unlinked devices stay visible
+- Summary: Three changes driven by a screenshot of the audit detail pane. The `Timestamp`
+  label ran into its value, the dossier heading showed a node-derived name instead of the
+  model, and a device unlinked from a case vanished from the dossier entirely.
+- Timestamp spacing. The audit detail pane pads its labels into a hand-aligned column. The
+  earlier rename set that column to nine characters, and `Timestamp` is exactly nine, so it
+  received no separator space and rendered as `Timestamp09-10-2026 10:48:56 AM IST`. The
+  column is now ten and every sibling label was re-padded with it.
+- Dossier heading. `LINKED DEVICE` now leads with the model and its size -
+  `Micron  ·  476.9 GB` - taken from the newest observation. The node-derived name
+  (`Drive 0`) remains only as the fallback for a device filed but never inspected, which is
+  the one case with no model recorded. Model and size are no longer repeated as separate
+  fields beneath the heading; the label, if the operator gave one, still is.
+- Unlinked devices stay in the record, dimmed. This is the significant one. The link table
+  holds current state and `unlink` deletes its row, so before this a device that had been
+  filed and then removed disappeared from the dossier completely - an examiner could read
+  that as "never on this case". The ledger still holds the DEVICE_LINKED event, which carries
+  the case as its subject, so `_previously_linked()` recovers those nodes and diffs them
+  against current links. Unlinking removes the claim, not the history of it. A device that
+  was never linked is never invented: only the ledger's own events create a historical row.
+- Falsification caught two more tests of mine that asserted the intermediate rather than the
+  output. Both heading mutations survived because the tests asserted `_case_devices`'s row
+  tuple, while the heading is assembled in the renderer - model and size could both be
+  dropped from the display while every row-level test still passed. The replacement asserts
+  the rendered dossier text. This is the fourth time this session a test passed without
+  proving the changed behaviour; the pattern is consistently asserting an intermediate value
+  instead of the user-visible output.
+- A structural mistake worth recording: the shared row builder was first inserted between two
+  methods of `CasesView`, which left `_case_devices` nested inside a module-level function as
+  dead code after its `return`. Ruff caught it. It would have silently disabled the entire
+  dossier device section while still importing cleanly.
+- Tests: 32 in the link suite, covering the heading text, the historical row, and that a
+  never-linked device is not invented.
+## 2026-10-13
+- Summary: Settings tab headers share rows. The left "Settings" title carried a 1-row top pad nothing on the right had, so the title, divider, and section list each sat lower than the detail title, divider, and body. Dropped the left title padding and gave the detail body the blank row the left Rule margin already produces. Display-only.
+- Files: src/trace_core/tui/app.py, src/trace_core/tui/screens/settings.py, tests/unit/test_tui.py, changelog/nirjxr26/changelog.md
+- Verification: tests/unit/test_tui.py + tests/updates/test_tui_updates.py, 17 passed; ruff check/format clean on touched files; mypy clean on touched files; both halves falsified separately (padding restore fails title assertion 4 vs 3, newline revert fails body assertion 6 vs 5); full gate not re-run, background device-fit measurement still open
+## 2026-10-13
+- Summary: Reverted the Settings title breathing row. Titles sit directly above their dividers again (rows 3/4/6 both panels). The earlier equal-rows alignment fix is untouched.
+- Files: src/trace_core/tui/app.py, src/trace_core/tui/screens/settings.py, tests/unit/test_tui.py, changelog/nirjxr26/changelog.md
+- Verification: painted compositor rows back to 3/4/6 both sides; tests/unit/test_tui.py + tests/updates/test_tui_updates.py, 17 passed; ruff check/format and mypy clean on touched files
+## 2026-10-13
+- Summary: Fixed device-history crash and device sidebar overflow. The TUI HISTORY block read row.case_number, which ObservationDto never had, so device-history crashed on any inspected device; the third column now shows row.inspected_by, the attribution observations actually carry (CLI _history_table confirms no case column exists in this shape), and _history is typed list[ObservationDto] so mypy catches the next invented field. The sidebar overflow was not a width problem: Textual fires Mount twice on the same view and mount_header_table appended columns on every mount (4 cols, None-padded cells, virtual 56 in a 33-wide panel); the shared helper now returns early when columns exist, which fixes the same latent bug on cases/audit, and TABLE_COLUMNS narrowed (22,11) to (15,9) so a single-mounted table and its count header fit.
+- Files: src/trace_core/tui/screens/devices.py, src/trace_core/tui/widgets.py, tests/unit/test_tui_devices.py, changelog/nirjxr26/changelog.md
+- Verification: new test_device_history_names_the_recorder; strengthened test_the_device_table_has_no_horizontal_scroller (real row, max_scroll_x == 0, header painted whole). Falsified: invented field back reproduces AttributeError and fails; guard removed fails (scroll 23); old widths with guard fail (scroll 4). ruff check/format clean, mypy clean (12 files), 210 passed across test_tui_devices/test_tui/test_devices_case_link/test_devices_service/test_devices_cli. Full gate not re-run.
+## 2026-10-14
+- Summary: Narrow-window phantom divider rows fixed. Divider strings are baked for one width, so shrinking the window made Static wrap them into short remainder rows that looked like broken dividers (proven: a stale 60-char rule in a 42-wide pane paints a full row plus a short row). Each dossier view (audit/cases/devices/settings) now rebuilds its detail pane on Resize when the content width moved, reusing its existing render path; width gate skips height-only changes. Deliberately not no_wrap (would clip forensic content) and not Rule widgets (structural rewrite).
+- Files: src/trace_core/tui/screens/audit.py, src/trace_core/tui/screens/cases.py, src/trace_core/tui/screens/devices.py, src/trace_core/tui/screens/settings.py, tests/unit/test_tui_devices.py, changelog/nirjxr26/changelog.md
+- Verification: new test_audit_dividers_refit_after_a_width_change (plants stale over-wide divider, dispatches Resize, asserts all divider rows identical length). Falsified: handler removed fails (AttributeError); width cached without rebuild fails ({20, 67} remnant). ruff/mypy clean (12 files); 79 passed across test_tui_devices/test_tui/test_devices_case_link/test_tui_updates.
+## 2026-10-14
+- Summary: Phase 1 felt-speed fixes. Spinner sleeps while hidden and its timer dies on unmount; dead SPIN_INTERVAL and its orphaned comment removed. CasePicker debounced at 0.25 s with stale-timer supersede, plus synchronous flush on both accept paths so fast type+Enter can never file under a stale row. Device poll skips ticks while another tab is active (hidden tabs keep display=True in this Textual version, so the check reads TabbedContent.active). Integrity verify memoized on (head seq, head chain hash) with always-fresh manual verify; equality of the chain-bound head is the same primitive anchors use. Case dossier caches retained across refreshes with per-number drops on row change, explicit drops on in-view mutations via the row map, and cross-view drops on link/unlink; _case_devices no longer caches failure rows. fill_table patches cells in place when keys match instead of clear/rebuild. Display-only except the memo/caches, which never skip a verify or serve a result newer than its key.
+- Files: src/trace_core/tui/widgets.py, src/trace_core/tui/forms.py, src/trace_core/tui/screens/devices.py, src/trace_core/tui/screens/settings.py, src/trace_core/tui/screens/cases.py, tests/unit/test_tui.py, tests/unit/test_tui_devices.py, tests/unit/test_tui_device_link.py, tests/updates/test_tui_updates.py, changelog/nirjxr26/changelog.md
+- Verification: 6 new/strengthened tests, each falsified (hidden spinner 4 renders; per-keystroke [a,ab,abc]; hidden poll 1 read; unchanged-ledger 2 scans; revisit rescan; clear-on-refresh; flush removal files under the wrong case 2026-CR-0001). Two real regressions caught by the suite mid-work (stale-submit mis-filing; a test-timing wait for the debounce). ruff check/format clean, mypy clean (12 files), 239 passed across the 7 TUI/device suites. Concurrent-CLI-writes corner documented as accepted: row list stays fresh every refresh, dossier details rely on in-process invalidation.
+## 2026-10-14
+- Summary: Phases 2+3 performance work. Mount fetches only the active tab (activation refresh always covers first paint; same-tab re-activation no longer refreshes). Audit scroll capped at five windows with a one-time truthful notice; append_rows keeps the key invariant so later refreshes can patch in place. Settings snapshot cached per visit, cleared on refresh. Device exporter streams with yield_per and a subquery instead of two materialisations plus a client-side IN list. Ed25519 pubkey bytes cached by path+mtime (rotation-safe, fail-closed; private keys deliberately not cached). CLI no longer imports the REPL stack (766 to 477 ms measured). Migration 021 adds node/inspected_at indexes (models + forward DDL); EXPLAIN proves the three hot queries off full scans. Measured-no-change, documented: identity lookup (10.7 us, memo would break syscall-patching test isolation), session entries (1.4 ms, tx boundaries load-bearing, two-thirds of it the update-safety file gate), warm migration ritual (1.2 ms once per process, _READY_CACHE already skips). Integrity sweep: 1k ledger 22 ms to 0.3 ms per repaint, 10k ledger 708 ms to 0.7 ms.
+- Files: src/trace_core/tui/widgets.py, src/trace_core/tui/screens/settings.py, src/trace_core/tui/app.py, src/trace_core/tui/screens/audit.py, src/trace_core/devices/exporter.py, src/trace_core/audit/signing.py, src/trace_core/cli/main.py, src/trace_core/devices/models.py, src/trace_core/core/database/migrations.py, tests/unit/test_tui.py, tests/unit/test_audit_pagination.py, tests/unit/test_devices_lookup_indexes_migration.py, tests/unit/test_cli_commands.py, tests/unit/test_security_regressions.py, changelog/nirjxr26/changelog.md
+- Verification: 6 new tests (mount-guard, scroll cap, subquery export, pubkey-once with rotation+forgery, repl-laziness, 021 tribunal incl. EXPLAIN), each falsified (background fetch at startup; 1200 unbounded rows; client IN (?) SQL; 2 reads; eager shell import; wrong-column DDL caught only by the plan assertion, which also exposed that migration DDL bites on upgrade while names alone prove nothing). ruff/mypy clean (214 files, 211 sources), full gate 1283 passed 12 skipped. Two suite-caught regressions fixed mid-work (spinner-test timer leak into _tick_timer assertion; early-return masking in falsification). Mount double-fetch and Textual eager mounting measured, not assumed.
+## 2026-10-14
+- Summary: Reusability pass over the performance work. The only genuine duplication was active-tab resolution, inlined identically in three places; extracted as active_tab(view) in widgets.py and reused by the mount guard (x2) and the poll guard, dropping two now-unused TabbedContent imports. Everything else stays duplicated deliberately: the four resize handlers differ in pane type, pane id, and render method, and parameterising them would add indirection without simplifying. Falsified by blinding the helper: mount refetch storm returns and the poll never resumes.
+- Files: src/trace_core/tui/widgets.py, src/trace_core/tui/screens/settings.py, src/trace_core/tui/screens/devices.py, changelog/nirjxr26/changelog.md
+- Verification: ruff check/format clean, mypy clean (12 files), 242 passed across the 7 TUI/device suites. No behavior change by construction (identical semantics at all 3 sites); mount-guard and poll tests pin both behaviors.
+## 2026-10-15
+- Summary: Gap 3 (device subject identity) and Gap 4 (ledger device filter) implemented per owner approval. Device events now address the device by its observed serial (`fingerprint.serial.value`, incl. deterministic `SYNTH-…` fallback), never the raw OS node; the node stays a locator in details. Payload carries `subject_device_serial` only when non-None, so serial-less rows stay byte-identical to the old format. Migration 022 adds the nullable indexed column. `audit show --device`, the REPL flag, and search substring expose the filter (exact match; digits-only search terms still resolve as seq per pre-existing behavior). `DEVICE_LINKED`/`UNLINKED` deliberately keep the case subject. `device_fingerprints.case_number` cleanup stays deferred by owner decision.
+- Files: src/trace_core/audit/builder.py, src/trace_core/audit/commands.py, src/trace_core/audit/domain.py, src/trace_core/audit/dto.py, src/trace_core/audit/events.py, src/trace_core/audit/models.py, src/trace_core/audit/repository.py, src/trace_core/audit/service.py, src/trace_core/audit/shell_handler.py, src/trace_core/core/database/migrations.py, src/trace_core/devices/service.py, src/trace_core/tui/screens/audit.py, tests/unit/test_audit_device_subject.py, tests/unit/test_audit_device_subject_migration.py, tests/unit/test_audit_legacy_ledger_compat.py, tests/unit/test_audit_ledger.py, tests/unit/test_audit_cli.py, tests/unit/test_devices_service.py, tests/unit/test_shell.py, tests/unit/test_migration_017.py, tests/fixtures/audit_legacy_ledger_v1.json, DEVICE-UX-FINDINGS.md, changelog/nirjxr26/changelog.md
+- Verification: backward compat proved against frozen pre-change ledger + signed anchor (8 rows verify, anchor OK; 022 upgrade leaves rows byte-identical, anchor still verifies). 5 falsification mutations each failed the intended assertion and were restored byte-identical (payload conditional, exact-not-prefix filter, builder serial, 022 verifier, override call site). One suite failure mid-work was a correct pin update (017 rebuild uses current metadata: 13 to 14 columns). One mypy error was a stale `.mypy_cache` artifact (clean after rebuild). Final gate `check-pr.ps1`: PASSED, 1301 passed 19 skipped, coverage 81.83%, ruff clean, mypy clean (214 files). PERMANENT root-cause solution.
+## 2026-10-15
+- Summary: Dossier panes (device/cases/audit right sidebar) no longer paint a scrollbar. One CSS rule hides both bars on `#device-right, #cases-right, #audit-right`, mirroring the existing table rule; panes stay keyboard/mouse-wheel scrollable. Display-only.
+- Files: src/trace_core/tui/app.py, tests/unit/test_tui.py, changelog/nirjxr26/changelog.md
+- Verification: new parametrized `test_no_dossier_shows_a_scrollbar` (3 tabs at 60x16, all genuinely overflowing: `show_vertical_scrollbar` True, `max_scroll_y` > 0, rendered bars 0). Falsified: rule removed fails all 3 on rendered width; first version of the test passed vacuously without overflow and was rewritten after a probe measured virtual vs region per tab. 107 passed across the 5 TUI suites; ruff check/format and mypy clean on touched files.
+## 2026-10-15
+- Summary: New `DEVICE_RECOGNIZED` ledger event: explicit `device list` commands (CLI + REPL) now write one system-subject summary row (`{kind, count, devices:[{node,kind,serial|null}]}`) per recognition. Overturns the D10/D23 "zero audit events" default only via opt-in `audit_recognition` flag — TUI polls and tab-completion stay silent (same call sites, default False), failed/unknown-kind lists write nothing. Pre-inspection serials are last-observed identities, nodes stay locators per Gap 3 doctrine. `device list` already required mutator via `observed_devices`, so no new RBAC burden.
+- Files: src/trace_core/audit/domain.py, src/trace_core/audit/renderers.py, src/trace_core/audit/builder.py, src/trace_core/devices/service.py, src/trace_core/devices/helpers.py, src/trace_core/devices/commands.py, src/trace_core/devices/shell_handler.py, tests/unit/test_devices_service.py, tests/unit/test_devices_cli.py, tests/unit/test_audit_pagination.py, changelog/nirjxr26/changelog.md
+- Verification: 2 service tests (row shape incl. system subject + count/nodes; default-silence D10/D23 pin) + CLI delta test (+1 row) + label allow-list entry (Event column width 24 fits the 17-char label). Falsified both wirings (flag dropped fails delta; count zeroed fails shape). 246 passed across device/audit/shell suites; ruff + mypy clean. Full gate `check-pr.ps1`: first run 1306+1 failed on wall-clock poll test (passes alone, in-file, and unrelated to this change — TUI path untouched), re-run PASSED 1307 passed 19 skipped. PERMANENT root-cause solution.
+## 2026-10-15
+- Summary: CLI/TUI dossier parity plus a quieter verify card. `case show` now renders the LINKED DEVICE block (current links with model/size headings and labels, plus dimmed ledger-surviving history) and `device inspect` renders the CASES block, both on CLI and REPL from two shared helpers; JSON machine shapes frozen. `audit verify` no longer prints hashing internals on its human card (dropped the algorithm/method rows and raw Expected/Actual hex; seq/type/counts stay). Audit list/detail views deliberately untouched.
+- Files: src/trace_core/devices/helpers.py, src/trace_core/cases/renderers.py, src/trace_core/cases/commands.py, src/trace_core/cases/shell_handler.py, src/trace_core/devices/renderers.py, src/trace_core/devices/commands.py, src/trace_core/devices/shell_handler.py, src/trace_core/audit/renderers.py, tests/unit/test_cli_commands.py, tests/unit/test_devices_cli.py, tests/unit/test_shell.py, tests/unit/test_verify_messages.py, changelog/nirjxr26/changelog.md
+- Verification: 6 new tests (Typer + REPL × linked-devices/inspect-cases, valid card without hash internals, tamper card naming seq without hex dumps). Falsified both dossier wirings. Mid-work catches: first dossier test passed vacuously on wrapped long paths (assert short substrings); two REPL tests used invalid case-code format (exit 2). Readers keep `case show` access — link reads are mutator-gated, so failures degrade to the same dim notice as a downed ledger, never a lockout or silent omission. 240 passed across CLI/device/shell/verify suites; ruff + mypy clean. PERMANENT root-cause solution.
+## 2026-10-15
+- Summary: One preview script for install + update with the original code running. `scripts/preview_install_update.py` prints install.ps1's six step titles parsed live (refuses on drift), runs the real `trace doctor`, then runs the updater's real download/verify chain offline on synthetic bytes (real ReleaseManifest, resolve_artifact, stage_artifact, sha256_file, staged record, is_verified_stage True plus empty-dir False), and replays the production progress display. Two drafts died on the way: a narrated .py (rejected — description instead of execution) and a .ps1 orchestrator (replaced — Python reaches installer text, doctor binary, and updater imports in one file). Stable finding: `preview_install_steps.ps1` is stale — it extracts a previous installer generation's step functions and fails on the current install.ps1.
+- Files: scripts/preview_install_update.py, changelog/nirjxr26/changelog.md
+- Verification: ran end to end twice, exit 0 (six live titles, real doctor output incl. its honest nonzero, hash match + verified True + empty-dir False, temp removed, display replay). HTTP transport and the Ed25519 check excluded (need network approval / release keys), stated in-script. Dry: no venv/pip/PATH/registry writes, no migration, no lock, no network. Ruff check/format clean; no product code touched, so no product tests affected. scripts/ is gitignored (local previews never committed).
+## 2026-10-15
+- Summary: CLI per-event card (`audit show --seq`) now shows only the `INTEGRITY · ✓ VERIFIED` seal — the Payload/Previous/Chain hash grid is gone, matching the TUI doctrine that hashes live outside the human card. The seal is still computed per row via `verify_event`; mismatch copy and the raw-JSON tip stay, and JSON output keeps every hash. Audit list and TUI detail untouched.
+- Files: src/trace_core/audit/renderers.py, tests/unit/test_verify_messages.py, changelog/nirjxr26/changelog.md
+- Verification: new `test_an_event_card_shows_the_seal_without_hash_rows` (real signed row; seal present, all three labels absent). Falsified at assertion level (grid restored fails on `"Payload Hash" not in text`). 129 passed across verify/ledger/CLI/pagination/shell/UI suites; ruff + mypy clean. PERMANENT root-cause solution.
+## 2026-10-15
+- Summary: Installer banner animates the npm_dots braille frames left of `Installing Trace vX` (the exact thothspinner sequence, as `[char]` code points). First cut used a timer event and visibly lagged: those actions run on the main thread, so while pip/git block natively the ticks queue and fire in a burst. Rebuilt on a runspace worker thread with a synchronized stop flag — 30 repaints measured during a 2s native block, zero with the old driver. Then fixed the real defect behind the garbled screenshot: Ctrl+C aborted past both stop calls and orphaned the painter thread in the session (evidence fit exactly — repaints interleaved with fresh prompts). A script-scope `trap { Stop-InstallSpinner }` now guarantees cleanup on any abort; A/B probes proved leak-without-trap vs clean-with-trap. Quiet TTYs only; verbose/redirected output byte-identical.
+- Files: install.ps1, changelog/nirjxr26/changelog.md
+- Verification: PowerShell parser clean; frame codes cross-checked against the live thothspinner sequence; throwaway live probes (deleted after) proved concurrent repaint, abort cleanup, and the static fallback. Then caught a real defect the probes exposed: PowerShell honors only one trap per scope, so the new trap was dead code beside the pre-existing `trap { throw $_ }` — merged into a single trap (cleanup stays fail-open-free via rethrow). A/B probes proved leak-without-trap vs clean-with-trap, plus abort-still-propagates. On the dependency question, answered plainly: thothspinner's frames are already byte-identical here, it cannot load before the venv exists, and a spinner subprocess orphans worse — the defect was lifecycle, fixed as such. No product Python touched; full gate not re-run per owner instruction.
+## 2026-10-15
+- Summary: Removed the installer spinner animation per owner request. `install.ps1` is back to the static `Installing Trace vX` banner: both spinner functions, both stop calls, and the merged trap are gone, and the original `trap { throw $_ }` plus banner line are restored verbatim.
+- Files: install.ps1, changelog/nirjxr26/changelog.md
+- Verification: grep proves zero spinner/frame references remain; PowerShell parser clean. Earlier phases' uncommitted `install.ps1` changes untouched (only today's hunks reversed).
+## 2026-10-15
+- Summary: Working analysis docs excluded from version control. `DEVICE-UX-FINDINGS.md` and `FORENSIC-GAP-ASSESSMENT.md` join `CODE-AUDIT.md` under .gitignore's Internal Documentation section; both were untracked, so nothing leaves the tree.
+- Files: .gitignore, changelog/nirjxr26/changelog.md
+- Verification: `git status` no longer lists either file.

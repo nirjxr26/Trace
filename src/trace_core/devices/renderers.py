@@ -4,6 +4,7 @@ Verdict colours are derived from the existing theme tokens rather than a private
 so a theme change reaches the device panels without a second edit.
 """
 
+import re
 from typing import Any
 
 from rich.markup import escape
@@ -15,7 +16,7 @@ from trace_core.core.ui.renderers import (
 )
 from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
 from trace_core.devices.domain import WpVerdict
-from trace_core.devices.dto import DeviceInfoDto, FingerprintDto, InspectionDto, WpCheckDto
+from trace_core.devices.dto import DeviceInfoDto, FingerprintDto, InspectionDto, ObservationDto, WpCheckDto
 from trace_core.devices.service import short_id
 
 VERDICT_STYLES: dict[str, tuple[str, str]] = {
@@ -23,6 +24,42 @@ VERDICT_STYLES: dict[str, tuple[str, str]] = {
     WpVerdict.WRITABLE.value: ("WRITABLE", THEME_TOKENS["status_archived"]),
     WpVerdict.UNKNOWN.value: ("UNKNOWN", THEME_TOKENS["status_review"]),
 }
+
+
+_PART_NUMBER = re.compile(r"(?<!-)[ _]+(?=[A-Z0-9]*\d)[A-Z0-9]{4,}(?:_[A-Z0-9]{2,})*$")
+_CAPACITY_SUFFIX = re.compile(
+    r"\s+\d+(?:\.\d+)?\s?(?:TB|GB|MB)\b|\s+USB\s?3\.0\b|\s+External\b",
+    re.IGNORECASE,
+)
+
+
+_DRIVE_PREFIX = "physicaldrive"
+
+
+def display_node(node: str) -> str:
+    """A human name for a device node. `\\\\.\\PhysicalDrive0` reads as `Drive 0`.
+
+    A node is an OS handle, not something an examiner recognises a disk by. Falls back to
+    the trailing path component for file-backed adapters, where the name is meaningful.
+    """
+    name = node.replace("\\", "/").rsplit("/", 1)[-1] or node
+    if name.lower().startswith(_DRIVE_PREFIX):
+        index = name[len(_DRIVE_PREFIX) :]
+        return f"Drive {index}" if index else "Drive"
+    return name
+
+
+def readable_model(model: str) -> str:
+    """Strip the part number and capacity a vendor appends, keeping the product name.
+
+    `NVMe Micron_2400_MTFDKBA512QFM` reads as `NVMe Micron`, `Samsung SSD 990 PRO 2TB` as
+    `Samsung SSD 990 PRO`. Only an underscore-joined tail is treated as a part number:
+    a hyphen joins a real model to its revision (`WDC WD10EZEX-08W`), so it is kept.
+    Display only - the raw string stays on `Model` and in every stored observation.
+    """
+    text = _PART_NUMBER.sub("", model).strip(" _-")
+    text = _CAPACITY_SUFFIX.sub("", text).strip(" _-,")
+    return text or model
 
 
 def format_bytes(value: int | None) -> str:
@@ -55,6 +92,7 @@ def _devices_table(devices: list[DeviceInfoDto]) -> None:
         ("KIND", {"style": THEME_TOKENS["label"]}),
         ("SIZE", {"style": THEME_TOKENS["label"], "justify": "right"}),
         ("MODEL", {"style": THEME_TOKENS["label"]}),
+        ("SERIAL", {"style": THEME_TOKENS["label"]}),
         ("REAL HW", {"style": THEME_TOKENS["label"]}),
     ]
     rows: list[list[Any]] = [
@@ -64,6 +102,7 @@ def _devices_table(devices: list[DeviceInfoDto]) -> None:
             device.kind.value,
             format_bytes(device.size_bytes),
             escape(device.model_hint or "-"),
+            escape(device.serial or "-"),
             "yes" if device.requires_real_hardware_opt_in else "no",
         ]
         for device in devices
@@ -76,8 +115,8 @@ def _devices_table(devices: list[DeviceInfoDto]) -> None:
     )
 
 
-def render_inspection(inspection: InspectionDto, output: str = "table") -> None:
-    render_output(output, inspection.model_dump(mode="json"), lambda: _inspection_card(inspection))
+def render_inspection(inspection: InspectionDto, output: str = "table", case_numbers: list[str] | None = None) -> None:
+    render_output(output, inspection.model_dump(mode="json"), lambda: _inspection_card(inspection, case_numbers))
 
 
 def _fingerprint_rows(fingerprint: FingerprintDto) -> list[list[Any]]:
@@ -92,7 +131,7 @@ def _fingerprint_rows(fingerprint: FingerprintDto) -> list[list[Any]]:
     ]
 
 
-def _inspection_card(inspection: InspectionDto) -> None:
+def _inspection_card(inspection: InspectionDto, case_numbers: list[str] | None = None) -> None:
     console.print("")
     console.print(f"  [bold]Device[/bold] [cyan]{escape(inspection.device.node)}[/cyan]")
     console.print("")
@@ -107,7 +146,43 @@ def _inspection_card(inspection: InspectionDto) -> None:
         rows=_fingerprint_rows(inspection.fingerprint),
         tight=True,
     )
+    if case_numbers:
+        from trace_core.core.ui.renderers import render_section_title
+
+        console.print("")
+        render_section_title("CASES")
+        console.print("")
+        for number in case_numbers:
+            console.print(f"    {escape(number)}")
     console.print("")
+
+
+def render_history(observations: list[ObservationDto], output: str = "table") -> None:
+    render_output(output, [o.model_dump(mode="json") for o in observations], lambda: _history_table(observations))
+
+
+def _history_table(observations: list[ObservationDto]) -> None:
+    columns = [
+        ("OBSERVED", {"style": THEME_TOKENS["label"]}),
+        ("SERIAL", {"style": THEME_TOKENS["label"]}),
+        ("MODEL", {"style": THEME_TOKENS["label"]}),
+        ("VERDICT", {"style": THEME_TOKENS["label"]}),
+    ]
+    rows: list[list[Any]] = [
+        [
+            observation.inspected_at.isoformat(),
+            escape(observation.serial),
+            escape(observation.model),
+            escape(observation.verdict.value if observation.verdict else "-"),
+        ]
+        for observation in observations
+    ]
+    render_minimalist_table(
+        title="Device History",
+        columns=columns,
+        rows=rows,
+        empty_message="No observations recorded for this device.",
+    )
 
 
 def render_gate(check: WpCheckDto, output: str = "table") -> None:
@@ -135,3 +210,16 @@ def _gate_card(check: WpCheckDto) -> None:
         tight=True,
     )
     console.print("")
+
+
+def device_heading(node: str, model: str | None, capacity_bytes: int | None) -> str:
+    """How a device is named wherever it appears: the recorded model and its capacity.
+
+    Falls back to the node rather than an invented name - a device filed but never
+    inspected has no model, and "Drive 0" is a name nobody saw. The model is shown exactly
+    as recorded: `readable_model` shortens a vendor part number into a product name, which
+    is right for a narrow list column and wrong in a record, because the part number is what
+    identifies the drive.
+    """
+    parts = [part for part in (model, format_bytes(capacity_bytes) if capacity_bytes else "") if part]
+    return "  \u00b7  ".join(parts) or node

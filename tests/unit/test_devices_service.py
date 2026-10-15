@@ -147,6 +147,80 @@ def test_every_device_row_has_the_device_subject(session_manager, svc, box: Path
     assert subjects == {"device"}
 
 
+def test_device_rows_address_the_device_by_its_observed_serial(session_manager, svc, box: Path) -> None:
+    from trace_core.audit.models import AuditEventModel
+    from trace_core.core.operators import process_session_id
+
+    _ = process_session_id()
+    node = str(box / "disk-a.dd")
+    serial = svc.inspect_device(node).fingerprint.serial.value
+    svc.check_device(node)
+    with session_manager.session() as session:
+        rows = session.scalars(select(AuditEventModel).order_by(AuditEventModel.seq)).all()
+    assert [r.subject_type for r in rows] == ["device", "device"]
+    assert [r.subject_device_serial for r in rows] == [serial, serial]
+
+
+def test_an_acknowledged_override_addresses_the_device_by_its_serial(session_manager, box: Path) -> None:
+    from trace_core.audit.models import AuditEventModel
+    from trace_core.core.operators import process_session_id
+
+    _ = process_session_id()
+    adapter = file_device.FileDevice(box, behaviour=file_device.UNKNOWN_PROTECTION)
+    svc = DeviceService(session_manager, adapter, adapter, adapter)
+    node = str(box / "disk-a.dd")
+    serial = svc.inspect_device(node).fingerprint.serial.value
+    svc.check_device(node, acknowledge_unverified_source=True)
+    with session_manager.session() as session:
+        rows = session.scalars(select(AuditEventModel).order_by(AuditEventModel.seq)).all()
+    assert [r.action for r in rows] == ["DEVICE_INSPECTED", "DEVICE_GATE_CHECKED", "DEVICE_OVERRIDE"]
+    assert [r.subject_device_serial for r in rows] == [serial, serial, serial]
+
+
+def test_a_case_link_row_stays_a_case_subject(session_manager, svc, box: Path) -> None:
+    from trace_core.audit.models import AuditEventModel
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+
+    case = CaseService(session_manager).create_case(CaseCreateDto(title="Link", lead_examiner="Ex"))
+    svc.link_device(str(box / "disk-a.dd"), case.number, label="bag-1")
+    with session_manager.session() as session:
+        row = session.scalars(select(AuditEventModel).order_by(AuditEventModel.seq)).all()[-1]
+    assert row.action == "DEVICE_LINKED"
+    assert row.subject_type == "case"
+    assert row.subject_case_number == case.number
+    assert row.subject_device_serial is None
+
+
+def test_an_explicit_list_records_one_recognition_row(session_manager, svc, box: Path) -> None:
+    import json
+
+    from trace_core.audit.models import AuditEventModel
+
+    found = svc.list_devices("all", audit_recognition=True)
+    assert len(found) == 1
+    with session_manager.session() as session:
+        rows = session.scalars(select(AuditEventModel).order_by(AuditEventModel.seq)).all()
+    assert [r.action for r in rows] == ["DEVICE_RECOGNIZED"]
+    assert rows[0].subject_type == "system"
+    assert rows[0].subject_case_number is None
+    assert rows[0].subject_device_serial is None
+    details = json.loads(rows[0].payload_json)["details"]
+    assert details["kind"] == "all"
+    assert details["count"] == 1
+    assert [(d["node"], d["kind"], d["serial"]) for d in details["devices"]] == [(str(box / "disk-a.dd"), "FILE", None)]
+
+
+def test_a_plain_list_writes_no_ledger_row(session_manager, svc, box: Path) -> None:
+    from trace_core.audit.models import AuditEventModel
+    from trace_core.devices import helpers as device_helpers
+
+    assert len(svc.list_devices("all")) == 1
+    assert len(device_helpers.do_list(session_manager, "all")) == 1
+    with session_manager.session() as session:
+        assert session.scalars(select(AuditEventModel)).all() == []
+
+
 def test_inspect_row_carries_the_observed_identity(session_manager, svc, box: Path) -> None:
     from trace_core.audit.events import parse_details
     from trace_core.core.operators import process_session_id
@@ -581,13 +655,26 @@ def test_the_d31_adapter_guard_can_actually_fail(tmp_path: Path) -> None:
 
 
 def test_fingerprints_are_not_purged_with_a_case(session_manager, svc, box: Path) -> None:
+    """[D29] observation history outlives the case it was captured during.
+
+    The link to a case lives in its own `case_devices` table, so an observation carries no
+    case reference at all and there is no foreign key for a purge to cascade along.
+    """
     from trace_core.devices.models import DeviceFingerprintModel
 
     svc.inspect_device(str(box / "disk-a.dd"))
     with session_manager.session() as session:
         rows = session.scalars(select(DeviceFingerprintModel)).all()
     assert rows
-    assert not any("case" in column.name for column in DeviceFingerprintModel.__table__.columns)
+    assert all(row.case_number is None for row in rows), (
+        "the link must be carried by case_devices, never by the observation row"
+    )
+
+    from sqlalchemy import inspect
+
+    assert inspect(session_manager.engine).get_foreign_keys(DeviceFingerprintModel.__tablename__) == [], (
+        "the case link must not be a foreign key; a cascade would delete forensic history with the case"
+    )
 
 
 def test_check_refuses_a_stale_inspection_of_another_device(session_manager, svc, box: Path) -> None:

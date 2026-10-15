@@ -163,13 +163,16 @@ def test_stage_label_is_one_map_shared_by_every_surface():
 
 
 def test_stage_line_consumers_read_the_shared_map():
+    """Stage labels come from the shared helper, never a private copy.
+
+    The settings sidebar no longer lists stages at all - the update popup owns that - so the
+    guard here is that no consumer reintroduces a private STAGE_DONE_LABEL copy.
+    """
     assert "stage_label" in _source(update_renderers)
     from trace_core.tui.screens import settings as settings_screen
 
     settings_src = _source(settings_screen)
     assert "STAGE_DONE_LABEL" not in settings_src
-    assert "stage_label(stage)" in settings_src
-    assert "STAGE_ORDER" in settings_src
 
 
 def test_step_line_renders_a_glyph_for_every_status():
@@ -332,7 +335,7 @@ def test_uninstall_removes_the_launcher_last_so_a_failure_leaves_trace_usable(tm
     monkeypatch.setattr(uninstall, "_trace_root", lambda: home / ".trace")
     monkeypatch.setattr(uninstall, "_shim_paths", lambda: [shim])
 
-    def _blocked(path):
+    def _blocked(path, **kwargs):
         raise OSError("folder is in use")
 
     monkeypatch.setattr(uninstall.shutil, "rmtree", _blocked)
@@ -340,6 +343,36 @@ def test_uninstall_removes_the_launcher_last_so_a_failure_leaves_trace_usable(tm
     assert code == EXIT_ERROR, "a failed removal must not report success"
     assert shim.exists(), "the launcher must survive a failed uninstall"
     assert (home / ".trace" / "app").exists(), "the app must survive so trace still runs"
+
+
+def test_uninstall_removes_a_read_only_file_inside_the_tree(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """`trace uninstall` died with WinError 5 on a git pack file. Git marks pack files
+    read-only, and Windows refuses to delete a read-only file, so the whole app tree
+    survived. Clearing the bit must let the removal finish rather than be reported as
+    a partial uninstall."""
+    from trace_core.core.cli import uninstall
+
+    app = tmp_path / ".trace" / "app"
+    pack = app / ".git" / "objects" / "pack"
+    pack.mkdir(parents=True)
+    idx = pack / "pack-55137ca44969b56f68abec7204667312891d8599.idx"
+    idx.write_bytes(b"idx")
+    idx.chmod(0o444)
+
+    assert uninstall._remove(app) is True, "a read-only file must not block removal"
+    assert not app.exists()
+
+
+def test_uninstall_removes_a_read_only_file_target(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """The launcher itself can be read-only; the single-file path needs the same repair."""
+    from trace_core.core.cli import uninstall
+
+    shim = tmp_path / "trace"
+    shim.write_text("#!/bin/sh\n", encoding="utf-8")
+    shim.chmod(0o444)
+
+    assert uninstall._remove(shim) is True
+    assert not shim.exists()
 
 
 def test_uninstall_reports_a_failure_instead_of_printing_nothing(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -352,7 +385,7 @@ def test_uninstall_reports_a_failure_instead_of_printing_nothing(tmp_path, monke
     monkeypatch.setattr(uninstall, "_trace_root", lambda: home / ".trace")
     monkeypatch.setattr(uninstall, "_shim_paths", lambda: [])
 
-    def _blocked(path):
+    def _blocked(path, **kwargs):
         raise OSError("folder is in use")
 
     monkeypatch.setattr(uninstall.shutil, "rmtree", _blocked)

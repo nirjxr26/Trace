@@ -16,17 +16,19 @@ from trace_core.core.canonical import canonical_json
 from trace_core.core.database.repository import SqlAlchemyBaseRepository
 from trace_core.core.domain import bound_actor
 from trace_core.devices.domain import (
+    CaseDeviceLink,
     DeviceFingerprint,
     DeviceInspection,
     DeviceInterface,
     GateCheck,
+    ObservedDevice,
     ObservedSerial,
     ProtectionEvidence,
     StoredObservation,
     UnknownCause,
     WpVerdict,
 )
-from trace_core.devices.models import DeviceFingerprintModel
+from trace_core.devices.models import CaseDeviceModel, DeviceFingerprintModel
 
 
 class DeviceRepository(Protocol):
@@ -43,6 +45,24 @@ class DeviceRepository(Protocol):
     def observation_history(self, serial: str, limit: int = 10) -> list[StoredObservation]:
         """Newest-first rows including the gate outcome of each."""
         ...
+
+    def links_for_case(self, case_number: str, limit: int = 100) -> list[CaseDeviceLink]:
+        """Every device filed under one case, newest first. Powers the case dossier."""
+        ...
+
+    def links_for_node(self, node: str) -> list[CaseDeviceLink]:
+        """Every case a device is filed under. Works before any inspection exists."""
+        ...
+
+    def observed_devices(self) -> dict[str, ObservedDevice]:
+        """What the newest observation recorded per node. Lets `device list` name a
+        serial to `device history` and a dossier describe a device, neither of which
+        should require the device to be attached now."""
+        ...
+
+    def add_link(self, link: CaseDeviceLink) -> None: ...
+
+    def remove_link(self, case_number: str, node: str) -> bool: ...
 
 
 class SqlAlchemyDeviceRepository(
@@ -87,7 +107,12 @@ class SqlAlchemyDeviceRepository(
     def _update_model(self, model: DeviceFingerprintModel, entity: DeviceFingerprint) -> None:
         raise NotImplementedError("observations are append-only; a re-inspection appends a new row [D3]")
 
-    def save_observation(self, inspection: DeviceInspection, actor: str, gate: GateCheck | None = None) -> None:
+    def save_observation(
+        self,
+        inspection: DeviceInspection,
+        actor: str,
+        gate: GateCheck | None = None,
+    ) -> None:
         fp = inspection.fingerprint
         self.session.add(
             DeviceFingerprintModel(
@@ -136,6 +161,65 @@ class SqlAlchemyDeviceRepository(
         if limit <= 0:
             return []
         return [self._to_observation(row) for row in self.session.scalars(self._observations(serial, limit)).all()]
+
+    def links_for_case(self, case_number: str, limit: int = 100) -> list[CaseDeviceLink]:
+        if not case_number or limit <= 0:
+            return []
+        stmt = (
+            select(CaseDeviceModel)
+            .where(CaseDeviceModel.case_number == case_number)
+            .order_by(CaseDeviceModel.linked_at.desc())
+            .limit(limit)
+        )
+        return [_to_link(row) for row in self.session.scalars(stmt).all()]
+
+    def links_for_node(self, node: str) -> list[CaseDeviceLink]:
+        stmt = select(CaseDeviceModel).where(CaseDeviceModel.node == node).order_by(CaseDeviceModel.case_number)
+        return [_to_link(row) for row in self.session.scalars(stmt).all()]
+
+    def observed_devices(self) -> dict[str, ObservedDevice]:
+        stmt = select(
+            DeviceFingerprintModel.node,
+            DeviceFingerprintModel.serial,
+            DeviceFingerprintModel.model,
+            DeviceFingerprintModel.capacity_bytes,
+        ).order_by(DeviceFingerprintModel.inspected_at.desc())
+        seen: dict[str, ObservedDevice] = {}
+        for node, serial, model, capacity_bytes in self.session.execute(stmt).all():
+            seen.setdefault(node, ObservedDevice(serial, model, capacity_bytes))
+        return seen
+
+    def add_link(self, link: CaseDeviceLink) -> None:
+        self.session.add(
+            CaseDeviceModel(
+                id=uuid.uuid4(),
+                case_number=link.case_number,
+                node=link.node,
+                serial=link.serial,
+                label=link.label,
+                linked_at=link.linked_at,
+                linked_by=bound_actor(link.linked_by),
+            )
+        )
+
+    def remove_link(self, case_number: str, node: str) -> bool:
+        stmt = select(CaseDeviceModel).where(CaseDeviceModel.case_number == case_number, CaseDeviceModel.node == node)
+        row = self.session.scalars(stmt).first()
+        if row is None:
+            return False
+        self.session.delete(row)
+        return True
+
+
+def _to_link(row: CaseDeviceModel) -> CaseDeviceLink:
+    return CaseDeviceLink(
+        case_number=row.case_number,
+        node=row.node,
+        serial=row.serial,
+        label=row.label,
+        linked_at=row.linked_at,
+        linked_by=row.linked_by,
+    )
 
 
 def _evidence_from_json(raw: str | None) -> ProtectionEvidence | None:

@@ -897,6 +897,7 @@ rich==15.0.0 \
     --hash=sha256:edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36
     # via
     #   textual
+    #   thothspinner
     #   trace
     #   typer
 rpds-py==2026.6.3 \
@@ -1059,6 +1060,12 @@ structlog==26.1.0 \
 textual==8.2.8 \
     --hash=sha256:267375fd402dc8d981457212efa71f0e3365fd17bba144ba9bb3ed7563cb374a \
     --hash=sha256:3f106a9fbc73e39dd266c9712432087de78a6d644084c7c241d6a25c3169115b
+    # via
+    #   thothspinner
+    #   trace
+thothspinner==1.2.6 \
+    --hash=sha256:07fde8d673abd13a2a4913fe40d7aeddb19a1ff780df50e6363b5444a3e9ca75 \
+    --hash=sha256:8f79a46a1ee8b1e251c6e072c2d8c7b34f04589ab0a0e5cdaca67318918b9915
     # via trace
 typer==0.27.2 \
     --hash=sha256:269b7eb9d3c202ca84b4bc9618cb04ebb43d3d4d1e567e4c768607232c05f945 \

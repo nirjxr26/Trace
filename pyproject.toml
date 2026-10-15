@@ -22,6 +22,7 @@ dependencies = [
     "textual>=8.2.8",
     "cryptography>=44",
     "packaging>=24",
+    "thothspinner>=1.2.6",
 ]
 
 # Floors are compatibility minima only. Production/dev installs MUST use the

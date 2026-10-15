@@ -123,10 +123,11 @@ def show_case(
     """Display comprehensive case details."""
     with capture_cli_errors("Show Case", default_remediation="Run `trace case list` to inspect available cases."):
         from trace_core.audit.helpers import fetch_case_with_history
+        from trace_core.devices.helpers import do_case_device_rows
 
         service = _get_service()
         case, events = fetch_case_with_history(service, identifier)
-        render_case(case, output, events)
+        render_case(case, output, events, do_case_device_rows(service.session_manager, case.number))
 
 
 @case_app.command("edit")

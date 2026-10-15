@@ -1,7 +1,11 @@
 """Built-in uninstaller: `trace uninstall`."""
 
+import os
 import shutil
+import stat
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -28,6 +32,28 @@ def _trace_root() -> Path:
     return Path.home() / ".trace"
 
 
+def _make_writable(path: str) -> None:
+    os.chmod(path, os.stat(path).st_mode | stat.S_IWRITE)
+
+
+def _clear_readonly_and_retry(
+    func: Callable[[str], Any],
+    path: str,
+    exc: BaseException,
+) -> None:
+    if not isinstance(exc, PermissionError):
+        raise exc
+    _make_writable(path)
+    func(path)
+
+
+def _delete(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path, onexc=_clear_readonly_and_retry)
+    else:
+        path.unlink()
+
+
 def _remove(path: Path) -> bool:
     """Remove a path, returning whether it is gone.
 
@@ -37,10 +63,11 @@ def _remove(path: Path) -> bool:
     """
     if not path.exists():
         return False
-    if path.is_dir():
-        shutil.rmtree(path)
-    else:
-        path.unlink()
+    try:
+        _delete(path)
+    except PermissionError:
+        _make_writable(str(path))
+        _delete(path)
     return not path.exists()
 
 

@@ -41,6 +41,25 @@ def test_audit_cli_show_verify_export(tmp_path, session_manager: DatabaseSession
     assert "seq" in res_j.stdout
 
 
+def test_devices_addressed_by_serial_are_filterable_from_the_cli(session_manager: DatabaseSessionManager) -> None:
+    from trace_core.audit.domain import AuditAction
+    from trace_core.audit.repository import SqlAlchemyAuditRepository
+
+    with session_manager.session() as session:
+        repo = SqlAlchemyAuditRepository(session)
+        repo.append(
+            AuditAction.DEVICE_INSPECTED, "Ex", None, None, {}, subject_type="device", subject_device_serial="SYNTH-9"
+        )
+        repo.append(
+            AuditAction.DEVICE_INSPECTED, "Ex", None, None, {}, subject_type="device", subject_device_serial="SYNTH-1"
+        )
+        session.commit()
+    res = runner.invoke(app, ["audit", "show", "--device", "SYNTH-9", "--output", "json"])
+    assert res.exit_code == 0
+    assert "SYNTH-9" in res.stdout
+    assert "SYNTH-1" not in res.stdout
+
+
 def test_anchor_write_verify_roundtrip(
     tmp_path, session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:  # type: ignore[no-untyped-def]

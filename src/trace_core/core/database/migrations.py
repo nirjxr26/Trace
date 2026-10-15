@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Column, Connection, Engine, Integer, MetaData, String, Table, inspect, select, text
+from sqlalchemy import Column, Connection, Engine, Integer, MetaData, String, Table, insert, inspect, select, text
 
 from trace_core.core.clock import now_utc
 from trace_core.core.database.base import Base, UTCDateTime
@@ -768,6 +768,12 @@ def _migration_016_update_roundtrip(bind: Engine | Connection) -> None:
 SUBJECT_TYPE_COLUMN = "subject_type"
 SUBJECT_TYPE_INDEX = "ix_audit_events_subject_type"
 AUDIT_EVENTS_REBUILD_TABLE = "_audit_events_d14"
+AUDIT_DEVICE_SERIAL_COLUMN = "subject_device_serial"
+AUDIT_DEVICE_SERIAL_INDEX = "ix_audit_events_subject_device_serial"
+AUDIT_DEVICE_SERIAL_ADD_COLUMN = f"ALTER TABLE audit_events ADD COLUMN {AUDIT_DEVICE_SERIAL_COLUMN} TEXT"
+AUDIT_DEVICE_SERIAL_ADD_INDEX = (
+    f"CREATE INDEX {AUDIT_DEVICE_SERIAL_INDEX} on audit_events ({AUDIT_DEVICE_SERIAL_COLUMN})"
+)
 
 
 def _column_allows_null(conn: Connection, table: str, column: str) -> bool:
@@ -922,3 +928,201 @@ def _migration_018_device_fingerprints(bind: Engine | Connection) -> None:
     if DEVICE_FINGERPRINTS_TABLE not in Base.metadata.tables:
         return
     Base.metadata.create_all(bind=bind, tables=[Base.metadata.tables[DEVICE_FINGERPRINTS_TABLE]])
+
+
+DEVICE_CASE_COLUMN = "case_number"
+DEVICE_CASE_INDEX = "ix_device_fingerprints_case_number"
+# Declared once and both hashed into the migration's identity and executed. Two literals
+# would let the recorded identity describe SQL the migration never runs.
+DEVICE_CASE_ADD_COLUMN = f"ALTER TABLE {DEVICE_FINGERPRINTS_TABLE} ADD COLUMN {DEVICE_CASE_COLUMN} VARCHAR(64)"
+DEVICE_CASE_ADD_INDEX = f"CREATE INDEX {DEVICE_CASE_INDEX} on {DEVICE_FINGERPRINTS_TABLE} ({DEVICE_CASE_COLUMN})"
+CASE_DEVICES_TABLE = "case_devices"
+CASE_DEVICES_INDEX = "ix_case_devices_case_number"
+REQUIRED_CASE_DEVICE_COLUMNS = frozenset({"id", "case_number", "node", "serial", "label", "linked_at", "linked_by"})
+DEVICE_NODE_INDEX = "ix_device_fingerprints_node"
+DEVICE_OBSERVED_INDEX = "ix_device_fingerprints_inspected_at"
+CASE_DEVICE_NODE_INDEX = "ix_case_devices_node"
+DEVICE_NODE_ADD_INDEX = f"CREATE INDEX {DEVICE_NODE_INDEX} on {DEVICE_FINGERPRINTS_TABLE} (node)"
+DEVICE_OBSERVED_ADD_INDEX = f"CREATE INDEX {DEVICE_OBSERVED_INDEX} on {DEVICE_FINGERPRINTS_TABLE} (inspected_at)"
+CASE_DEVICE_NODE_ADD_INDEX = f"CREATE INDEX {CASE_DEVICE_NODE_INDEX} on {CASE_DEVICES_TABLE} (node)"
+
+
+def _verify_019_device_fingerprints_case_link(conn: Connection) -> bool:
+    if DEVICE_FINGERPRINTS_TABLE not in inspect(conn).get_table_names():
+        return False
+    if DEVICE_CASE_COLUMN not in _column_names(conn, DEVICE_FINGERPRINTS_TABLE):
+        return False
+    return _index_exists(conn, DEVICE_FINGERPRINTS_TABLE, DEVICE_CASE_INDEX)
+
+
+def _run_migration_019(conn: Connection) -> None:
+    if DEVICE_FINGERPRINTS_TABLE not in inspect(conn).get_table_names():
+        return
+    if DEVICE_CASE_COLUMN not in _column_names(conn, DEVICE_FINGERPRINTS_TABLE):
+        conn.execute(text(DEVICE_CASE_ADD_COLUMN))
+    if not _index_exists(conn, DEVICE_FINGERPRINTS_TABLE, DEVICE_CASE_INDEX):
+        conn.execute(text(DEVICE_CASE_ADD_INDEX))
+
+
+@register_migration(
+    19,
+    "019_device_fingerprints_case_link",
+    operations=(DEVICE_CASE_ADD_COLUMN, DEVICE_CASE_ADD_INDEX),
+    verify=lambda conn: _verify_019_device_fingerprints_case_link(conn),
+)
+def _migration_019_device_fingerprints_case_link(bind: Engine | Connection) -> None:
+    """Case linkage on the observation row.
+
+    Superseded by migration 020, which moves the link to `case_devices` so filing a
+    device no longer requires inspecting it. The column stays until it is contracted, so
+    this migration keeps its original identity: a deployed database already recorded it
+    under this name and checksum, and renaming it is refused as drift [D29].
+    """
+    if isinstance(bind, Connection):
+        _run_migration_019(bind)
+    else:
+        with bind.begin() as conn:
+            _run_migration_019(conn)
+
+
+def _verify_020_case_devices(conn: Connection) -> bool:
+    if CASE_DEVICES_TABLE not in inspect(conn).get_table_names():
+        return False
+    if not REQUIRED_CASE_DEVICE_COLUMNS.issubset(_column_names(conn, CASE_DEVICES_TABLE)):
+        return False
+    return _index_exists(conn, CASE_DEVICES_TABLE, CASE_DEVICES_INDEX)
+
+
+def _run_migration_020(conn: Connection) -> None:
+    import uuid
+
+    from sqlalchemy import Table
+
+    table = Table(CASE_DEVICES_TABLE, Base.metadata)
+    observed = Table(DEVICE_FINGERPRINTS_TABLE, Base.metadata)
+    if CASE_DEVICES_TABLE not in inspect(conn).get_table_names():
+        table.create(bind=conn)
+    if DEVICE_CASE_COLUMN not in _column_names(conn, DEVICE_FINGERPRINTS_TABLE):
+        return
+    already = set(conn.execute(select(table.c.case_number, table.c.node)).all())
+    moved = conn.execute(
+        select(
+            observed.c.case_number,
+            observed.c.node,
+            observed.c.serial,
+            observed.c.inspected_at,
+            observed.c.inspected_by,
+        ).where(observed.c.case_number.is_not(None))
+    ).all()
+    for case_number, node, serial, inspected_at, inspected_by in moved:
+        if (case_number, node) in already:
+            continue
+        conn.execute(
+            insert(table).values(
+                id=uuid.uuid4(),
+                case_number=case_number,
+                node=node,
+                serial=serial,
+                label=None,
+                linked_at=inspected_at,
+                linked_by=inspected_by,
+            )
+        )
+
+
+@register_migration(
+    20,
+    "020_case_devices",
+    operations=(
+        f"CREATE TABLE {CASE_DEVICES_TABLE} (no foreign key to cases)",
+        f"CREATE INDEX {CASE_DEVICES_INDEX} on {CASE_DEVICES_TABLE} (case_number)",
+        f"backfill {CASE_DEVICES_TABLE} from {DEVICE_FINGERPRINTS_TABLE}.{DEVICE_CASE_COLUMN}",
+    ),
+    verify=lambda conn: _verify_020_case_devices(conn),
+)
+def _migration_020_case_devices(bind: Engine | Connection) -> None:
+    """Decouple attaching a device to a case from inspecting it.
+
+    The link is bookkeeping: an examiner tags a bagged disk before imaging it, so
+    requiring an inspection first inverted the workflow. No foreign key, so purging a
+    case cannot cascade into device records [D29]. Observations already carrying a case
+    are moved across rather than dropped.
+    """
+    if isinstance(bind, Connection):
+        _run_migration_020(bind)
+    else:
+        with bind.begin() as conn:
+            _run_migration_020(conn)
+
+
+def _verify_021_device_lookup_indexes(conn: Connection) -> bool:
+    return (
+        _index_exists(conn, DEVICE_FINGERPRINTS_TABLE, DEVICE_NODE_INDEX)
+        and _index_exists(conn, DEVICE_FINGERPRINTS_TABLE, DEVICE_OBSERVED_INDEX)
+        and _index_exists(conn, CASE_DEVICES_TABLE, CASE_DEVICE_NODE_INDEX)
+    )
+
+
+def _run_migration_021(conn: Connection) -> None:
+    if DEVICE_FINGERPRINTS_TABLE in inspect(conn).get_table_names():
+        if not _index_exists(conn, DEVICE_FINGERPRINTS_TABLE, DEVICE_NODE_INDEX):
+            conn.execute(text(DEVICE_NODE_ADD_INDEX))
+        if not _index_exists(conn, DEVICE_FINGERPRINTS_TABLE, DEVICE_OBSERVED_INDEX):
+            conn.execute(text(DEVICE_OBSERVED_ADD_INDEX))
+    if CASE_DEVICES_TABLE in inspect(conn).get_table_names():
+        if not _index_exists(conn, CASE_DEVICES_TABLE, CASE_DEVICE_NODE_INDEX):
+            conn.execute(text(CASE_DEVICE_NODE_ADD_INDEX))
+
+
+@register_migration(
+    21,
+    "021_device_lookup_indexes",
+    operations=(
+        DEVICE_NODE_ADD_INDEX,
+        DEVICE_OBSERVED_ADD_INDEX,
+        CASE_DEVICE_NODE_ADD_INDEX,
+    ),
+    verify=lambda conn: _verify_021_device_lookup_indexes(conn),
+)
+def _migration_021_device_lookup_indexes(bind: Engine | Connection) -> None:
+    if isinstance(bind, Connection):
+        _run_migration_021(bind)
+    else:
+        with bind.begin() as conn:
+            _run_migration_021(conn)
+
+
+def _verify_022_audit_device_serial(conn: Connection) -> bool:
+    if "audit_events" not in inspect(conn).get_table_names():
+        return True
+    if AUDIT_DEVICE_SERIAL_COLUMN not in _column_names(conn, "audit_events"):
+        return False
+    if not _column_allows_null(conn, "audit_events", AUDIT_DEVICE_SERIAL_COLUMN):
+        return False
+    return _index_exists(conn, "audit_events", AUDIT_DEVICE_SERIAL_INDEX)
+
+
+def _run_migration_022(conn: Connection) -> None:
+    if "audit_events" not in inspect(conn).get_table_names():
+        return
+    if AUDIT_DEVICE_SERIAL_COLUMN not in _column_names(conn, "audit_events"):
+        conn.execute(text(AUDIT_DEVICE_SERIAL_ADD_COLUMN))
+    if not _index_exists(conn, "audit_events", AUDIT_DEVICE_SERIAL_INDEX):
+        conn.execute(text(AUDIT_DEVICE_SERIAL_ADD_INDEX))
+
+
+@register_migration(
+    22,
+    "022_audit_device_subject_serial",
+    operations=(
+        AUDIT_DEVICE_SERIAL_ADD_COLUMN,
+        AUDIT_DEVICE_SERIAL_ADD_INDEX,
+    ),
+    verify=lambda conn: _verify_022_audit_device_serial(conn),
+)
+def _migration_022_audit_device_subject_serial(bind: Engine | Connection) -> None:
+    if isinstance(bind, Connection):
+        _run_migration_022(bind)
+    else:
+        with bind.begin() as conn:
+            _run_migration_022(conn)

@@ -78,7 +78,13 @@ class AuditService(BaseService):
                 )
         merged = merge_details_context(details or {}, ctx_obj)
         return SqlAlchemyAuditRepository(session).append(
-            action, actor, subject.number, subject.id, merged, subject_type=subject.type
+            action,
+            actor,
+            subject.number,
+            subject.id,
+            merged,
+            subject_type=subject.type,
+            subject_device_serial=subject.device_serial,
         )
 
     def record_hook(

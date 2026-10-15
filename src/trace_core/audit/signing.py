@@ -201,12 +201,25 @@ def _load_private(key_id: str):  # type: ignore[no-untyped-def]
     return Ed25519PrivateKey.from_private_bytes(priv_path.read_bytes())
 
 
+_pub_cache: dict[tuple[str, int], bytes] = {}
+
+
+def _cached_public(suffix: str) -> bytes:
+    path = _key_file(suffix, "pub")
+    stamp = path.stat().st_mtime_ns
+    cached = _pub_cache.get((str(path), stamp))
+    if cached is None:
+        cached = bytes.fromhex(path.read_text(encoding="utf-8").strip())
+        _pub_cache[(str(path), stamp)] = cached
+    return cached
+
+
 def _verify_ed25519(key_id: str, data: bytes, signature: str) -> bool:
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
     try:
-        raw_pub = bytes.fromhex(_key_file(key_id[len(ED25519_PREFIX) :], "pub").read_text(encoding="utf-8").strip())
+        raw_pub = _cached_public(key_id[len(ED25519_PREFIX) :])
         Ed25519PublicKey.from_public_bytes(raw_pub).verify(bytes.fromhex(signature), data)
     except (OSError, ValueError, InvalidSignature):
         return False

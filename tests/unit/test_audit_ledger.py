@@ -526,6 +526,7 @@ _EXPORT_RECORD_KEYS = [
     "actor",
     "subject_case_number",
     "subject_case_id",
+    "subject_device_serial",
     "payload_json",
     "payload_hash",
     "prev_chain",
@@ -570,7 +571,7 @@ def test_export_record_line_is_byte_for_byte_stable(tmp_path, session_manager: D
     line = raw.split(b"\n")[1]
     assert line.startswith(b'{"seq": 1, "ts": "')
     assert b'", "action": "CASE_CREATED", "actor": "Ex", "subject_case_number": "2026-CR-0001"' in line
-    assert b'", "payload_json": "{\\"action\\":\\"CASE_CREATED\\"' in line
+    assert b'"subject_device_serial": null, "payload_json": "{\\"action\\":\\"CASE_CREATED\\"' in line
     assert line.endswith(b"}")
     assert b'"key_id": "hmac-v1", "signature": "' in line
     assert raw.endswith(b"\n")
@@ -586,6 +587,7 @@ def test_export_handles_all_nullable_fields_null(tmp_path, session_manager: Data
     record = _exported_records(out)[0]
     assert record["subject_case_number"] is None
     assert record["subject_case_id"] is None
+    assert record["subject_device_serial"] is None
     assert list(record.keys()) == _EXPORT_RECORD_KEYS
 
 

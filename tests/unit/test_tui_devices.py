@@ -134,7 +134,7 @@ async def test_inspect_records_a_fingerprint(session_manager, device_file_env: P
         await pilot.pause()
         await pilot.press("i")
         detail = await _wait_detail(app, pilot, "FINGERPRINT")
-        assert "Real HW" in detail
+        assert "Hardware" in detail
         assert "Serial" in detail
         assert "SYNTH-" in detail
         assert "Interface" in detail
@@ -157,7 +157,181 @@ def test_the_left_table_shows_only_name_and_size() -> None:
     )
     assert _display_name(named) == "Seagate Expansion"
     bare = DeviceInfoDto(node=r"\\.\PhysicalDrive1", kind=DeviceKind.OS, requires_real_hardware_opt_in=True)
-    assert _display_name(bare) == "PhysicalDrive1"
+    assert _display_name(bare) == "Drive 1"
+
+
+def test_the_device_name_is_readable_not_a_raw_device_path() -> None:
+    """`\\\\.\\PhysicalDrive0` is a Win32 device path, not something an operator reads."""
+    from trace_core.devices.domain import DeviceKind
+    from trace_core.devices.dto import DeviceInfoDto
+    from trace_core.tui.screens.devices import _display_name
+
+    def name(node: str) -> str:
+        return _display_name(DeviceInfoDto(node=node, kind=DeviceKind.OS, requires_real_hardware_opt_in=True))
+
+    assert name(r"\\.\PhysicalDrive0") == "Drive 0"
+    assert name(r"\\.\PhysicalDrive12") == "Drive 12"
+    assert name(r"\\.\PHYSICALDRIVE3") == "Drive 3"
+    assert name("/dev/sda") == "sda"
+    for shown in (name(r"\\.\PhysicalDrive0"), name(r"\\.\PHYSICALDRIVE3")):
+        assert "\\" not in shown
+        assert "." not in shown
+
+
+def test_the_device_column_never_overflows_its_width() -> None:
+    """A long model hint must not spill past the column into the Size column."""
+    from trace_core.devices.domain import DeviceKind
+    from trace_core.devices.dto import DeviceInfoDto
+    from trace_core.tui.screens.devices import TABLE_COLUMNS, DevicesView
+
+    width = TABLE_COLUMNS[0][1]
+    long_name = DeviceInfoDto(
+        node="/dev/sda",
+        kind=DeviceKind.FILE,
+        requires_real_hardware_opt_in=False,
+        model_hint="WD My Passport 2TB External USB 3.0",
+    )
+    view = DevicesView.__new__(DevicesView)
+    for selected in (False, True):
+        cell = view.row_cells(long_name, selected)[0]
+        assert len(cell) <= width, f"name overflowed the column: {cell!r} ({len(cell)} > {width})"
+
+    unwieldy = DeviceInfoDto(
+        node="/dev/sdb",
+        kind=DeviceKind.FILE,
+        requires_real_hardware_opt_in=False,
+        model_hint="ACME SuperDrive 9000 XLR Thunderbolt Reference Edition",
+    )
+    for selected in (False, True):
+        cell = view.row_cells(unwieldy, selected)[0]
+        assert len(cell) <= width, f"name overflowed the column: {cell!r} ({len(cell)} > {width})"
+        assert cell.endswith("…"), "a clamped name must show it was truncated"
+        assert len(cell.strip()) > 4, "a clamped name must keep readable content, not collapse to an ellipsis"
+
+    short = DeviceInfoDto(node="/dev/sda", kind=DeviceKind.FILE, requires_real_hardware_opt_in=False, model_hint="sda")
+    assert "…" not in view.row_cells(short, False)[0]
+
+
+def test_the_model_hint_is_normalised_for_display() -> None:
+    """Vendors append part numbers and capacity; the label keeps the product name."""
+    from trace_core.devices.renderers import readable_model
+
+    assert readable_model("NVMe Micron_2400_MTFDKBA512QFM") == "NVMe Micron"
+    assert readable_model("Samsung SSD 990 PRO 2TB") == "Samsung SSD 990 PRO"
+    assert readable_model("WD My Passport 2TB External USB 3.0") == "WD My Passport"
+
+    for keep in ("WDC WD10EZEX-08W", "Seagate Expansion", "KINGSTON SA400S37/240G"):
+        assert readable_model(keep) == keep, f"a real model name must survive intact: {keep}"
+
+
+def test_a_single_token_name_is_clamped_not_collapsed() -> None:
+    """A path or part number is one long token; it must not vanish into a bare ellipsis."""
+    from trace_core.core.ui.renderers import fit_text
+
+    path = r"C:\Users\nirja\AppData\Local\Temp\pytest-of-nirja\disk-a.dd"
+    clamped = fit_text(path, 20)
+    assert clamped.endswith("…")
+    assert len(clamped) == 20
+    assert clamped != "…"
+    assert clamped.startswith("C:"), "the head of the path must survive"
+
+
+def test_the_device_title_and_list_use_the_normalised_name() -> None:
+    from trace_core.devices.domain import DeviceKind
+    from trace_core.devices.dto import DeviceInfoDto
+    from trace_core.tui.screens.devices import _display_name
+
+    device = DeviceInfoDto(
+        node=r"\\.\PhysicalDrive0",
+        model_hint="NVMe Micron_2400_MTFDKBA512QFM",
+        kind=DeviceKind.OS,
+        requires_real_hardware_opt_in=True,
+    )
+    assert _display_name(device) == "NVMe Micron"
+    assert device.model_hint == "NVMe Micron_2400_MTFDKBA512QFM", "the raw hint must not be mutated"
+
+
+async def test_the_detail_pane_reads_plainly_and_heads_sections_in_accent(
+    session_manager, device_file_env: Path
+) -> None:
+    """No CLI flag may leak into the GUI, and the section heads must match INTEGRITY."""
+    from textual.widgets import Static
+
+    from trace_core.tui.app import TraceApp
+    from trace_core.tui.screens.devices import DevicesView
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("2")
+        await pilot.pause()
+        view = app.query_one(DevicesView)
+        view.refresh_data()
+        await pilot.pause()
+        if not view._items:
+            pytest.skip("no device visible to this adapter")
+
+        _table(app).move_cursor(row=0)
+        view.render_detail()
+        await pilot.pause()
+
+        plain = _text(app.query_one("#device-detail", Static))
+        assert "--allow-real-hardware" not in plain, "a CLI flag must not appear in the GUI"
+        assert "Real HW" not in plain, "the terse label is replaced by readable wording"
+        assert "Hardware" in plain
+        assert any(phrase in plain for phrase in ("access needs confirming", "emulated or image-backed")), (
+            "the hardware row must say what it means"
+        )
+        assert plain.splitlines()[0] != r"\\.\PhysicalDrive0", "the title must be the readable name"
+        assert any(line.startswith("Node") for line in plain.splitlines()), "the raw node stays as a labelled row"
+
+        from trace_core.devices.domain import DeviceKind
+        from trace_core.devices.dto import DeviceInfoDto
+
+        real = DeviceInfoDto(
+            node=r"\\.\PhysicalDrive0",
+            model_hint=None,
+            kind=DeviceKind.OS,
+            requires_real_hardware_opt_in=True,
+        )
+        view._items = [real]
+        _table(app).move_cursor(row=0)
+        view.render_detail()
+        await pilot.pause()
+
+        gated = _text(app.query_one("#device-detail", Static))
+        assert "--allow-real-hardware" not in gated, "a CLI flag must not appear in the GUI"
+        assert "access needs confirming" in gated, "real hardware must still be flagged as gated"
+        assert gated.splitlines()[0] == "Drive 0", "the title must be the readable name"
+
+
+async def test_the_fingerprint_section_head_is_drawn_in_the_accent(session_manager, device_file_env: Path) -> None:
+    """The section heads must carry the accent token, like INTEGRITY on the Cases tab."""
+    from trace_core.core.ui.theme import THEME_HEX
+    from trace_core.tui.app import TraceApp
+
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(120, 34)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.press("i")
+        detail = await _wait_detail(app, pilot, "FINGERPRINT")
+
+        body = app.query_one("#device-detail", Static)
+        want = THEME_HEX["blue"].lstrip("#")
+        want_rgb = tuple(int(want[i : i + 2], 16) for i in (0, 2, 4))
+        found: set[str] = set()
+        for line in body.render_lines(body.size.region):
+            text = "".join(seg.text for seg in line).strip()
+            if text != "FINGERPRINT":
+                continue
+            for seg in line:
+                colour = seg.style.color if seg.style is not None else None
+                triplet = getattr(colour, "triplet", None) if colour is not None else None
+                if triplet == want_rgb:
+                    found.add(text)
+        assert found, f"FINGERPRINT head must be drawn in the accent blue {want_rgb}"
+        assert detail, "the fingerprint section must render"
 
 
 async def test_a_synthetic_device_needs_no_opt_in(session_manager, device_file_env: Path, monkeypatch) -> None:
@@ -344,15 +518,188 @@ async def test_denial_reaches_the_toast_unchanged(session_manager, device_file_e
 
 
 async def test_the_device_table_has_no_horizontal_scroller(session_manager, device_file_env: Path) -> None:
+    """The table and its header must fit the sidebar with a real row present. This ran
+    empty before, so it passed while a single device overflowed both: the DataTable
+    scrolled sideways and the header's count clipped off the panel."""
     from textual.widgets import DataTable
 
+    from trace_core.devices.helpers import do_inspect
     from trace_core.tui.screens.devices import TABLE_COLUMNS
+
+    do_inspect(session_manager, str(device_file_env / "disk-a.dd"))
 
     assert sum(width for _, width in TABLE_COLUMNS) <= 40
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
         await pilot.pause()
+        await pilot.pause()
         table = app.query_one("#device-table", DataTable)
         assert table.scrollbar_size_horizontal == 0
         assert table.scrollable_content_region.width >= sum(width for _, width in TABLE_COLUMNS)
+        assert table.max_scroll_x == 0, (
+            f"device table scrolls sideways: virtual={table.virtual_size} region={table.region}"
+        )
+        header = app.query_one("#device-header", Static)
+        full = str(header.content)
+        painted = app.screen._compositor.render_strips()[header.region.y].text
+        assert full in painted, f"header clipped off the panel: {full!r} not painted"
+
+
+@pytest.mark.anyio
+async def test_a_device_link_event_names_the_device(session_manager, device_file_env) -> None:
+    """A DEVICE_LINKED row names the case but not the drive; selecting one showed a link
+    with nothing on the other end of it."""
+    from trace_core.audit.dto import AuditFilterDto
+    from trace_core.audit.service import AuditService
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+    from trace_core.devices.helpers import do_inspect, do_link
+    from trace_core.tui.app import TraceApp
+    from trace_core.tui.screens.audit import AUDIT_DETAIL_ID, AuditView
+
+    case = CaseService(session_manager).create_case(CaseCreateDto(title="T", description="d", lead_examiner="Dana"))
+    node = str(device_file_env / "disk-a.dd")
+    do_inspect(session_manager, node)
+    do_link(session_manager, node, case.number, label="bag 4471")
+
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(110, 40)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.pause()
+        view = app.query_one(AuditView)
+        event = next(
+            e
+            for e in AuditService(session_manager).list_events(AuditFilterDto(case_number=case.number))
+            if e.action.value == "DEVICE_LINKED"
+        )
+        view._detail = event
+        view._detail_seq = event.seq
+        view.render_detail()
+        await pilot.pause()
+        await pilot.pause()
+        text = str(getattr(app.screen.query_one(f"#{AUDIT_DETAIL_ID}"), "content", ""))
+
+    assert "Device Linked" in text, "the detail must carry its own Device Linked section"
+    # The heading names the model and its capacity, not the OS handle - the same rule the
+    # case dossier uses. The synthetic disk's model is its own filename.
+    assert "disk-a.dd" in text, "the linked device must be named by its model"
+    assert "2.0 KB" in text, "and its size shown"
+    assert "bag 4471" in text, "and its label carried through"
+
+
+async def test_device_history_names_the_recorder(session_manager, device_file_env: Path) -> None:
+    """Regression: the HISTORY block read row.case_number, which ObservationDto never had,
+    so device-history crashed on any inspected device. Observations carry the recorder,
+    not a case - linkage is current-state in case_devices, not a property of old rows."""
+    from trace_core.devices.helpers import do_history, do_inspect
+    from trace_core.tui.screens.devices import DevicesView
+
+    node = str(device_file_env / "disk-a.dd")
+    serial = do_inspect(session_manager, node).fingerprint.serial
+    recorder = do_history(session_manager, serial)[0].inspected_by
+
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(120, 34)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.pause()
+        app.query_one(DevicesView).run_command("history")
+        await pilot.pause()
+        text = _detail(app)
+
+    assert "HISTORY \u00b7" in text, f"history block did not render: {text!r}"
+    assert recorder in text, f"recorder {recorder!r} missing from history: {text!r}"
+
+
+async def test_audit_dividers_refit_after_a_width_change(session_manager, device_file_env: Path) -> None:
+    """A divider baked for a wide window wraps into a phantom short row when the pane
+    narrows. The resize path must rebuild every divider for the live width, leaving no
+    short remainder row anywhere in the pane."""
+    from textual.events import Resize
+
+    from trace_core.audit.dto import AuditFilterDto
+    from trace_core.audit.service import AuditService
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+    from trace_core.devices.helpers import do_inspect, do_link
+    from trace_core.tui.screens.audit import AUDIT_DETAIL_ID, AuditView
+
+    case = CaseService(session_manager).create_case(CaseCreateDto(title="T", description="d", lead_examiner="Dana"))
+    node = str(device_file_env / "disk-a.dd")
+    do_inspect(session_manager, node)
+    do_link(session_manager, node, case.number, label="bag 4471")
+
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(110, 40)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.pause()
+        view = app.query_one(AuditView)
+        event = next(
+            e
+            for e in AuditService(session_manager).list_events(AuditFilterDto(case_number=case.number))
+            if e.action.value == "DEVICE_LINKED"
+        )
+        view._detail = event
+        view._detail_seq = event.seq
+        view.render_detail()
+        await pilot.pause()
+        pane = app.screen.query_one("#audit-right")
+        from rich.text import Text
+
+        stale = Text()
+        stale.append("Device Linked\n")
+        stale.append("\u2500" * (pane.content_region.width + 20) + "\n")
+        app.screen.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(stale)
+        await pilot.pause()
+        # Simulate what a real narrowing leaves behind: stale content and a width
+        # cache from before it moved. Mount already cached the live width, which
+        # would - correctly - early-return, so the moved width is seeded by hand.
+        view._detail_width = None
+        size = app.screen.size
+        view.on_resize(Resize(size, size, size))
+        await pilot.pause()
+        width = pane.content_region.width
+        assert view._detail_width == width
+        strips = app.screen._compositor.render_strips()
+        lengths = set()
+        content = pane.content_region
+        for y in range(content.y, content.y + content.height):
+            line = strips[y].text[pane.content_region.x : pane.content_region.x + width].rstrip()
+            if line and set(line) == {"\u2500"}:
+                lengths.add(len(line))
+        assert lengths, "expected divider rows in the detail pane"
+        assert len(lengths) == 1, f"divider rows differ in length - a wrapped remnant is present: {sorted(lengths)}"
+
+
+async def test_device_poll_pauses_on_hidden_tab(session_manager, monkeypatch) -> None:
+    """The 1 Hz change token fired on background tabs too. _token is only ever read by
+    the poll tick, so its call count is the poll's footprint."""
+    import asyncio
+
+    from trace_core.tui.screens.devices import DevicesView
+
+    real_token = DevicesView._token
+    calls = 0
+
+    def counting(self):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        return real_token(self)
+
+    monkeypatch.setattr(DevicesView, "_token", counting)
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        calls = 0
+        await asyncio.sleep(1.3)
+        assert calls == 0, f"poll ticked while hidden: {calls} token reads"
+        await pilot.press("2")
+        await pilot.pause()
+        calls = 0
+        await asyncio.sleep(1.3)
+        assert calls > 0, "poll never resumed on the visible tab"

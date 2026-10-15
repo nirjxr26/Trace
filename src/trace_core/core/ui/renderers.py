@@ -156,13 +156,23 @@ def is_compact_height(height: int | None = None) -> bool:
 
 
 def fit_text(text: str, max_width: int) -> str:
-    """Truncate text to max_width with ellipsis. Single source for previews/titles."""
-    if len(text) <= max_width or max_width < 4:
-        return text[:max_width] if len(text) > max_width else text
+    """Truncate text to max_width with ellipsis. Single source for previews/titles.
+
+    `textwrap.shorten` breaks on word boundaries, so a single token wider than the
+    budget - a Windows path, a part number - collapsed to a bare ellipsis and lost
+    every character. Fall back to a hard cut when no word boundary fits.
+    """
+    if len(text) <= max_width:
+        return text
+    if max_width < 2:
+        return text[:max_width]
     try:
-        return textwrap.shorten(text, width=max_width, placeholder="…")
+        shortened = textwrap.shorten(text, width=max_width, placeholder="…")
     except Exception:
+        shortened = ""
+    if not shortened or shortened == "…":
         return text[: max_width - 1] + "…"
+    return shortened
 
 
 def rule_width(term_w: int, max_len: int = 66) -> int:

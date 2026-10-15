@@ -183,7 +183,7 @@ def test_migration_017_preserves_row_count_and_column_count(pre_017_engine) -> N
     with pre_017_engine.begin() as conn:
         _run_migration_017(conn)
         assert conn.execute(text("SELECT count(*) FROM audit_events")).scalar() == 1
-        assert len(_column_names(conn, "audit_events")) == 13
+        assert len(_column_names(conn, "audit_events")) == 14
 
 
 def test_migration_017_is_idempotent(pre_017_engine) -> None:
