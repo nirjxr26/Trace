@@ -211,10 +211,13 @@ def test_an_explicit_list_records_one_recognition_row(session_manager, svc, box:
     assert [(d["node"], d["kind"], d["serial"]) for d in details["devices"]] == [(str(box / "disk-a.dd"), "FILE", None)]
 
 
-def test_a_plain_list_writes_no_ledger_row(session_manager, svc, box: Path) -> None:
+def test_a_plain_list_writes_no_ledger_row(session_manager, svc, box: Path, monkeypatch) -> None:
     from trace_core.audit.models import AuditEventModel
     from trace_core.devices import helpers as device_helpers
+    from trace_core.devices.service import ENV_ADAPTER, ENV_DEVICE_ROOT
 
+    monkeypatch.setenv(ENV_ADAPTER, "file")
+    monkeypatch.setenv(ENV_DEVICE_ROOT, str(box))
     assert len(svc.list_devices("all")) == 1
     assert len(device_helpers.do_list(session_manager, "all")) == 1
     with session_manager.session() as session:

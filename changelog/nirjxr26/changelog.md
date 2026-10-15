@@ -5015,6 +5015,10 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Files: install.ps1, changelog/nirjxr26/changelog.md
 - Verification: grep proves zero spinner/frame references remain; PowerShell parser clean. Earlier phases' uncommitted `install.ps1` changes untouched (only today's hunks reversed).
 ## 2026-10-15
+- Summary: Version bump to 0.3.2 across the documented triple (`pyproject.toml`, `trace_core.__version__`, `Settings.version`) plus the README sample and `docs/STATUS.md` product line. Also fixed the CI failure the push exposed: `test_a_plain_list_writes_no_ledger_row` asserted an exact count through the platform-default adapter, which enumerates the runner's real disks on Linux (`/dev/sda*`, 5 rows). Root cause was the test's, not the product's — it now pins the file adapter via `TRACE_DEVICE_ADAPTER`/`TRACE_DEVICE_ROOT` (the `device_file_env` pattern), deterministic on every OS. Frozen compat fixture untouched.
+- Files: pyproject.toml, src/trace_core/__init__.py, src/trace_core/core/settings.py, README.md, docs/STATUS.md, tests/unit/test_devices_service.py, changelog/nirjxr26/changelog.md
+- Verification: version pin green; falsified (settings reverted fails `test_version_single_sourced`); 104 passed across version + device-service suites; ruff + mypy clean. PERMANENT root-cause solution.
+## 2026-10-15
 - Summary: Working analysis docs excluded from version control. `DEVICE-UX-FINDINGS.md` and `FORENSIC-GAP-ASSESSMENT.md` join `CODE-AUDIT.md` under .gitignore's Internal Documentation section; both were untracked, so nothing leaves the tree.
 - Files: .gitignore, changelog/nirjxr26/changelog.md
 - Verification: `git status` no longer lists either file.
