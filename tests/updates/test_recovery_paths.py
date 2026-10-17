@@ -58,3 +58,45 @@ def test_recovery_restores_previous(temp_storage_root, session_manager, tmp_path
     assert res.exit_code == 0
     assert updater_mod.read_active(base) == "0.1.0"
     shutil.rmtree(base, ignore_errors=True)
+
+
+def test_recovery_honors_the_recorded_target_after_an_interrupted_rollback(
+    temp_storage_root, session_manager, tmp_path, monkeypatch
+):
+    import shutil
+
+    from trace_core.core.settings import settings
+    from trace_core.updates.marker import read_marker
+    from trace_updater import updater as updater_mod
+
+    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
+    base = tmp_path / "install"
+    for version, payload in (("0.1.0", b"good"), ("0.2.0", b"kept"), ("1.5.0", b"bad")):
+        seed = tmp_path / f"seed-{version}"
+        seed.mkdir()
+        (seed / "trace.bin").write_bytes(payload)
+        updater_mod.stage_release(
+            seed,
+            base,
+            version,
+            expected=["trace.bin"],
+            release_meta={"version": version, "schema_min": 0, "schema_target": 99},
+        )
+    updater_mod.activate(base, "0.1.0")
+    updater_mod.activate(base, "0.2.0")
+    updater_mod.activate(base, "1.5.0")
+    updater_mod.activate(base, "0.2.0")
+    write_marker(
+        {
+            "transaction_id": "tx-rec-3",
+            "state": "ROLLING_BACK",
+            "rollback_target": "0.2.0",
+            "backup_path": "",
+        }
+    )
+    res = CliRunner().invoke(app, ["recovery"])
+    assert res.exit_code == 0
+    assert updater_mod.read_active(base) == "0.2.0"
+    assert updater_mod.read_previous(base) == "1.5.0"
+    assert read_marker()["state"] == "ROLLED_BACK"
+    shutil.rmtree(base, ignore_errors=True)

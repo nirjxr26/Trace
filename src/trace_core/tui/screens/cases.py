@@ -14,10 +14,11 @@ from textual.widgets import DataTable, Input, Rule, Static
 from trace_core.audit.domain import AuditAction
 from trace_core.audit.dto import AuditFilterDto
 from trace_core.audit.service import AuditService
+from trace_core.cases.domain import CaseStatus
 from trace_core.cases.dto import CaseCreateDto, CaseFilterDto, CaseResponseDto, CaseUpdateDto
 from trace_core.cases.service import CaseService
 from trace_core.core.database.session import DatabaseSessionManager
-from trace_core.core.errors import ApplicationError
+from trace_core.core.errors import ApplicationError, NotFoundError
 from trace_core.core.ui.renderers import format_india_datetime, sanitize_terminal
 from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
 from trace_core.tui.actions import run_guarded
@@ -75,6 +76,7 @@ class CasesView(TablePane[CaseResponseDto]):
     BINDINGS = [
         Binding("c", "create", "Create"),
         Binding("e", "edit", "Edit"),
+        Binding("w", "review", "Review"),
         Binding("x", "seal", "Seal"),
         Binding("a", "archive", "Archive"),
         Binding("p", "purge", "Purge"),
@@ -97,7 +99,7 @@ class CasesView(TablePane[CaseResponseDto]):
         self._cases: list[CaseResponseDto] = []
         self._event_cache: dict[str, list] = {}
         self._event_total: dict[str, int] = {}
-        self._device_cache: dict[str, list[_LinkedDevice]] = {}
+        self._device_cache: dict[str, list[_LinkedDevice] | None] = {}
         self._case_versions: dict[str, datetime] = {}
         self._detail_width: int | None = None
 
@@ -201,7 +203,7 @@ class CasesView(TablePane[CaseResponseDto]):
                     verified = False
                     break
         body.append(rule)
-        body.append("\nINTEGRITY\n", style=THEME_TOKENS["accent"])
+        body.append("\nSELF-CHECK\n", style=THEME_TOKENS["accent"])
         body.append_text(integrity_line(verified, len(events or ()), sampled=self._dossier_total(case_number)))
         body.append("\n")
         body.append(rule)
@@ -246,7 +248,11 @@ class CasesView(TablePane[CaseResponseDto]):
             body.append("\nNOTES\n", style=THEME_TOKENS["accent"])
             body.append(f"  {sanitize_terminal(case.notes)}\n")
         devices = self._case_devices(case.number)
-        if devices:
+        if devices is None:
+            body.append(rule)
+            body.append("\nLINKED DEVICE\n", style=THEME_TOKENS["accent"])
+            body.append("Couldn't read device links for this case.\n")
+        elif devices:
             body.append(rule)
             body.append("\nLINKED DEVICE\n", style=THEME_TOKENS["accent"])
             for row in devices:
@@ -261,7 +267,7 @@ class CasesView(TablePane[CaseResponseDto]):
         self._event_total.pop(case_number, None)
         self._device_cache.pop(case_number, None)
 
-    def _case_devices(self, case_number: str) -> list[_LinkedDevice]:
+    def _case_devices(self, case_number: str) -> list[_LinkedDevice] | None:
         """Devices ever filed under this case as (node, label, model, size, current).
 
         The link table holds current state; the ledger holds history. A device that was
@@ -292,7 +298,7 @@ class CasesView(TablePane[CaseResponseDto]):
             self._device_cache[case_number] = rows
             return rows
         except Exception:
-            return []
+            return None
 
     def _previously_linked(self, case_number: str) -> dict[str, tuple[datetime, str]]:
         """node -> (linked at, linked by) from the ledger.
@@ -444,6 +450,21 @@ class CasesView(TablePane[CaseResponseDto]):
 
         run_guarded(self, _edit)
 
+    def action_review(self) -> None:
+        case = self._require_selected()
+        if case is None:
+            return
+        resume = case.status == CaseStatus.UNDER_REVIEW
+        question = f"Return case {case.number} to active work?" if resume else f"Move case {case.number} under review?"
+        self.app.push_screen(YesNoModal(question), lambda ok: self._reviewed(case.number, resume) if ok else None)
+
+    def _reviewed(self, number: str, resume: bool) -> None:
+        def _apply() -> str:
+            self._cases_svc.review_case(number, resume=resume)
+            return f"Case {number} returned to active work." if resume else f"Case {number} moved under review."
+
+        run_guarded(self, _apply)
+
     def action_seal(self) -> None:
         case = self._require_selected()
         if case is None:
@@ -481,7 +502,8 @@ class CasesView(TablePane[CaseResponseDto]):
 
     def _archived(self, number: str) -> None:
         def _apply() -> str:
-            self._cases_svc.delete_case(number)
+            if not self._cases_svc.delete_case(number):
+                raise NotFoundError("Case", number)
             return f"Case {number} archived."
 
         run_guarded(self, _apply)
@@ -497,7 +519,8 @@ class CasesView(TablePane[CaseResponseDto]):
 
     def _purged(self, number: str) -> None:
         def _apply() -> str:
-            self._cases_svc.delete_case(number, purge=True)
+            if not self._cases_svc.delete_case(number, purge=True):
+                raise NotFoundError("Case", number)
             return f"Case {number} purged."
 
         run_guarded(self, _apply)

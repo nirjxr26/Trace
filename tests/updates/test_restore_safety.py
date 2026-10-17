@@ -126,3 +126,26 @@ def test_no_staging_file_is_left_behind(live_db, tmp_path) -> None:
     names = {p.name for p in leftovers}
     assert live_db.name in names, names
     assert not any(".restore" in n for n in names), f"staging file left behind: {names}"
+
+
+def test_psql_restore_stops_on_sql_errors(temp_storage_root, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.database.session import DatabaseSessionManager
+    from trace_core.updates import migration
+
+    backup = _backup_in_storage(tmp_path, "pg.sql")
+    backup.write_text("SELECT 1;\n")
+    seen: list[list[str]] = []
+
+    class _Done:
+        returncode = 0
+
+    def _run(cmd: list[str], **kwargs: object) -> _Done:
+        seen.append(list(cmd))
+        return _Done()
+
+    monkeypatch.setattr(migration.subprocess, "run", _run)
+    manager = DatabaseSessionManager("postgresql+psycopg://trace:trace@localhost:5432/trace")
+    migration.restore_backup(backup, manager)
+
+    assert seen, "psql was never invoked"
+    assert "ON_ERROR_STOP=1" in seen[0], seen[0]

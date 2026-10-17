@@ -179,10 +179,18 @@ def for_device_gate_checked(
     evidence: dict[str, Any],
     serial: str | None = None,
     command: str | None = None,
+    simulated: bool = False,
 ) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
     return _device_event(
         AuditAction.DEVICE_GATE_CHECKED,
-        {"node": node, "verdict": verdict, "unknown_cause": unknown_cause, "evidence": evidence, "serial": serial},
+        {
+            "node": node,
+            "verdict": verdict,
+            "unknown_cause": unknown_cause,
+            "evidence": evidence,
+            "serial": serial,
+            "simulated": simulated,
+        },
         command or f"device check {node}",
         serial=serial,
     )

@@ -405,6 +405,7 @@ def _gate_details(inspection: DeviceInspection, gate: GateCheck) -> dict[str, An
         "unknown_cause": None if cause is None else cause.value,
         "evidence": gate.evidence.model_dump(mode="json"),
         "serial": inspection.fingerprint.serial.value,
+        "simulated": gate.evidence.platform == "fake",
     }
 
 

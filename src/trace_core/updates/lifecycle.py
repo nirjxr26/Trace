@@ -82,6 +82,18 @@ class UpdateLifecycle:
         )
         self.state = to
 
+    def _write_rollback_marker(self, state: UpdateState, target: str | None, backup_path: str | Path | None) -> None:
+        from trace_core.updates.marker import write_marker
+
+        write_marker(
+            {
+                "transaction_id": self.transaction_id,
+                "state": str(state),
+                "rollback_target": target or "",
+                "backup_path": str(backup_path) if backup_path else "",
+            }
+        )
+
     def _override_parts(
         self, current: str, manifest: ReleaseManifest, allow_minimum_bypass: bool
     ) -> list[tuple[str, str, str]]:
@@ -162,7 +174,7 @@ class UpdateLifecycle:
             after = schema_after
             if after is None:
                 after = current_schema_version(self.session_manager)
-            if after != manifest.schema_target:
+            if after < manifest.schema_target:
                 return HEALTH_FAILED
         # Pip layouts must prove the venv actually imports the target version;
         # a flipped pointer over stale code is a lying update.
@@ -252,8 +264,8 @@ class UpdateLifecycle:
                 if can_transition(self.state, UpdateState.FAILED):
                     try:
                         self.transition(UpdateState.FAILED)
-                    except Exception:
-                        pass
+                    except Exception as transition_exc:
+                        structlog.get_logger().warning("failure state transition failed", error=str(transition_exc))
                 try:
                     self._record(
                         current,
@@ -343,6 +355,7 @@ class UpdateLifecycle:
                 "schema_min": manifest.schema_min,
                 "schema_target": manifest.schema_target,
             },
+            reuse_existing=True,
         )
 
     def _pip_install_stage(self, staged: Path) -> None:
@@ -447,14 +460,17 @@ class UpdateLifecycle:
                 from trace_core.updates.migration import rollback_release
 
                 self.transition(UpdateState.ROLLING_BACK)
+                rollback_target = updater_mod.read_active(base)
+                self._write_rollback_marker(UpdateState.ROLLING_BACK, rollback_target, migration["backup"])
                 try:
-                    restored = rollback_release(base, self.session_manager, migration["backup"])
+                    restored = rollback_release(base, self.session_manager, migration["backup"], target=rollback_target)
                     restored_snap = fetch_db_snapshot(self.session_manager)
                     restored_health = (
                         HEALTH_PASSED if restored_snap.healthy and not restored_snap.pending else HEALTH_FAILED
                     )
                 except (OSError, UpdateError) as e:
                     self.transition(UpdateState.RECOVERY_REQUIRED)
+                    self._write_rollback_marker(UpdateState.RECOVERY_REQUIRED, rollback_target, migration["backup"])
                     return self._record(
                         current,
                         manifest,
@@ -493,10 +509,13 @@ class UpdateLifecycle:
                 from trace_core.updates.migration import rollback_release
 
                 self.transition(UpdateState.ROLLING_BACK)
+                rollback_target = updater_mod.read_previous(base)
+                self._write_rollback_marker(UpdateState.ROLLING_BACK, rollback_target, migration["backup"])
                 try:
-                    rollback_release(base, self.session_manager, migration["backup"])
+                    rollback_release(base, self.session_manager, migration["backup"], target=rollback_target)
                 except (OSError, UpdateError):
                     self.transition(UpdateState.RECOVERY_REQUIRED)
+                    self._write_rollback_marker(UpdateState.RECOVERY_REQUIRED, rollback_target, migration["backup"])
                     return self._record(
                         current,
                         manifest,

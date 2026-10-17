@@ -100,7 +100,7 @@ class AuditService(BaseService):
             if claimed and claimed.strip():
                 actual, _ = current_identity()
                 if claimed.strip() != actual:
-                    details = {**details, "claimed_actor": claimed.strip()}
+                    details = {**details, "claimed_by": claimed.strip()}
             return self.record(session, action, subject, actor, details, ctx)
 
         return _hook
@@ -147,9 +147,10 @@ class AuditService(BaseService):
     def verify(self) -> VerifyResultDto:
         with _ledger_session(self.session_manager) as session:
             stmt = select(AuditEventModel).order_by(AuditEventModel.seq.asc())
+            from trace_core.audit.helpers import bind_head_to_tail
             from trace_core.audit.verifier import verify_rows
 
-            return verify_rows(session.scalars(stmt).yield_per(500))
+            return bind_head_to_tail(session, verify_rows(session.scalars(stmt).yield_per(500)))
 
     def export(self, out_path: str | Path) -> Path:
         out = Path(out_path)

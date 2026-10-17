@@ -20,6 +20,16 @@ def test_ensure_ready_blocked_during_update(session_manager, temp_storage_root):
     session_manager.ensure_ready()
 
 
+def test_the_blocked_boot_names_the_recovery_command(session_manager, temp_storage_root):
+    begin_update_migration("tx-h9-pin")
+    try:
+        with pytest.raises(UpdateInProgressError) as excinfo:
+            session_manager.ensure_ready()
+    finally:
+        finish_update_migration("tx-h9-pin")
+    assert "trace recovery" in str(excinfo.value)
+
+
 def test_updater_migration_clears_marker(session_manager, temp_storage_root):
     result = run_updater_migration(session_manager, "tx-mig-1")
     assert result["schema"] == current_schema_version(session_manager)
@@ -61,7 +71,12 @@ def test_recovery_clears_stale_marker(session_manager, temp_storage_root):
 def test_compat_rejects_below_minimum(session_manager, temp_storage_root):
     current = current_schema_version(session_manager)
     with pytest.raises(MigrationCompatibilityError):
-        verify_compatibility(session_manager, current + 100, None)
+        verify_compatibility(session_manager, current + 1, current + 2)
+
+
+def test_compat_accepts_a_schema_ahead_of_the_target(session_manager, temp_storage_root):
+    current = current_schema_version(session_manager)
+    verify_compatibility(session_manager, 1, current - 1)
 
 
 def test_backup_failure_blocks_migration(session_manager, temp_storage_root, tmp_path):

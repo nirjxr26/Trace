@@ -16,6 +16,7 @@ from trace_core.core.cli.exit_codes import (
 )
 from trace_core.core.domain import DomainError, InvariantViolationError
 from trace_core.core.errors import (
+    AnchorOutrunsLedgerError,
     AnchorVerificationError,
     ApplicationError,
     AuditTamperError,
@@ -252,6 +253,15 @@ def _typed_error(e: Exception, operation_title: str | None, default_remediation:
             EXIT_ERROR,
         ),
         (DomainError, "Invalid Input", "Trace refused this value. Correct the input and retry.", EXIT_USAGE),
+        (
+            AnchorOutrunsLedgerError,
+            "Anchor Names Missing Records",
+            "This anchor is signed with a trusted key, and it names records this ledger does not "
+            "have. If the anchor belongs to a different ledger, nothing is missing here - confirm "
+            "which ledger it came from. If it belongs to this one, records were deleted from the "
+            "end: recover them from your off-host copies before trusting what remains.",
+            EXIT_LEDGER_BROKEN,
+        ),
         (
             AnchorVerificationError,
             "Anchor Not Trusted",

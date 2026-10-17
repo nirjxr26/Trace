@@ -175,16 +175,17 @@ def test_tui_and_terminal_agree_on_status(raw: str):
 # --- #17 permission checks that vanished on Windows ---------------------------------
 
 
-def test_permission_assertions_are_skips_not_in_body_guards():
-    """An `if sys.platform` inside a test body means the assertion is skipped while
-    coverage still reports the lines covered."""
+def test_permission_assertions_run_on_every_platform():
+    """No win32 skip, a real icacls branch, and the shared owner-only helper at every site."""
     import inspect
 
     from tests.unit import test_security_regressions as mod
 
     source = inspect.getsource(mod)
     assert 'sys.platform != "win32"' not in source, "in-body platform guard still present"
-    assert source.count('pytest.mark.skipif(sys.platform == "win32"') >= 3
+    assert 'pytest.mark.skipif(sys.platform == "win32"' not in source, "the owner-only proof must not skip Windows"
+    assert "icacls" in source, "the Windows branch must check the ACL, not skip it"
+    assert source.count("assert_owner_only(") >= 5
 
 
 # --- #18/#19 a lying signature and an inverted dependency ---------------------------

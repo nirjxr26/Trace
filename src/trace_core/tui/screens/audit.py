@@ -35,6 +35,7 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         Binding("slash", "search", "Search"),
         Binding("v", "raw", "Raw"),
         Binding("e", "export", "Export"),
+        Binding("a", "anchor", "Anchor"),
     ]
 
     TABLE_ID = TABLE_ID
@@ -232,6 +233,10 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         body.append(f"{format_india_datetime(e.ts)}\n")
         body.append("Event     ", style="dim")
         body.append(f"{e.action.value}\n")
+        if details is None:
+            body.append("Payload   ", style="dim")
+            body.append("unreadable — details cannot be shown\n")
+            details = {}
         reason = (details.get("reason") or "").strip()
         if reason:
             body.append("Reason    ", style="dim")
@@ -250,7 +255,7 @@ class AuditView(TablePane[AuditEventSummaryDto]):
                 body.append("  →  ")
                 body.append(f"{sanitize_terminal(format_change_value(after.get(field)))}\n", style=DOT_OK)
         body.append(rule)
-        body.append("\nINTEGRITY\n", style=THEME_TOKENS["accent"])
+        body.append("\nSELF-CHECK\n", style=THEME_TOKENS["accent"])
         body.append_text(integrity_line(intact, 0 if intact is not True else 1))
         body.append("\n")
         self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(body)
@@ -261,9 +266,30 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         if action == "export":
             self.action_export()
         elif action == "anchor":
-            self.app.notify("Check an anchor file with `audit verify --anchor FILE`.")
+            self.action_anchor()
         else:
             self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")
+
+    def action_anchor(self) -> None:
+        self.app.push_screen(
+            TextInputModal("Anchor file to verify the tail against", "/path/to/anchor.json", required=True),
+            self._anchor_verified,
+        )
+
+    def _anchor_verified(self, path: str | None) -> None:
+        if not path:
+            return
+        from trace_core.audit.anchor import verify_against_anchor
+        from trace_core.audit.helpers import enforce_verify_policy
+
+        def _run() -> str:
+            svc = self._svc
+            res = svc.verify()
+            verify_against_anchor(svc, res, path)
+            enforce_verify_policy(res)
+            return f"Ledger verified; tail matches {sanitize_terminal(path)}."
+
+        run_guarded(self, _run)
 
     def action_scope(self) -> None:
         self.app.push_screen(TextInputModal("Scope to case (blank clears)", "2026-CR-0001"), self._scoped)

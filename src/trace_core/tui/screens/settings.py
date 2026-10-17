@@ -158,7 +158,7 @@ class SettingsView(Vertical):
         try:
             renderer(body, pane_width)
         except Exception as exc:
-            body.append(f"Version unavailable ({exc})", style="dim")
+            body.append(f"Could not render this section ({exc})", style="dim")
         self.query_one(f"#{DETAIL_ID}", Static).update(body)
         from trace_core.tui.widgets import ThothSpinner
 
@@ -412,6 +412,8 @@ class SettingsView(Vertical):
     def action_check(self) -> None:
         if not self._require_section("Updates"):
             return
+        if self._checking:
+            return
         self._checking = True
         self._render_detail()
         self.app.run_worker(self._check_worker())
@@ -462,14 +464,10 @@ class SettingsView(Vertical):
     def run_command(self, command: str) -> None:
         if command in ("check", "updates-check"):
             self.action_check()
-        elif command in ("install", "updates-install"):
-            self.app.notify("Updates install from the CLI: trace update install --yes", severity="warning")
         elif command in ("migrate", "database-migrate"):
             self.action_migrate()
         elif command in ("verify", "anchor"):
             self.action_verify()
-        elif command == "uninstall":
-            self.app.notify("Run standalone: trace uninstall [--purge-data] [--yes]", severity="warning")
         else:
             self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")
 

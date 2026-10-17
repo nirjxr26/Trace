@@ -97,6 +97,14 @@ def test_a_tamper_card_names_the_seq_without_hash_dumps(out) -> None:
     assert "b" * 64 not in text, text
 
 
+def test_a_tamper_card_counts_the_failing_event_as_checked(out) -> None:
+    from trace_core.audit.dto import VerifyResultDto
+
+    text = out(VerifyResultDto(is_valid=False, events_verified=3, first_mismatch_seq=4, mismatch_type="chain_hash"))
+    assert "4 checked" in text, text
+    assert "3 OK, failing at 4" in text, text
+
+
 def test_an_event_card_shows_the_seal_without_hash_rows(session_manager, capsys) -> None:  # type: ignore[no-untyped-def]
     from trace_core.audit.domain import AuditAction
     from trace_core.audit.renderers import render_audit_detail
@@ -113,3 +121,55 @@ def test_an_event_card_shows_the_seal_without_hash_rows(session_manager, capsys)
     assert "Payload Hash" not in text, text
     assert "Previous Chain" not in text, text
     assert "Chain Hash" not in text, text
+
+
+def test_an_unreadable_payload_renders_a_marker_not_silence(session_manager, capsys) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.audit.domain import AuditAction
+    from trace_core.audit.events import parse_details
+    from trace_core.audit.renderers import render_audit_detail
+    from trace_core.audit.repository import SqlAlchemyAuditRepository
+
+    assert parse_details("{not json") is None
+    assert parse_details('"null"') is None
+    assert parse_details('{"details": null}') == {}
+    assert parse_details("{}") == {}
+
+    with session_manager.session() as session:
+        dto = SqlAlchemyAuditRepository(session).append(
+            AuditAction.CASE_CREATED, "Ex", "2026-CR-0001", None, {}, subject_type="case"
+        )
+        session.commit()
+    render_audit_detail(dto.model_copy(update={"payload_json": "{not json"}))
+    text = " ".join(capsys.readouterr().out.split())
+    assert "unreadable" in text, text
+    assert "details cannot be shown" in text, text
+
+
+def test_a_corrupt_payload_activity_line_says_unreadable(session_manager) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.audit.domain import AuditAction
+    from trace_core.audit.renderers import _activity_summary
+    from trace_core.audit.repository import SqlAlchemyAuditRepository
+
+    with session_manager.session() as session:
+        dto = SqlAlchemyAuditRepository(session).append(
+            AuditAction.CASE_UPDATED, "Ex", "2026-CR-0001", None, {"changed": ["title"]}, subject_type="case"
+        )
+        session.commit()
+    assert _activity_summary(dto, None, 80) == "└─ payload unreadable"
+
+
+def test_the_event_card_names_a_row_self_check_not_ledger_integrity(session_manager, capsys) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.audit.domain import AuditAction
+    from trace_core.audit.renderers import render_audit_detail
+    from trace_core.audit.repository import SqlAlchemyAuditRepository
+
+    with session_manager.session() as session:
+        dto = SqlAlchemyAuditRepository(session).append(
+            AuditAction.CASE_CREATED, "Ex", "2026-CR-0001", None, {}, subject_type="case"
+        )
+        session.commit()
+    render_audit_detail(dto)
+    text = " ".join(capsys.readouterr().out.split())
+    assert "SELF-CHECK" in text, text
+    assert "✓ VERIFIED" in text, text
+    assert "INTEGRITY" not in text, text

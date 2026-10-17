@@ -129,4 +129,8 @@ def table_head_text(columns: list[tuple[str, int]]) -> str:
 def header_with_count(columns: Sequence[tuple[str, int]], count: int) -> str:
     """Header row plus the `· N` count suffix. Single source for the two views
     that each assembled this separately in on_mount and again on refresh."""
-    return f"{table_head_text(list(columns))}  · {count}"
+    head = table_head_text(list(columns))
+    span = 1 + sum(width for _, width in columns) + 2 * (len(columns) - 1)
+    suffix = f"· {count}"
+    gap = min(2, max(0, span - len(head) - len(suffix)))
+    return f"{head}{' ' * gap}{suffix}"

@@ -6,12 +6,12 @@ from trace_core.core.cli.shell_base import BaseShellHandler
 
 _ACTIONS = frozenset({"list", "ls", "inspect", "check", "link", "unlink", "history", "export", "help"})
 _ACK_FLAGS = ("--acknowledge-unverified-source", "--ack-unverified")
-_PHYSICAL_FLAGS = ("--physical", "--allow-real-hardware")
+_PHYSICAL_FLAGS = ("--physical", "--allow-real-hardware", "--real")
 _LIST_DEVICES_HELP = "List devices this adapter can see"
 _ACTION_HELP = (
     ("list", _LIST_DEVICES_HELP),
     ("ls", _LIST_DEVICES_HELP),
-    ("inspect", "Capture a fingerprint and record it"),
+    ("inspect", "Capture the device identity and record it"),
     ("check", "Verify write protection"),
     ("history", "Show prior observations of one device"),
     ("link", "File a device under a case"),
@@ -185,7 +185,7 @@ class DeviceShellCommandHandler(BaseShellHandler):
         return [
             ("device list", "", _LIST_DEVICES_HELP),
             ("device list --kind os", "", "List only real-hardware nodes"),
-            ("device inspect <node>", "", "Capture a fingerprint and record it"),
+            ("device inspect <node>", "", "Capture the device identity and record it"),
             ("device inspect <node> --case <case>", "", "File the observation under a case"),
             ("device check <node>", "", "Verify write protection; aborts when writable"),
             ("device check --ack-unverified <node>", "", "Proceed past UNKNOWN (records an override)"),

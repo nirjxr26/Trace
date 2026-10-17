@@ -265,3 +265,51 @@ async def test_db_snapshot_fetch_runs_once_per_visit(session_manager, monkeypatc
         await pilot.pause()
         assert calls == base + 1, f"repaint re-snapshotted: {calls} vs {base}"
         assert "Migration complete" in _text(app.query_one("#settings-detail", Static))
+
+
+async def test_a_failing_section_renderer_names_itself(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from textual.widgets import ListView, Static
+
+    from trace_core.tui.screens.settings import SettingsView
+
+    def _boom(self, body, width):  # type: ignore[no-untyped-def]
+        raise ValueError("renderer exploded")
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await pilot.press("4")
+        await pilot.pause()
+        monkeypatch.setattr(SettingsView, "_updates_body", _boom)
+        app.query_one("#settings-sections", ListView).focus()
+        await pilot.press("down")
+        detail = _text(app.query_one("#settings-detail", Static))
+        for _ in range(5):
+            await pilot.pause()
+            detail = _text(app.query_one("#settings-detail", Static))
+            if "Could not render" in detail:
+                break
+    assert "Could not render this section (renderer exploded)" in detail
+
+
+async def test_a_check_press_while_checking_starts_no_second_worker(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trace_core.tui.screens.settings import SettingsView
+
+    started: list[int] = []
+
+    async def _record(self) -> None:
+        started.append(1)
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await _goto_settings_updates(pilot, app)
+        view = app.query_one(SettingsView)
+        monkeypatch.setattr(SettingsView, "_check_worker", _record)
+        view._checking = True
+        view.action_check()
+        await pilot.pause()
+        assert started == [], "a press while a check is running must not start a second check"
+        assert view._checking is True

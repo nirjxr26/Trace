@@ -56,13 +56,21 @@ def _storage_check(*, probe: bool = True) -> tuple[str, str, bool]:
 
 
 def _signing_key_check() -> tuple[str, str, bool]:
-    """Signing key resolvable. False when the placeholder is active — records then
-    cannot be verified, which is a worse outcome than a plain offline database because
-    `audit verify` would otherwise report tampering."""
-    from trace_core.audit.signing import is_default_key
+    """Signing key resolvable. False when the placeholder is active and no key can be
+    generated — records then cannot be verified, which is a worse outcome than a plain
+    offline database because `audit verify` would otherwise report tampering."""
+    from trace_core.audit.signing import (
+        HMAC_KEY_ID,
+        active_key_id,
+        ensure_first_run_key,
+        is_default_key,
+    )
 
-    if is_default_key():
-        return ("Signing key", "not set — your records can't be verified", False)
+    if active_key_id() == HMAC_KEY_ID and is_default_key():
+        generated = ensure_first_run_key()
+        if generated is None:
+            return ("Signing key", "not set — your records can't be verified", False)
+        return ("Signing key", f"set — generated {generated}", True)
     return ("Signing key", "set", True)
 
 
@@ -76,6 +84,9 @@ def _ledger_check(manager: DatabaseSessionManager) -> tuple[str, str, bool]:
         return (RECORDS_NAME, f"problem at record {res.first_mismatch_seq} ({res.mismatch_type})", False)
     if not res.events_verified:
         return (RECORDS_NAME, "no records yet", True)
+    if res.sequence_gaps:
+        gaps = ", ".join(str(g) for g in res.sequence_gaps)
+        return (RECORDS_NAME, f"{res.events_verified} records, sequence gaps at {gaps}", True)
     return (RECORDS_NAME, f"{res.events_verified} records, all linking correctly", True)
 
 

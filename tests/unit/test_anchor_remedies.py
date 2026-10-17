@@ -42,3 +42,13 @@ def test_an_anchor_error_is_still_caught_as_a_tamper_error() -> None:
     assert issubclass(AnchorVerificationError, AuditTamperError)
     with pytest.raises(AuditTamperError):
         raise AnchorVerificationError("anchor is unsigned")
+
+
+def test_an_anchor_beyond_the_ledger_names_missing_records() -> None:
+    from trace_core.core.errors import AnchorOutrunsLedgerError
+
+    title, _message, remedy = _card(AnchorOutrunsLedgerError("anchor is for record 9, but this ledger stops at 2"))
+    assert title == "Anchor Names Missing Records", title
+    assert "different ledger" in remedy, remedy
+    assert "deleted from the end" in remedy, remedy
+    assert "restore from backup" not in remedy.lower(), remedy

@@ -125,6 +125,24 @@ def test_one_device_can_be_filed_under_several_cases(session_manager, device_fil
     )
 
 
+def test_a_purged_case_link_reads_as_a_tombstone(session_manager, device_file_env, case) -> None:
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+    from trace_core.devices.helpers import do_link, do_node_case_numbers
+
+    cases = CaseService(session_manager)
+    keeper = cases.create_case(CaseCreateDto(title="Keeper Matter", lead_examiner="Sara Khan"))
+    node = str(device_file_env / "disk-a.dd")
+    do_link(session_manager, node, case.number)
+    do_link(session_manager, node, keeper.number)
+
+    cases.delete_case(case.number)
+    cases.delete_case(case.number, purge=True)
+
+    numbers = do_node_case_numbers(session_manager, node) or []
+    assert sorted(numbers) == sorted([f"{case.number} (purged)", keeper.number])
+
+
 def test_unlink_removes_the_link_and_is_audited(session_manager, linked) -> None:
     from trace_core.audit.dto import AuditFilterDto
     from trace_core.audit.service import AuditService
@@ -346,6 +364,7 @@ def test_the_case_dossier_describes_a_device_by_model_and_size(session_manager, 
     view._device_cache = {}
     rows = CasesView._case_devices(view, case.number)
 
+    assert rows is not None
     assert [(r.node, r.model, r.size, r.current) for r in rows] == [
         (node, "Micron_2400_MTFDKBA512QFM", "476.9 GB", True)
     ], "the whole recorded model, not a shortened product name"
@@ -362,7 +381,9 @@ def test_the_case_dossier_prefers_an_operator_label(session_manager, device_file
     view = CasesView.__new__(CasesView)
     view._manager = session_manager
     view._device_cache = {}
-    row = CasesView._case_devices(view, case.number)[0]
+    rows = CasesView._case_devices(view, case.number)
+    assert rows is not None
+    row = rows[0]
     assert row.node == node
     assert row.label == "bag 4471"
 
@@ -378,7 +399,9 @@ def test_an_uninspected_device_still_lists_without_a_description(session_manager
     view = CasesView.__new__(CasesView)
     view._manager = session_manager
     view._device_cache = {}
-    assert [(r.node, r.model, r.size) for r in CasesView._case_devices(view, case.number)] == [(node, "", "")]
+    rows = CasesView._case_devices(view, case.number)
+    assert rows is not None
+    assert [(r.node, r.model, r.size) for r in rows] == [(node, "", "")]
 
 
 def test_the_dossier_never_falls_back_to_a_serial(session_manager, device_file_env, case) -> None:
@@ -408,7 +431,9 @@ def test_the_dossier_never_falls_back_to_a_serial(session_manager, device_file_e
     view = CasesView.__new__(CasesView)
     view._manager = session_manager
     view._device_cache = {}
-    row = CasesView._case_devices(view, case.number)[0]
+    rows = CasesView._case_devices(view, case.number)
+    assert rows is not None
+    row = rows[0]
     flat = f"{row.label}{row.model}{row.size}"
     assert "0000_0000" not in flat, "the serial must never be shown in the dossier"
     assert (row.model, row.size) == ("Micron_2400_MTFDKBA512QFM", "476.9 GB")
@@ -425,7 +450,9 @@ def test_the_dossier_shows_a_device_name_not_the_raw_node(session_manager, devic
     view = CasesView.__new__(CasesView)
     view._manager = session_manager
     view._device_cache = {}
-    assert [(r.node, r.model, r.size) for r in CasesView._case_devices(view, case.number)] == [(node, "", "")]
+    rows = CasesView._case_devices(view, case.number)
+    assert rows is not None
+    assert [(r.node, r.model, r.size) for r in rows] == [(node, "", "")]
 
     rendered = _render_meta(view, case)
 
@@ -481,6 +508,7 @@ def test_a_device_that_was_unlinked_stays_in_the_record_dimmed(session_manager, 
     view._device_cache = {}
     rows = CasesView._case_devices(view, case.number)
 
+    assert rows is not None
     assert len(rows) == 1, "the unlinked device must not vanish"
     assert rows[0].node == node
     assert rows[0].current is False, "it is no longer a current link and must render dimmed"
@@ -641,3 +669,19 @@ def test_export_case_filter_never_materialises_the_node_list(session_manager, de
         sa_event.remove(session_manager.engine, "before_cursor_execute", handler)
     assert seen, "no observation statement ran at all"
     assert all("case_devices" in stmt for stmt in seen), f"the node list was fetched client-side first: {seen}"
+
+
+def test_a_linked_device_read_outage_is_stated_in_the_dossier(session_manager, case, monkeypatch) -> None:
+    from trace_core.core.errors import ApplicationError
+    from trace_core.devices import helpers as device_helpers
+    from trace_core.tui.screens.cases import CasesView
+
+    def _boom(manager):  # type: ignore[no-untyped-def]
+        raise ApplicationError("database unreachable")
+
+    monkeypatch.setattr(device_helpers, "do_observed_devices", _boom)
+    view = CasesView.__new__(CasesView)
+    view._manager = session_manager
+    view._device_cache = {}
+    rendered = _render_meta(view, case)
+    assert "Couldn't read device links for this case." in rendered

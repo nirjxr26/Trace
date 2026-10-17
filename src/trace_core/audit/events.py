@@ -42,11 +42,13 @@ class Context:
     session_id: str = ""
 
 
-def parse_details(payload_json: str) -> dict[str, Any]:
+def parse_details(payload_json: str) -> dict[str, Any] | None:
     """Extract details dict from canonical payload_json. Shared by renderers."""
     try:
-        details = json.loads(payload_json).get("details", {})
+        document = json.loads(payload_json)
     except Exception:
-        return {}
-    # A tampered row may carry a non-dict (e.g. null); callers expect a dict.
+        return None
+    if not isinstance(document, dict):
+        return None
+    details = document.get("details", {})
     return details if isinstance(details, dict) else {}

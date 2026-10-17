@@ -1,5 +1,8 @@
 """Pilot tests for the fullscreen console: mount, navigate, dossier, verify, db."""
 
+import json
+from pathlib import Path
+
 import pytest
 from rich.text import Text
 from textual.widgets import DataTable
@@ -59,8 +62,8 @@ async def test_tui_pilot_flow(seeded_manager: DatabaseSessionManager) -> None:
         assert "Beta" in _text(app.query_one("#case-dossier", Static))
         await pilot.pause()
         shot = app.export_screenshot()
-        assert "2026-CR-" in shot
-        assert "Case" in shot
+        assert "2026-CR-0001" in shot
+        assert "2026-CR-0002" in shot
         assert "Status" in shot
         assert "─" in shot
 
@@ -71,21 +74,23 @@ async def test_tui_pilot_flow(seeded_manager: DatabaseSessionManager) -> None:
         await pilot.press("3")
         await pilot.pause()
         assert app.query_one(TabbedContent).active == "audit"
-        assert "Audit" in app.export_screenshot()
         audit_table = app.query_one("#audit-table", DataTable)
         assert audit_table.row_count == 3
         assert len(audit_table.columns) == 2
+        audit_rows = [str(cell) for i in range(audit_table.row_count) for cell in audit_table.get_row_at(i)]
+        assert any("Case Updated" in cell for cell in audit_rows), audit_rows
         assert "Case details updated" in _text(app.query_one("#audit-detail", Static))
         assert "Seq" in app.export_screenshot()
 
         await pilot.press("4")
         await pilot.pause()
         assert app.query_one(TabbedContent).active == "settings"
-        assert "Settings" in app.export_screenshot()
-        from textual.widgets import ListView
+        from textual.widgets import ListView, Static
 
         sections = app.query_one("#settings-sections", ListView)
         assert len(list(sections.children)) == 5
+        labels = [_text(item.query_one(Static)) for item in sections.children]
+        assert sum(label.endswith("Storage & Paths") for label in labels) == 1, labels
         assert "Database" in _text(app.query_one("#settings-detail", Static))
         assert "Online" in _text(app.query_one("#settings-detail", Static))
 
@@ -490,3 +495,234 @@ async def test_background_tabs_skip_mount_fetch(session_manager, monkeypatch) ->
         assert counts.get("DevicesView", 0) >= 1, "devices tab blank after visit"
         assert counts.get("AuditView", 0) >= 1, "audit tab blank after visit"
         assert counts.get("SettingsView", 0) >= 1, "settings tab blank after visit"
+
+
+async def test_a_refused_archive_reports_failure_instead_of_success(
+    seeded_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trace_core.cases.service import CaseService
+    from trace_core.tui.screens.cases import CasesView
+
+    app = TraceApp(seeded_manager)
+    async with app.run_test(size=(110, 30)) as pilot:
+        await pilot.pause()
+        view = app.query_one(CasesView)
+        monkeypatch.setattr(CaseService, "delete_case", lambda self, *args, **kwargs: False)
+        notices: list[tuple[str, dict]] = []
+        monkeypatch.setattr(app, "notify", lambda message, **kwargs: notices.append((message, kwargs)))
+        view._archived("2026-CR-0001")
+        await pilot.pause()
+
+    assert any(kw.get("severity") == "error" and "does not exist" in msg for msg, kw in notices), notices
+    assert not any("archived." in msg for msg, _ in notices), notices
+
+
+async def test_a_refused_purge_reports_failure_instead_of_success(
+    seeded_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trace_core.cases.service import CaseService
+    from trace_core.tui.screens.cases import CasesView
+
+    app = TraceApp(seeded_manager)
+    async with app.run_test(size=(110, 30)) as pilot:
+        await pilot.pause()
+        view = app.query_one(CasesView)
+        monkeypatch.setattr(CaseService, "delete_case", lambda self, *args, **kwargs: False)
+        notices: list[tuple[str, dict]] = []
+        monkeypatch.setattr(app, "notify", lambda message, **kwargs: notices.append((message, kwargs)))
+        view._purged("2026-CR-0001")
+        await pilot.pause()
+
+    assert any(kw.get("severity") == "error" and "does not exist" in msg for msg, kw in notices), notices
+    assert not any("purged." in msg for msg, _ in notices), notices
+
+
+async def test_review_moves_and_returns_the_case(seeded_manager: DatabaseSessionManager) -> None:
+    from trace_core.cases.domain import CaseStatus
+    from trace_core.cases.service import CaseService
+    from trace_core.tui.screens.cases import CasesView
+
+    app = TraceApp(seeded_manager)
+    async with app.run_test(size=(110, 30)) as pilot:
+        await pilot.pause()
+        view = app.query_one(CasesView)
+        view._reviewed("2026-CR-0001", False)
+        await pilot.pause()
+        assert CaseService(seeded_manager).get_case("2026-CR-0001").status is CaseStatus.UNDER_REVIEW
+
+        view._reviewed("2026-CR-0001", True)
+        await pilot.pause()
+        assert CaseService(seeded_manager).get_case("2026-CR-0001").status is CaseStatus.OPEN
+
+
+async def test_the_audit_pane_marks_an_unreadable_payload(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from textual.widgets import Static
+
+    from trace_core.audit.domain import AuditAction
+    from trace_core.audit.repository import SqlAlchemyAuditRepository
+    from trace_core.tui.screens.audit import AuditView
+
+    with session_manager.session() as session:
+        SqlAlchemyAuditRepository(session).append(
+            AuditAction.CASE_CREATED, "Ex", "2026-CR-0001", None, {}, subject_type="case"
+        )
+        session.commit()
+
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        monkeypatch.setattr("trace_core.tui.screens.audit.parse_details", lambda payload: None)
+        app.query_one(AuditView).render_detail()
+        await pilot.pause()
+        detail = _text(app.query_one("#audit-detail", Static))
+
+    assert "unreadable — details cannot be shown" in detail, detail
+
+
+def test_the_palette_and_keys_offer_only_what_the_tui_runs() -> None:
+    from trace_core.tui.palette import COMMANDS, KeysModal
+
+    names = {entry[0] for entry in COMMANDS}
+    assert {"updates-check", "audit-anchor", "database-migrate"} <= names
+    assert not {"updates-install", "uninstall"} & names, "the TUI installs and uninstalls only through the CLI"
+    advertised = " ".join(f"{key} {description}" for _, items in KeysModal.GROUPS for key, description in items)
+    assert "install update" not in advertised
+
+
+def test_the_header_count_stays_within_the_table_width() -> None:
+    from trace_core.tui.theme import header_with_count
+
+    columns = (("Device", 15), ("Size", 9))
+    span = 1 + sum(width for _, width in columns) + 2 * (len(columns) - 1)
+    for count in (1, 12, 100, 999):
+        line = header_with_count(columns, count)
+        assert line.endswith(f"· {count}")
+        assert len(line) <= span, f"count {count} pushed the header past the table's own width: {line!r}"
+
+
+async def test_the_anchor_command_verifies_a_file_and_reports_the_verdict(
+    seeded_manager: DatabaseSessionManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from textual.widgets import Input
+
+    from trace_core.audit.service import AuditService
+    from trace_core.audit.signing import sign_bytes
+    from trace_core.core.canonical import canonical_json
+    from trace_core.tui.screens.audit import AuditView
+
+    svc = AuditService(seeded_manager)
+    seq, chain = svc.head()
+    envelope = {"last_seq": seq, "last_chain": chain}
+    key_id, signature = sign_bytes(canonical_json(envelope))
+    anchor = tmp_path / "anchor.json"
+    anchor.write_text(json.dumps({**envelope, "key_id": key_id, "signature": signature}), encoding="utf-8")
+
+    app = TraceApp(seeded_manager)
+    notices: list[tuple[str, dict]] = []
+    async with app.run_test(size=(120, 32)) as pilot:
+        monkeypatch.setattr(app, "notify", lambda message, **kwargs: notices.append((message, kwargs)))
+        await pilot.press("3")
+        await pilot.pause()
+        app.query_one(AuditView).run_command("audit-anchor")
+        await pilot.pause()
+        app.screen.query_one("#text-input", Input).value = str(anchor)
+        await pilot.press("enter")
+        for _ in range(40):
+            await pilot.pause()
+            if notices:
+                break
+
+    assert notices, "the anchor check must report a verdict"
+    assert "tail matches" in notices[0][0], notices
+    assert notices[0][1].get("severity") != "error", notices
+
+
+async def test_repaint_selection_does_not_swallow_unexpected_failures(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from textual.widgets import DataTable
+
+    from trace_core.tui.widgets import repaint_selection
+
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(110, 30)):
+        table: DataTable = DataTable()
+        table.add_column("A")
+        table.add_row("one")
+
+        def _boom(self: DataTable, coordinate: object, value: object, **kwargs: object) -> None:
+            raise RuntimeError("bug")
+
+        monkeypatch.setattr(DataTable, "update_cell_at", _boom)
+        with pytest.raises(RuntimeError, match="bug"):
+            repaint_selection(table, None, 0, lambda index, selected: ["x"])
+
+
+async def test_repaint_selection_skips_a_stale_coordinate(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from textual.coordinate import Coordinate
+    from textual.widgets import DataTable
+
+    from trace_core.tui.widgets import repaint_selection
+
+    attempted: list[Coordinate] = []
+    original = DataTable.update_cell_at
+
+    def _record(self: DataTable, coordinate: Coordinate, value: object, *, update_width: bool = False) -> None:
+        attempted.append(coordinate)
+        original(self, coordinate, value, update_width=update_width)
+
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(110, 30)):
+        table: DataTable = DataTable()
+        table.add_column("A")
+        table.add_row("one")
+        monkeypatch.setattr(DataTable, "update_cell_at", _record)
+        repaint_selection(table, None, 0, lambda index, selected: ["two", "three"])
+        assert table.get_cell_at(Coordinate(0, 0)) == "two"
+        assert [coordinate.column for coordinate in attempted] == [0]
+
+
+async def test_the_cases_dossier_self_check_heading_is_not_a_ledger_verdict(
+    seeded_manager: DatabaseSessionManager,
+) -> None:
+    from textual.widgets import Static
+
+    app = TraceApp(seeded_manager)
+    async with app.run_test(size=(110, 30)) as pilot:
+        await pilot.pause()
+        dossier = _text(app.query_one("#case-dossier", Static))
+
+    assert "SELF-CHECK" in dossier, dossier
+    assert "INTEGRITY" not in dossier, dossier
+
+
+async def test_the_audit_detail_self_check_heading_matches_the_row_scope(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    from textual.widgets import Static
+
+    from trace_core.audit.domain import AuditAction
+    from trace_core.audit.repository import SqlAlchemyAuditRepository
+    from trace_core.tui.screens.audit import AuditView
+
+    with session_manager.session() as session:
+        SqlAlchemyAuditRepository(session).append(
+            AuditAction.CASE_CREATED, "Ex", "2026-CR-0001", None, {}, subject_type="case"
+        )
+        session.commit()
+
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        app.query_one(AuditView).render_detail()
+        await pilot.pause()
+        detail = _text(app.query_one("#audit-detail", Static))
+
+    assert "SELF-CHECK" in detail, detail
+    assert "INTEGRITY" not in detail, detail

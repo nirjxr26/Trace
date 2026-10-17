@@ -44,6 +44,7 @@ class DevicesView(TablePane[DeviceInfoDto]):
     BINDINGS = [
         Binding("i", "inspect", "Inspect"),
         Binding("c", "check", "Check"),
+        Binding("a", "acknowledge", "Acknowledge"),
         Binding("k", "kind", "Kind"),
         Binding("l", "link", "Link case"),
         Binding("u", "unlink", "Unlink case"),
@@ -186,7 +187,7 @@ class DevicesView(TablePane[DeviceInfoDto]):
         )
         if self._inspected is not None and self._inspected.device.node == device.node:
             body.append(pane.divider())
-            body.append("\nFINGERPRINT\n", style=THEME_TOKENS["accent"])
+            body.append("\nIDENTITY\n", style=THEME_TOKENS["accent"])
             self._append_fingerprint(body)
         cases = self._cases_for(device.node)
         if cases:
@@ -220,10 +221,10 @@ class DevicesView(TablePane[DeviceInfoDto]):
         hits the database."""
         if node in self._cases_cache:
             return self._cases_cache[node]
-        from trace_core.devices.helpers import do_node_links
+        from trace_core.devices.helpers import do_node_case_labels
 
         try:
-            cases = [link.case_number for link in do_node_links(self._manager, node)]
+            cases = do_node_case_labels(self._manager, node)
         except Exception:
             cases = []
         self._cases_cache[node] = cases
@@ -260,7 +261,8 @@ class DevicesView(TablePane[DeviceInfoDto]):
         body.append("Timestamp  ", style="dim")
         body.append(f"{format_india_datetime(gate.checked_at)}\n")
         body.append("Platform   ", style="dim")
-        body.append(f"{sanitize_terminal(gate.platform)} / {sanitize_terminal(gate.adapter_version)}\n")
+        source = "simulated" if gate.platform == "fake" else gate.platform
+        body.append(f"{sanitize_terminal(source)} / {sanitize_terminal(gate.adapter_version)}\n")
         body.append("\nEvidence\n")
         for check in gate.checks:
             body.append(f"  {sanitize_terminal(check.name):<18}", style="dim")
@@ -312,18 +314,48 @@ class DevicesView(TablePane[DeviceInfoDto]):
 
         run_guarded(self, _run)
 
-    def _do_check(self, node: str, allow_real_hardware: bool) -> None:
+    def _do_check(self, node: str, allow_real_hardware: bool, acknowledge: bool = False) -> None:
         from trace_core.devices.helpers import do_check
         from trace_core.tui.actions import run_guarded
 
         def _run() -> str:
-            check = do_check(self._manager, node, allow_real_hardware=allow_real_hardware)
+            check = do_check(
+                self._manager,
+                node,
+                allow_real_hardware=allow_real_hardware,
+                acknowledge_unverified_source=acknowledge,
+            )
             self._gate = check
             self._gate_node = node
             self._refresh_node(node)
+            if acknowledge and check.verdict.value == "UNKNOWN":
+                return "Source is UNKNOWN - accepted unverified; the override is in the ledger."
             return f"Write protection: {check.verdict.value}."
 
         run_guarded(self, _run)
+
+    def action_acknowledge(self) -> None:
+        node = self._selected_node()
+        if node is None:
+            self.app.notify("Select a device first.", severity="warning")
+            return
+        from trace_core.devices.helpers import OVERRIDE_TOKEN
+        from trace_core.tui.forms import TextInputModal
+
+        self.app.push_screen(
+            TextInputModal(f"Accept an unverified source (type {OVERRIDE_TOKEN})", OVERRIDE_TOKEN, required=True),
+            lambda value: self._do_acknowledged(node, value),
+        )
+
+    def _do_acknowledged(self, node: str, value: str | None) -> None:
+        from trace_core.devices.helpers import OVERRIDE_TOKEN
+
+        if value is None:
+            return
+        if value != OVERRIDE_TOKEN:
+            self.app.notify(f"Type {OVERRIDE_TOKEN} exactly to accept an unverified source.", severity="warning")
+            return
+        self._authorise(node, lambda allowed: self._do_check(node, allowed, acknowledge=True))
 
     def action_kind(self) -> None:
         cycle = {"all": "file", "file": "os", "os": "all"}
@@ -381,15 +413,21 @@ class DevicesView(TablePane[DeviceInfoDto]):
         if node is None:
             self.app.notify("Select a device first.", severity="warning")
             return
-        cases = self._cases_for(node)
-        if not cases:
+        from trace_core.devices.helpers import do_node_links
+
+        try:
+            links = do_node_links(self._manager, node)
+        except Exception:
+            links = []
+        if not links:
             self.app.notify(f"{sanitize_terminal(node)} is not filed under any case.", severity="warning")
             return
+        case_number = links[0].case_number
         from trace_core.tui.forms import YesNoModal
 
         self.app.push_screen(
-            YesNoModal(f"Remove {sanitize_terminal(node)} from {cases[0]}?"),
-            lambda answer: self._unlinked(node, cases[0], answer),
+            YesNoModal(f"Remove {sanitize_terminal(node)} from {case_number}?"),
+            lambda answer: self._unlinked(node, case_number, answer),
         )
 
     def _unlinked(self, node: str, case_number: str, answer: bool | None) -> None:

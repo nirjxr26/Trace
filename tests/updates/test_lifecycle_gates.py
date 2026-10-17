@@ -13,6 +13,10 @@ def _raise_interrupt(*_a: object, **_k: object) -> None:
     raise KeyboardInterrupt
 
 
+def _raise_transition_error(*_a: object, **_k: object) -> None:
+    raise RuntimeError("no transition")
+
+
 def test_run_rejects_downgrade_directly(session_manager, signed_release):
     manifest, _, art_path, _ = signed_release(version="0.0.1")
     life = UpdateLifecycle("tx-gate-1", session_manager)
@@ -39,6 +43,29 @@ def test_an_interrupt_is_recorded_as_a_failure(session_manager, signed_release, 
 
     assert [str(r["result"]) for r in recorded] == ["FAILED"]
     assert "KeyboardInterrupt" in recorded[0]["failure_reason"]
+
+
+def test_an_interrupt_that_cannot_mark_failed_warns_instead_of_silence(session_manager, signed_release, monkeypatch):
+    from trace_core.updates import lifecycle as lifecycle_mod
+
+    manifest, _, art_path, _ = signed_release(version="1.5.0")
+    life = UpdateLifecycle("tx-interrupt-2", session_manager)
+    logged: list[tuple[str, dict]] = []
+
+    class _Log:
+        def warning(self, event, **kwargs):
+            logged.append((event, kwargs))
+
+    monkeypatch.setattr(lifecycle_mod.structlog, "get_logger", lambda: _Log())
+    monkeypatch.setattr("trace_core.updates.domain.can_transition", lambda *args, **kwargs: True)
+    monkeypatch.setattr(life, "transition", _raise_transition_error)
+    monkeypatch.setattr(life, "_record", lambda *a, **k: None)
+    monkeypatch.setattr(life, "_run_locked", _raise_interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        life.run(manifest, art_path)
+
+    assert any("transition" in event for event, _ in logged), logged
 
 
 def test_bypass_override_recorded(session_manager, signed_release, release_keys, monkeypatch, tmp_path):
@@ -191,3 +218,18 @@ def test_history_create_rejects_unknown_kwargs():
     }
     with pytest.raises(ValidationError):
         UpdateResultDto(**kwargs)
+
+
+def test_a_schema_ahead_of_the_target_stays_healthy(
+    session_manager, signed_release, release_keys, monkeypatch, tmp_path
+):  # type: ignore[no-untyped-def]
+    from trace_core.core.database import migrations as mig_mod
+    from trace_core.core.settings import settings
+    from trace_core.updates import signing
+
+    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
+    signing.import_release_pubkey(release_keys["pub_hex"])
+    behind = max(len(mig_mod.MIGRATIONS) - 5, 1)
+    manifest, _, art_path, _ = signed_release(schema_min=1, schema_target=behind)
+    dto = UpdateLifecycle("tx-gate-8", session_manager).run(manifest, art_path)
+    assert dto.result == "SUCCESS"

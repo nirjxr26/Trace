@@ -7,6 +7,7 @@ control-character policy. See docs/security/assessment-2026-09-17.md.
 
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -368,19 +369,35 @@ def test_ed25519_lifecycle(temp_storage_root, session_manager: DatabaseSessionMa
     assert res.mismatch_type == "signature"
     privates = list(temp_storage_root.glob("keys/*.key"))
     assert len(privates) == 2
-    assert_private_key_modes(privates)
+    for key_path in privates:
+        assert_owner_only(key_path, "0o600")
 
 
-def assert_private_key_modes(privates) -> None:  # type: ignore[no-untyped-def]
-    """0600 on the ledger signing keys. Its own test so a Windows skip is recorded
-    as a skip; guarded in-body, the assertion vanished on half the CI matrix while
-    coverage still reported the lines covered."""
+_WINDOWS_BROAD_PRINCIPALS = frozenset(
+    {
+        "builtin\\users",
+        "everyone",
+        "nt authority\\authenticated users",
+        "authenticated users",
+        "users",
+    }
+)
+_WINDOWS_WRITE_RIGHTS = frozenset({"F", "M", "W"})
+_ICACLS_ACE = re.compile(r"([^\s()]+)\s*((?:\([^()]*\))+)")
+
+
+def assert_owner_only(path: Path, mode: str) -> None:
     if sys.platform == "win32":
-        pytest.skip("POSIX permission bits are not enforced by os.chmod on Windows")
-    assert all(oct(p.stat().st_mode & 0o777) == "0o600" for p in privates)
+        result = subprocess.run(["icacls", str(path)], capture_output=True, text=True, check=True)
+        for principal, rights_blob in _ICACLS_ACE.findall(result.stdout):
+            if principal.rstrip(":").lower() not in _WINDOWS_BROAD_PRINCIPALS:
+                continue
+            rights = {token.upper() for token in re.findall(r"\(([^()]*)\)", rights_blob)}
+            assert not (rights & _WINDOWS_WRITE_RIGHTS), f"{principal} can write to {path}"
+        return
+    assert oct(path.stat().st_mode & 0o777) == mode
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits are not enforced on Windows")
 def test_ledger_signing_keys_are_owner_only(temp_storage_root) -> None:
     from trace_core.audit.signing import init_key
 
@@ -388,7 +405,8 @@ def test_ledger_signing_keys_are_owner_only(temp_storage_root) -> None:
     init_key("second")
     privates = list(temp_storage_root.glob("keys/*.key"))
     assert len(privates) == 2
-    assert all(oct(p.stat().st_mode & 0o777) == "0o600" for p in privates)
+    for key_path in privates:
+        assert_owner_only(key_path, "0o600")
 
 
 def test_first_operator_is_admin(session_manager: DatabaseSessionManager) -> None:
@@ -501,7 +519,7 @@ def test_only_admin_purges(session_manager: DatabaseSessionManager, as_user) -> 
         svc.delete_case(created.number, purge=True)
 
 
-def test_claimed_actor_logged_beside_actual(
+def test_a_typed_by_claim_is_logged_beside_the_os_actor(
     session_manager: DatabaseSessionManager,
     as_user,  # type: ignore[no-untyped-def]
 ) -> None:
@@ -515,9 +533,134 @@ def test_claimed_actor_logged_beside_actual(
     as_user("mallory")
     svc = CaseService(session_manager)
     svc.create_case(CaseCreateDto(title="T", lead_examiner="Ex"), actor="alice")
-    details = json.loads(AuditService(session_manager).list_events(AuditFilterDto())[0].payload_json)["details"]
-    assert details["claimed_actor"] == "alice"
+    event = AuditService(session_manager).list_events(AuditFilterDto())[0]
+    details = json.loads(event.payload_json)["details"]
+    assert event.actor == "mallory@workstation"
+    assert details["claimed_by"] == "alice"
     assert details["os_user"] == "mallory"
+
+
+def test_case_events_use_the_os_identity_and_no_claim_when_none_was_typed(
+    session_manager: DatabaseSessionManager,
+    as_user,  # type: ignore[no-untyped-def]
+) -> None:
+    import json
+
+    from trace_core.audit.dto import AuditFilterDto
+    from trace_core.audit.service import AuditService
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+
+    as_user("kimi")
+    svc = CaseService(session_manager)
+    svc.create_case(CaseCreateDto(title="T", lead_examiner="Lead Who"))
+    event = AuditService(session_manager).list_events(AuditFilterDto())[0]
+    details = json.loads(event.payload_json)["details"]
+    assert event.actor == "kimi@workstation"
+    assert "claimed_by" not in details
+    assert details["lead_examiner"] == "Lead Who"
+
+
+def test_the_close_event_names_the_os_identity_and_keeps_the_examiner(
+    session_manager: DatabaseSessionManager,
+    as_user,  # type: ignore[no-untyped-def]
+) -> None:
+    import json
+
+    from trace_core.audit.dto import AuditFilterDto
+    from trace_core.audit.service import AuditService
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+
+    as_user("kimi")
+    svc = CaseService(session_manager)
+    created = svc.create_case(CaseCreateDto(title="T", lead_examiner="Lead Who"))
+    svc.close_case(created.number, reason="sealed", closed_by="Dr. Smith")
+    events = AuditService(session_manager).list_events(AuditFilterDto(case_number=created.number))
+    closed = [e for e in events if e.action.value == "CASE_CLOSED"]
+    assert len(closed) == 1
+    details = json.loads(closed[0].payload_json)["details"]
+    assert closed[0].actor == "kimi@workstation"
+    assert details["closed_by"] == "Dr. Smith"
+    assert details["claimed_by"] == "Dr. Smith"
+
+
+def test_an_unresolvable_os_user_refuses_instead_of_provisioning_unknown(
+    session_manager: DatabaseSessionManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sqlalchemy import select
+
+    from trace_core.core.errors import ApplicationError
+    from trace_core.core.operators import OperatorModel, bootstrap_current_operator
+
+    def _no_user() -> str:
+        raise OSError("no user available")
+
+    monkeypatch.setattr("getpass.getuser", _no_user)
+    with pytest.raises(ApplicationError, match="accountable identity"):
+        bootstrap_current_operator(session_manager)
+    with session_manager.session() as session:
+        assert session.scalar(select(OperatorModel.id).limit(1)) is None
+
+
+def test_an_unresolvable_hostname_refuses_instead_of_provisioning_unknown(
+    session_manager: DatabaseSessionManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sqlalchemy import select
+
+    from trace_core.core.errors import ApplicationError
+    from trace_core.core.operators import OperatorModel, bootstrap_current_operator
+
+    monkeypatch.setattr("socket.gethostname", lambda: "   ")
+    with pytest.raises(ApplicationError, match="accountable identity"):
+        bootstrap_current_operator(session_manager)
+    with session_manager.session() as session:
+        assert session.scalar(select(OperatorModel.id).limit(1)) is None
+
+
+def test_a_case_mutation_refuses_when_the_identity_cannot_be_resolved(
+    session_manager: DatabaseSessionManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+    from trace_core.core.errors import ApplicationError
+
+    service = CaseService(session_manager)
+    service.create_case(CaseCreateDto(title="First", lead_examiner="Ex"))
+
+    def _no_user() -> str:
+        raise OSError("no user available")
+
+    monkeypatch.setattr("getpass.getuser", _no_user)
+    with pytest.raises(ApplicationError, match="accountable identity"):
+        service.create_case(CaseCreateDto(title="Second", lead_examiner="Ex"))
+    assert [c.title for c in service.list_cases()] == ["First"]
+
+
+def test_a_retried_anchor_intent_records_one_row(session_manager: DatabaseSessionManager) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from trace_core.audit.anchor import record_anchor_intent
+    from trace_core.audit.models import INTENT_PENDING, AnchorIntentModel
+
+    with session_manager.session() as session:
+        record_anchor_intent(session, "2026-DUP-0001", None, 7, "a" * 64)
+        record_anchor_intent(session, "2026-DUP-0001", None, 7, "a" * 64)
+        rows = session.scalars(select(AnchorIntentModel)).all()
+        assert len(rows) == 1
+        assert rows[0].status == INTENT_PENDING
+        session.commit()
+
+    def _raw_duplicate() -> None:
+        with session_manager.session() as session:
+            session.add(AnchorIntentModel(case_number="2026-DUP-0001", seq=7, chain_hash="b" * 64))
+            session.commit()
+
+    with pytest.raises(IntegrityError):
+        _raw_duplicate()
 
 
 def test_anchor_intent_pins_exact_event(temp_storage_root, session_manager: DatabaseSessionManager) -> None:  # type: ignore[no-untyped-def]
@@ -715,12 +858,11 @@ def test_ensure_dir_restrictive(tmp_path) -> None:  # type: ignore[no-untyped-de
     assert target.is_dir()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits are not enforced on Windows")
 def test_ensure_dir_is_owner_only(tmp_path) -> None:  # type: ignore[no-untyped-def]
     from trace_core.core.fs import ensure_dir
 
     target = ensure_dir(tmp_path / "sub" / "store")
-    assert oct(target.stat().st_mode & 0o777) == "0o700"
+    assert_owner_only(target, "0o700")
 
 
 def test_atomic_write_recovers_stale_tmp(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -733,12 +875,11 @@ def test_atomic_write_recovers_stale_tmp(tmp_path) -> None:  # type: ignore[no-u
     assert out.read_text() == "a\nb\n"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits are not enforced on Windows")
 def test_atomic_write_is_owner_only(tmp_path) -> None:  # type: ignore[no-untyped-def]
     from trace_core.core.fs import atomic_write_lines
 
     out = atomic_write_lines(tmp_path / "bundle.jsonl", ["a\n", "b\n"])
-    assert oct(out.stat().st_mode & 0o777) == "0o600"
+    assert_owner_only(out, "0o600")
 
 
 def test_export_refuses_clobber(tmp_path, service: CaseService) -> None:  # type: ignore[no-untyped-def]
@@ -801,6 +942,27 @@ def test_anchor_mismatch_pure(session_manager: DatabaseSessionManager) -> None:
     forged = _signed_anchor({**good, "last_seq": seq + 100})
     with pytest.raises(AuditTamperError, match="another ledger"):
         check_anchor_match(res, forged, chain)
+
+
+def test_an_anchor_past_the_ledger_end_names_missing_records(session_manager: DatabaseSessionManager) -> None:
+    from trace_core.audit.anchor import check_anchor_match
+    from trace_core.audit.service import AuditService
+    from trace_core.core.errors import AnchorOutrunsLedgerError, AnchorVerificationError
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+    svc = AuditService(session_manager)
+    res = svc.verify()
+    seq, chain = svc.head()
+
+    beyond = _signed_anchor({"last_seq": seq + 100, "last_chain": "a" * 64})
+    with pytest.raises(AnchorOutrunsLedgerError, match="another ledger") as excinfo:
+        check_anchor_match(res, beyond, chain)
+    assert "deleted from the end" in str(excinfo.value)
+    assert issubclass(AnchorOutrunsLedgerError, AnchorVerificationError)
+
+    unsigned_beyond = {"last_seq": seq + 100, "last_chain": "a" * 64}
+    with pytest.raises(AnchorVerificationError, match="unsigned"):
+        check_anchor_match(res, unsigned_beyond, chain)
 
 
 def test_an_anchor_stays_valid_after_the_ledger_grows(session_manager: DatabaseSessionManager) -> None:
@@ -1498,3 +1660,94 @@ def test_ed25519_verify_reads_the_pubkey_once(temp_storage_root, monkeypatch) ->
     assert signing.verify_bytes(second, data, signature2) is True
     assert signing.verify_bytes(key_id, data, signature) is True
     assert signing.verify_bytes(key_id, data, "00" * 64) is False
+
+
+def test_an_unreadable_pointer_warns_instead_of_degrading_silently(temp_storage_root, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.audit import signing
+
+    monkeypatch.setattr(signing, "_warned_pointer", False)
+    monkeypatch.setattr(signing, "_active_pointer", lambda: tmp_path)
+    assert signing.active_key_id() == signing.HMAC_KEY_ID
+    assert signing._warned_pointer is True, "an unreadable pointer must warn"
+
+
+def test_a_missing_pointer_stays_quiet(temp_storage_root, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.audit import signing
+
+    monkeypatch.setattr(signing, "_warned_pointer", False)
+    monkeypatch.setattr(signing, "_active_pointer", lambda: tmp_path / "active")
+    assert signing.active_key_id() == signing.HMAC_KEY_ID
+    assert signing._warned_pointer is False, "a missing pointer is not an error"
+
+
+def test_anchor_lookup_failure_is_not_a_missing_anchor(temp_storage_root, service: CaseService, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.audit import anchor as anchor_mod
+
+    created = service.create_case(CaseCreateDto(number="2026-GLB-0009", title="T", lead_examiner="Ex"))
+    service.close_case(created.number, reason="done")
+
+    class _Unreadable:
+        def glob(self, pattern: str) -> None:
+            raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(anchor_mod, "_anchors_dir", lambda: _Unreadable())
+    with pytest.raises(OSError, match="Permission denied"):
+        anchor_mod.latest_anchor_for(created.number)
+
+    line = anchor_mod.describe_anchor(service.session_manager, created.number)
+    assert line is not None, "an unreadable anchors dir must not read as 'no anchor'"
+    assert "lookup failed" in line
+
+
+def test_a_failed_file_fsync_fails_the_write_instead_of_pretending(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core import fs as fs_mod
+
+    def _io_error(fd: int) -> None:
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(fs_mod.os, "fsync", _io_error)
+    with pytest.raises(OSError, match="Input/output error"):
+        fs_mod.atomic_write_lines(tmp_path / "bundle.jsonl", ["a\n"])
+    assert not (tmp_path / "bundle.jsonl").exists()
+    assert list(tmp_path.glob("bundle.jsonl.*.tmp")) == []
+
+
+def test_a_failed_directory_fsync_raises(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core import fs as fs_mod
+
+    def _io_error(fd: int) -> None:
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(fs_mod.os, "fsync", _io_error)
+    with pytest.raises(OSError, match="Input/output error"):
+        fs_mod.fsync_dir(tmp_path)
+
+
+def test_first_run_signing_generates_an_ed25519_key_instead_of_the_sentinel(tmp_path, monkeypatch) -> None:
+    from trace_core.audit import signing
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
+    monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+
+    key_id, signature = signing.sign_bytes(b"first run")
+
+    assert key_id.startswith(signing.ED25519_PREFIX), key_id
+    assert signing.verify_bytes(key_id, b"first run", signature)
+    assert signing.active_key_id() == key_id
+    again = signing.sign_bytes(b"second write")[0]
+    assert again == key_id, "the first-run key must be reused, not regenerated per write"
+
+
+def test_signing_refuses_the_sentinel_when_no_key_can_be_generated(tmp_path, monkeypatch) -> None:
+    from trace_core.audit import signing
+    from trace_core.core.errors import ApplicationError
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    blocker = tmp_path / "storage-is-a-file"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(settings, "storage_root", blocker)
+    monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+
+    with pytest.raises(ApplicationError, match="TRACE_SECRET_KEY"):
+        signing.sign_bytes(b"cannot sign this")

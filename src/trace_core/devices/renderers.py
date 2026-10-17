@@ -141,7 +141,7 @@ def _inspection_card(inspection: InspectionDto, case_numbers: list[str] | None =
     console.print("")
     columns = [("FIELD", {"style": THEME_TOKENS["label"]}), ("VALUE", {"style": THEME_TOKENS["value"]})]
     render_minimalist_table(
-        title="Fingerprint",
+        title="Device identity",
         columns=columns,
         rows=_fingerprint_rows(inspection.fingerprint),
         tight=True,
@@ -203,8 +203,9 @@ def _gate_card(check: WpCheckDto) -> None:
         ("DETAIL", {"style": THEME_TOKENS["label"]}),
     ]
     rows = [[escape(c.name), escape(c.result), escape(c.detail or "-")] for c in check.checks]
+    source = "simulated" if check.platform == "fake" else check.platform
     render_minimalist_table(
-        title=f"Evidence ({check.platform} / {escape(check.adapter_version)})",
+        title=f"Evidence ({source} / {escape(check.adapter_version)})",
         columns=columns,
         rows=rows,
         tight=True,

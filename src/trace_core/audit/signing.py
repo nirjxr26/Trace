@@ -17,7 +17,10 @@ _KEY_SUFFIX_RE = re.compile(r"^[0-9a-f]{16}$")
 _KEYSTORE_UNAVAILABLE_MESSAGE = (
     "Ledger signing key {key_id} unavailable in keystore; case writes are paused until it is restored."
 )
-_warned_default_key = False
+_SENTINEL_REFUSAL_MESSAGE = (
+    "The ledger cannot be signed: no Ed25519 signing key is available and the shipped default "
+    "secret must not sign records. Set TRACE_SECRET_KEY or repair storage, then retry."
+)
 _warned_pointer = False
 
 
@@ -36,18 +39,6 @@ def is_default_key() -> bool:
     from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
 
     return settings.secret_key.get_secret_value() == DEV_SECRET_SENTINEL
-
-
-def _warn_default_key() -> None:
-    global _warned_default_key
-    if _warned_default_key:
-        return
-    _warned_default_key = True
-    import structlog
-
-    structlog.get_logger().warning(
-        "Signing ledger with the default development key; set TRACE_SECRET_KEY in production."
-    )
 
 
 def expected_signature(key_id: str | None, data: bytes) -> str:
@@ -87,7 +78,10 @@ def active_key_id() -> str:
     """
     try:
         raw = _active_pointer().read_text(encoding="utf-8").strip()
-    except OSError:
+    except FileNotFoundError:
+        return HMAC_KEY_ID
+    except OSError as exc:
+        _warn_pointer("Unreadable signing-key pointer; using HMAC envelope.", type(exc).__name__)
         return HMAC_KEY_ID
     if not raw:
         return HMAC_KEY_ID
@@ -96,21 +90,18 @@ def active_key_id() -> str:
         first.startswith(ED25519_PREFIX) and _KEY_SUFFIX_RE.match(first[len(ED25519_PREFIX) :])
     ):
         return first
-    _warn_pointer(raw)
+    _warn_pointer("Ignoring malformed signing-key pointer; using HMAC envelope.", raw[:64])
     return HMAC_KEY_ID
 
 
-def _warn_pointer(raw: str) -> None:
+def _warn_pointer(message: str, pointer: str) -> None:
     global _warned_pointer
     if _warned_pointer:
         return
     _warned_pointer = True
     import structlog
 
-    structlog.get_logger().warning(
-        "Ignoring malformed signing-key pointer; using HMAC envelope.",
-        pointer=raw[:64],
-    )
+    structlog.get_logger().warning(message, pointer=pointer)
 
 
 def init_key(label: str = "default") -> str:
@@ -147,6 +138,13 @@ def init_key(label: str = "default") -> str:
     atomic_write_lines(_active_pointer(), [f"{key_id} # {clean}\n"])
     fsync_dir(keystore)
     return key_id
+
+
+def ensure_first_run_key() -> str | None:
+    try:
+        return init_key("first-run")
+    except OSError:
+        return None
 
 
 def rotate_keys(label: str = "default") -> str:
@@ -241,5 +239,8 @@ def sign_bytes(data: bytes) -> tuple[str, str]:
             raise ApplicationError(_KEYSTORE_UNAVAILABLE_MESSAGE.format(key_id=key_id)) from e
     secret = _secret()
     if secret.decode("utf-8", "replace") == DEV_SECRET_SENTINEL:
-        _warn_default_key()
+        generated = ensure_first_run_key()
+        if generated is None:
+            raise ApplicationError(_SENTINEL_REFUSAL_MESSAGE)
+        return generated, _load_private(generated).sign(data).hex()
     return HMAC_KEY_ID, hmac.new(secret, data, hashlib.sha256).hexdigest()

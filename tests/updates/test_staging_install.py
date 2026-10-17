@@ -120,6 +120,27 @@ def test_immutable_release_rejected(tmp_path):
         updater_mod.stage_release(v1, base, "1.4.2", expected=["trace.bin"])
 
 
+def test_reuse_existing_returns_the_retained_release(tmp_path):
+    base = tmp_path / "install"
+    v1 = tmp_path / "v1"
+    v1.mkdir()
+    (v1 / "trace.bin").write_bytes(b"v1")
+    first = updater_mod.stage_release(v1, base, "1.4.2", expected=["trace.bin"])
+    again = updater_mod.stage_release(v1, base, "1.4.2", expected=["trace.bin"], reuse_existing=True)
+    assert again == first
+    assert (again / "trace.bin").read_bytes() == b"v1"
+
+
+def test_reuse_existing_rejects_a_release_that_is_not_complete(tmp_path):
+    base = tmp_path / "install"
+    v1 = tmp_path / "v1"
+    v1.mkdir()
+    (v1 / "trace.bin").write_bytes(b"v1")
+    updater_mod.stage_release(v1, base, "1.4.2", expected=["trace.bin"])
+    with pytest.raises(FileNotFoundError, match="cannot be reused"):
+        updater_mod.stage_release(v1, base, "1.4.2", expected=["other.bin"], reuse_existing=True)
+
+
 def test_concurrent_update_lock_serializes(temp_storage_root):
     import threading
 

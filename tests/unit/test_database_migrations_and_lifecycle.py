@@ -43,6 +43,20 @@ def test_settings_storage_error_logging() -> None:
             mock_warning.assert_called_once()
 
 
+def test_a_stray_dot_env_in_another_directory_is_not_loaded(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("TRACE_DEVICE_ADAPTER=linux\n", encoding="utf-8")
+    assert Settings().device_adapter != "linux", "the loader fell back to a cwd-relative .env"
+
+
+def test_an_unknown_trace_setting_is_named_in_a_warning(monkeypatch) -> None:
+    monkeypatch.setenv("TRACE_ZX_TYPO", "1")
+    with patch("trace_core.core.settings.logger.warning") as mock_warning:
+        Settings()
+    named = [str(call) for call in mock_warning.call_args_list]
+    assert any("TRACE_ZX_TYPO" in call for call in named), named
+
+
 def test_case_column_definitions_match_model() -> None:
     """Backfill DDL must stay in agreement with the live CaseModel columns."""
     from trace_core.cases.models import CaseModel
@@ -84,6 +98,25 @@ def test_migrations_tracking_and_idempotency() -> None:
     # Applying again should be a no-op
     applied_second = apply_migrations(mgr.engine)
     assert len(applied_second) == 0
+
+
+def test_a_non_empty_foreign_database_is_refused_not_initialized() -> None:
+    """Verify bootstrap refuses a database with tables Trace did not create, and mutates nothing."""
+    from trace_core.core.errors import ApplicationError
+
+    mgr = DatabaseSessionManager("sqlite:///:memory:")
+    with mgr.engine.begin() as conn:
+        conn.execute(sqlalchemy.text("CREATE TABLE someone_elses (id INTEGER)"))
+        conn.execute(sqlalchemy.text("INSERT INTO someone_elses (id) VALUES (1)"))
+
+    with pytest.raises(ApplicationError, match="Trace did not"):
+        apply_migrations(mgr.engine)
+
+    tables = get_table_names(mgr.engine)
+    assert "schema_migrations" not in tables
+    assert "someone_elses" in tables
+    with mgr.engine.connect() as conn:
+        assert conn.execute(sqlalchemy.text("SELECT id FROM someone_elses")).scalar() == 1
 
 
 def test_migration_004_backfills_archived_by_on_old_database() -> None:
@@ -329,3 +362,98 @@ def test_snapshot_shows_checked_database_url(tmp_path) -> None:  # type: ignore[
     snap = fetch_db_snapshot(mgr)
     assert snap.healthy is True
     assert "other-place.db" in snap.masked_url
+
+
+@pytest.fixture
+def verified_case(session_manager: DatabaseSessionManager):
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+
+    return CaseService(session_manager).create_case(CaseCreateDto(title="Verifier", lead_examiner="Ex"))
+
+
+def test_sqlite_connections_use_immediate_isolation_and_wait_for_the_lock(tmp_path) -> None:
+    from trace_core.core.database.session import create_db_engine
+
+    engine = create_db_engine(f"sqlite:///{tmp_path / 'pragma.db'}")
+    try:
+        with engine.connect() as conn:
+            assert conn.exec_driver_sql("PRAGMA busy_timeout").scalar() == 30000
+            fairy = conn.connection
+            assert fairy is not None
+            raw = fairy.dbapi_connection
+            assert raw is not None
+            assert raw.isolation_level == "IMMEDIATE"
+    finally:
+        engine.dispose()
+
+
+def test_the_case_check_verifier_reads_the_rows_on_sqlite(session_manager, verified_case) -> None:
+    from sqlalchemy import text as sa_text
+
+    from trace_core.core.database.migrations import _verify_006_case_checks
+
+    with session_manager.engine.begin() as conn:
+        assert _verify_006_case_checks(conn) is True
+        conn.execute(sa_text("UPDATE cases SET version = 0 WHERE number = :number"), {"number": verified_case.number})
+        assert _verify_006_case_checks(conn) is False
+
+
+def test_migration_023_deduplicates_anchor_intents_and_adds_the_unique_index(tmp_path) -> None:
+    mgr = DatabaseSessionManager(f"sqlite:///{(tmp_path / 'dup.db').as_posix()}")
+    apply_migrations(mgr.engine)
+    with mgr.engine.begin() as conn:
+        conn.execute(sqlalchemy.text("DROP INDEX uq_anchor_intents_case_seq"))
+        conn.execute(sqlalchemy.text("DELETE FROM schema_migrations WHERE version = 23"))
+        for row_id, chain, created in (
+            ("00000000000000000000000000000001", "a", "2026-01-01 00:00:00.000000+00:00"),
+            ("00000000000000000000000000000002", "b", "2026-01-02 00:00:00.000000+00:00"),
+        ):
+            conn.execute(
+                sqlalchemy.text(
+                    "INSERT INTO anchor_intents (id, case_number, seq, chain_hash, status, attempt_count, created_at) "
+                    "VALUES (:id, '2026-DUP-0001', 7, :chain, 'pending', 0, :created)"
+                ),
+                {"id": row_id, "chain": chain, "created": created},
+            )
+    applied = apply_migrations(mgr.engine)
+    assert "023_anchor_intents_unique_position" in applied
+    with mgr.engine.connect() as conn:
+        remaining = conn.execute(
+            sqlalchemy.text("SELECT chain_hash, status FROM anchor_intents WHERE case_number = '2026-DUP-0001'")
+        ).fetchall()
+    assert remaining == [("b", "pending")]
+    inspector = sqlalchemy.inspect(mgr.engine)
+    assert "uq_anchor_intents_case_seq" in {index["name"] for index in inspector.get_indexes("anchor_intents")}
+
+
+def test_a_decommissioned_migration_is_recorded_without_running(tmp_path) -> None:
+    from trace_core.core.database import migrations as mig
+
+    probe_version = len(mig.MIGRATIONS) + 1
+    probe_name = f"{probe_version}_test_decommissioned_probe"
+    ran: list[bool] = []
+
+    @mig.register_migration(probe_version, probe_name, operations=("test:decommissioned_probe",), decommissioned=True)
+    def _probe(bind):  # type: ignore[no-untyped-def]
+        ran.append(True)
+
+    try:
+        mgr = DatabaseSessionManager(f"sqlite:///{(tmp_path / 'decommissioned.db').as_posix()}")
+        applied = apply_migrations(mgr.engine)
+        assert probe_name in applied
+        assert ran == []
+        assert probe_version in {record["version"] for record in get_applied_migrations(mgr.engine)}
+    finally:
+        mig.MIGRATIONS[:] = [m for m in mig.MIGRATIONS if m[1] != probe_name]
+        mig.DECOMMISSIONED_MIGRATIONS.discard(probe_version)
+        mig.MIGRATION_VERIFIERS.pop(probe_version, None)
+        mig.MIGRATION_OPERATIONS.pop(probe_version, None)
+
+
+def test_migration_011_is_decommissioned_with_a_resilient_replacement() -> None:
+    from trace_core.core.database import migrations as mig
+
+    assert 11 in mig.DECOMMISSIONED_MIGRATIONS
+    names = {version: name for version, name, _ in mig.MIGRATIONS}
+    assert names.get(25) == "025_least_privilege_roles_resilient"
