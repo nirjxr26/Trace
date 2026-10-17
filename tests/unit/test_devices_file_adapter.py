@@ -25,6 +25,13 @@ def test_synthetic_serial_is_content_derived() -> None:
     assert synthetic.synthetic_serial("a" * 64).startswith("SYNTH-")
 
 
+def test_synthetic_serial_variants_bridge_only_the_legacy_width() -> None:
+    widened = "SYNTH-" + "a" * 32
+    assert synthetic.synthetic_serial_variants(widened) == (widened, "SYNTH-" + "a" * 16)
+    assert synthetic.synthetic_serial_variants("SYNTH-" + "a" * 16) == ("SYNTH-" + "a" * 16,)
+    assert synthetic.synthetic_serial_variants("S1-REAL") == ("S1-REAL",)
+
+
 def test_write_disk_creates_missing_ancestors(tmp_path: Path) -> None:
     target = tmp_path / "deep" / "deeper" / "disk.dd"
     assert synthetic.write_disk(target, size=64) == target
@@ -36,6 +43,8 @@ def test_absent_serial_is_deterministic_and_not_content_derived() -> None:
     first = synthetic.absent_serial("/dev/sda")
     assert first == synthetic.absent_serial("/dev/sda")
     assert first != synthetic.absent_serial("/dev/sdb")
+    assert first != synthetic.absent_serial("/dev/sda", size_bytes=1024)
+    assert first != synthetic.absent_serial("/dev/sda", model="A")
     assert first.startswith("SYNTH-")
 
 
@@ -68,6 +77,18 @@ def test_fingerprint_is_byte_stable_across_instances(device_box: Path) -> None:
     assert first.fingerprint.source == "synthetic"
     assert first.fingerprint.serial.value.startswith("SYNTH-")
     assert first.fingerprint.capacity_bytes == 2048
+
+
+def test_a_vanished_file_is_marked_absent_with_its_observed_fields(device_box: Path) -> None:
+    missing = (
+        file_device.FileDevice(device_box)
+        .list_block_devices()[0]
+        .model_copy(update={"node": str(device_box / "gone.dd")})
+    )
+    inspection = file_device.FileDevice(device_box, behaviour=file_device.MISSING).inspect(missing)
+    assert inspection.fingerprint.serial.value == synthetic.absent_serial(
+        missing.node, size_bytes=missing.size_bytes, model=missing.model_hint
+    )
 
 
 def test_protected_profile_reports_read_only(device_box: Path) -> None:

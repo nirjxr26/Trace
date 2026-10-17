@@ -18,7 +18,7 @@ from trace_core.core.cli.output import SKIP_CONFIRM_HELP
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.ui.renderers import console, render_error_card, render_success
 
-case_app = typer.Typer(name="case", help="Create, list, show, edit, and close forensic cases.")
+case_app = typer.Typer(name="case", help="Create, list, show, edit, review, and close forensic cases.")
 
 
 def _get_service(session_manager: DatabaseSessionManager | None = None) -> CaseService:
@@ -158,6 +158,25 @@ def edit_case(
         )
         updated = service.update_case(identifier, dto, reason=reason)
         render_success(f"Case '{updated.number}' updated.")
+        render_case_detail(updated)
+
+
+@case_app.command("review")
+def review_case(
+    identifier: str = typer.Argument(..., help="Case number or UUID to review"),
+    resume: bool = typer.Option(False, "--resume", help="Return an under-review case to active work"),
+    reason: str = typer.Option("", "--reason", "-r", help="Reason for the review change (why)"),
+) -> None:
+    """Move a case under review, or return it to active work with --resume."""
+    with capture_cli_errors(
+        "Case Review Failed", default_remediation="Review an open case, or pass --resume for an under-review case."
+    ):
+        service = _get_service()
+        updated = service.review_case(identifier, resume=resume, reason=reason)
+        if resume:
+            render_success(f"Case '{updated.number}' returned to active work.")
+        else:
+            render_success(f"Case '{updated.number}' moved under review.")
         render_case_detail(updated)
 
 

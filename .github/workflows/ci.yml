@@ -98,6 +98,7 @@ jobs:
     env:
       TRACE_DATABASE_URL: "sqlite:///:memory:"
       TRACE_STORAGE_ROOT: "./.test_storage"
+      TRACE_TEST_WHEEL_DIR: "${{ github.workspace }}/dist"
 
     steps:
       - name: Checkout Code
@@ -113,6 +114,9 @@ jobs:
         run: |
           pip install --require-hashes --only-binary :all: -r requirements.txt
           pip install --no-deps -e .
+
+      - name: Build Wheel for Update E2E
+        run: python -m build --wheel --outdir dist
 
       - name: Execute Pytest with Branch Coverage
         run: pytest --cov=trace_core --cov-report=term-missing --cov-report=xml --cov-fail-under=70

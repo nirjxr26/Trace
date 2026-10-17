@@ -127,13 +127,13 @@ async def test_check_writes_the_gate_to_the_ledger(session_manager, device_file_
     assert "DEVICE_GATE_CHECKED" in actions
 
 
-async def test_inspect_records_a_fingerprint(session_manager, device_file_env: Path) -> None:
+async def test_inspect_records_the_device_identity(session_manager, device_file_env: Path) -> None:
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
         await pilot.pause()
         await pilot.press("i")
-        detail = await _wait_detail(app, pilot, "FINGERPRINT")
+        detail = await _wait_detail(app, pilot, "IDENTITY")
         assert "Hardware" in detail
         assert "Serial" in detail
         assert "SYNTH-" in detail
@@ -254,7 +254,7 @@ def test_the_device_title_and_list_use_the_normalised_name() -> None:
 async def test_the_detail_pane_reads_plainly_and_heads_sections_in_accent(
     session_manager, device_file_env: Path
 ) -> None:
-    """No CLI flag may leak into the GUI, and the section heads must match INTEGRITY."""
+    """No CLI flag may leak into the GUI, and the section heads must match SELF-CHECK."""
     from textual.widgets import Static
 
     from trace_core.tui.app import TraceApp
@@ -305,8 +305,8 @@ async def test_the_detail_pane_reads_plainly_and_heads_sections_in_accent(
         assert gated.splitlines()[0] == "Drive 0", "the title must be the readable name"
 
 
-async def test_the_fingerprint_section_head_is_drawn_in_the_accent(session_manager, device_file_env: Path) -> None:
-    """The section heads must carry the accent token, like INTEGRITY on the Cases tab."""
+async def test_the_identity_section_head_is_drawn_in_the_accent(session_manager, device_file_env: Path) -> None:
+    """The section heads must carry the accent token, like SELF-CHECK on the Cases tab."""
     from trace_core.core.ui.theme import THEME_HEX
     from trace_core.tui.app import TraceApp
 
@@ -315,7 +315,7 @@ async def test_the_fingerprint_section_head_is_drawn_in_the_accent(session_manag
         await pilot.press("2")
         await pilot.pause()
         await pilot.press("i")
-        detail = await _wait_detail(app, pilot, "FINGERPRINT")
+        detail = await _wait_detail(app, pilot, "IDENTITY")
 
         body = app.query_one("#device-detail", Static)
         want = THEME_HEX["blue"].lstrip("#")
@@ -323,15 +323,15 @@ async def test_the_fingerprint_section_head_is_drawn_in_the_accent(session_manag
         found: set[str] = set()
         for line in body.render_lines(body.size.region):
             text = "".join(seg.text for seg in line).strip()
-            if text != "FINGERPRINT":
+            if text != "IDENTITY":
                 continue
             for seg in line:
                 colour = seg.style.color if seg.style is not None else None
                 triplet = getattr(colour, "triplet", None) if colour is not None else None
                 if triplet == want_rgb:
                     found.add(text)
-        assert found, f"FINGERPRINT head must be drawn in the accent blue {want_rgb}"
-        assert detail, "the fingerprint section must render"
+        assert found, f"IDENTITY head must be drawn in the accent blue {want_rgb}"
+        assert detail, "the identity section must render"
 
 
 async def test_a_synthetic_device_needs_no_opt_in(session_manager, device_file_env: Path, monkeypatch) -> None:
@@ -703,3 +703,62 @@ async def test_device_poll_pauses_on_hidden_tab(session_manager, monkeypatch) ->
         calls = 0
         await asyncio.sleep(1.3)
         assert calls > 0, "poll never resumed on the visible tab"
+
+
+async def test_acknowledge_accepts_an_unverified_source_after_the_typed_token(
+    session_manager, device_file_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy import select
+
+    from trace_core.audit.models import AuditEventModel
+    from trace_core.devices import helpers as device_helpers
+    from trace_core.devices.file_device import UNKNOWN_PROTECTION, FileDevice
+    from trace_core.devices.service import DeviceService
+
+    adapter = FileDevice(device_file_env, behaviour=UNKNOWN_PROTECTION)
+    monkeypatch.setattr(
+        device_helpers, "_service", lambda manager=None: DeviceService(manager, adapter, adapter, adapter)
+    )
+
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(120, 34)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await pilot.press(*"UNVERIFIED")
+        await pilot.press("enter")
+        detail = await _wait_detail(app, pilot, "UNKNOWN")
+        assert "WRITE PROTECTION" in detail
+
+    with session_manager.session() as session:
+        actions = [row.action for row in session.scalars(select(AuditEventModel).order_by(AuditEventModel.seq)).all()]
+    assert "DEVICE_OVERRIDE" in actions, "the acknowledgement must reach the service and the ledger"
+
+
+async def test_acknowledge_refuses_any_other_token(
+    session_manager, device_file_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trace_core.devices import helpers as device_helpers
+    from trace_core.devices.file_device import UNKNOWN_PROTECTION, FileDevice
+    from trace_core.devices.service import DeviceService
+    from trace_core.tui.screens.devices import DevicesView
+
+    adapter = FileDevice(device_file_env, behaviour=UNKNOWN_PROTECTION)
+    monkeypatch.setattr(
+        device_helpers, "_service", lambda manager=None: DeviceService(manager, adapter, adapter, adapter)
+    )
+
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(120, 34)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        view = app.query_one(DevicesView)
+        await pilot.press("a")
+        await pilot.pause()
+        await pilot.press(*"YES")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert view._gate is None, "an inexact token must not run the gate"
+        assert "WRITE PROTECTION" not in _detail(app)
+        assert any("UNVERIFIED" in note.message for note in app._notifications)

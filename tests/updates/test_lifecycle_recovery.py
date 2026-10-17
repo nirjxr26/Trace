@@ -145,3 +145,25 @@ def test_corrupt_marker_recovery(temp_storage_root, session_manager):
     res = CliRunner().invoke(app, ["recovery"])
     assert res.exit_code == EXIT_RECOVERY_FAILED
     assert "corrupt" in res.output.lower() or "Recovery Failed" in res.output
+
+
+def test_a_failed_health_check_leaves_the_running_release_active(
+    session_manager, signed_release, seeded_install, failing_health_check
+):
+    from trace_updater import updater as updater_mod
+
+    manifest, _, art_path, _ = signed_release()
+    dto = UpdateLifecycle("tx-keep-1", session_manager).run(manifest, art_path)
+    assert dto.result == UpdateResult.ROLLED_BACK
+    assert updater_mod.read_active(seeded_install) == "0.2.0"
+    assert updater_mod.read_previous(seeded_install) == "0.1.0"
+
+
+def test_a_retry_after_a_failed_install_reuses_the_staged_release(
+    session_manager, signed_release, seeded_install, failing_health_check
+):
+    manifest, _, art_path, _ = signed_release()
+    first = UpdateLifecycle("tx-retry-1", session_manager).run(manifest, art_path)
+    second = UpdateLifecycle("tx-retry-2", session_manager).run(manifest, art_path)
+    assert first.result == UpdateResult.ROLLED_BACK
+    assert second.result == UpdateResult.ROLLED_BACK

@@ -316,6 +316,33 @@ async def test_refresh_drops_a_removed_check_cache(session_manager: DatabaseSess
         assert "No recent check result" in detail
 
 
+async def test_a_failing_section_renderer_names_itself(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from textual.widgets import ListView, Static
+
+    from trace_core.tui.screens.settings import SettingsView
+
+    def _boom(self, body, width):  # type: ignore[no-untyped-def]
+        raise ValueError("renderer exploded")
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await pilot.press("4")
+        await pilot.pause()
+        monkeypatch.setattr(SettingsView, "_updates_body", _boom)
+        app.query_one("#settings-sections", ListView).focus()
+        await pilot.press("down")
+        detail = _text(app.query_one("#settings-detail", Static))
+        for _ in range(5):
+            await pilot.pause()
+            detail = _text(app.query_one("#settings-detail", Static))
+            if "Could not render" in detail:
+                break
+    assert "Could not render this section (renderer exploded)" in detail
+    assert "Version unavailable" not in detail
+
+
 async def test_a_second_check_press_while_running_is_ignored(
     session_manager: DatabaseSessionManager, monkeypatch
 ) -> None:
@@ -343,30 +370,6 @@ async def test_a_second_check_press_while_running_is_ignored(
         assert calls == 1, f"a double press ran {calls} live checks"
 
 
-async def test_a_failing_section_is_not_reported_as_a_version_problem(
-    session_manager: DatabaseSessionManager, monkeypatch
-) -> None:
-    from textual.widgets import Static, TabbedContent
-
-    from trace_core.tui.screens.settings import SettingsView
-
-    def explode(self, body, width):  # type: ignore[no-untyped-def]
-        raise RuntimeError("section exploded")
-
-    monkeypatch.setattr(SettingsView, "_database_body", explode)
-    app = TraceApp(session_manager)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        app.query_one(TabbedContent).active = "settings"
-        await pilot.pause()
-        app.query_one(SettingsView).refresh_data()
-        await pilot.pause()
-        detail = _text(app.query_one("#settings-detail", Static))
-        assert "Version unavailable" not in detail
-        assert "Couldn't load this section" in detail
-        assert "section exploded" in detail
-
-
 async def test_integrity_names_a_key_problem_and_not_tampering(
     session_manager: DatabaseSessionManager, monkeypatch
 ) -> None:
@@ -376,7 +379,7 @@ async def test_integrity_names_a_key_problem_and_not_tampering(
     from trace_core.audit.dto import VerifyResultDto
     from trace_core.audit.service import AuditService
 
-    for mismatch_type in ("signing_key", "insecure_key", "tip_key"):
+    for mismatch_type in ("signing_key", "insecure_key"):
         monkeypatch.setattr(
             AuditService,
             "verify",
@@ -398,5 +401,3 @@ async def test_integrity_names_a_key_problem_and_not_tampering(
             assert "TAMPER DETECTED" not in text, text
             if mismatch_type == "insecure_key":
                 assert "shipped development key" in text, text
-            if mismatch_type == "tip_key":
-                assert "chain head" in text, text

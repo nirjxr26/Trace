@@ -19,6 +19,7 @@ Core design rules:
 - Case status transitions are strictly validated (`OPEN` → `UNDER_REVIEW` → `CLOSED`) and closure is permanent once sealed.
 - Case identifiers are immutable and allocated under row-level locks to guarantee sequence safety under concurrent writers.
 - Version-based collision detection backs every optimistic-concurrency write.
+- Cross-entity links (cases ↔ devices) hold no database foreign keys: services validate targets at write time, purge never cascades, and retired records leave tombstones that read paths render as purged markers.
 - All timestamps persist in canonical UTC; presentation-layer formatting (including IST) is applied only at render time.
 - Zero external telemetry — all state and forensic evidence resides locally or in your designated private database instance.
 

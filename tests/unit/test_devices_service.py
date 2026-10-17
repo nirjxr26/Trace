@@ -11,6 +11,7 @@ from trace_core.devices.domain import (
     MAX_DEVICE_STRING,
     MAX_NODE_LENGTH,
     DeviceNotFoundError,
+    ObservedSerial,
     WpVerdict,
     WriteProtectionError,
 )
@@ -177,6 +178,20 @@ def test_an_acknowledged_override_addresses_the_device_by_its_serial(session_man
     assert [r.subject_device_serial for r in rows] == [serial, serial, serial]
 
 
+def test_a_simulated_gate_is_marked_in_the_ledger_payload(session_manager, svc, box: Path) -> None:
+    import json
+
+    from trace_core.audit.models import AuditEventModel
+    from trace_core.core.operators import process_session_id
+
+    _ = process_session_id()
+    svc.check_device(str(box / "disk-a.dd"))
+    with session_manager.session() as session:
+        row = session.scalars(select(AuditEventModel).where(AuditEventModel.action == "DEVICE_GATE_CHECKED")).first()
+    assert row is not None
+    assert json.loads(row.payload_json)["details"]["simulated"] is True
+
+
 def test_a_case_link_row_stays_a_case_subject(session_manager, svc, box: Path) -> None:
     from trace_core.audit.models import AuditEventModel
     from trace_core.cases.dto import CaseCreateDto
@@ -233,6 +248,7 @@ def test_inspect_row_carries_the_observed_identity(session_manager, svc, box: Pa
     with session_manager.session() as session:
         payload = session.execute(text("SELECT payload_json FROM audit_events WHERE seq = 1")).scalar()
     details = parse_details(payload)
+    assert details is not None
     assert details["serial"].startswith("SYNTH-")
     assert details["interface"] == "UNKNOWN"
     assert details["source"] == "synthetic"
@@ -296,6 +312,28 @@ def test_observation_history_keeps_each_verdict(session_manager, box: Path) -> N
     assert {r.verdict for r in rows} == {WpVerdict.WRITABLE, WpVerdict.READ_ONLY}
 
 
+def test_a_widened_synthetic_identity_still_reads_the_legacy_width(session_manager, box: Path) -> None:
+    adapter = file_device.FileDevice(box)
+    svc = DeviceService(session_manager, adapter, adapter, adapter)
+    node = str(box / "disk-a.dd")
+    svc.check_device(node)
+
+    widened = _serial_for(box)
+    legacy = f"SYNTH-{widened.removeprefix('SYNTH-')[:16]}"
+    inspection = adapter.inspect(adapter.list_block_devices()[0])
+    forged = inspection.model_copy(
+        update={"fingerprint": inspection.fingerprint.model_copy(update={"serial": ObservedSerial(value=legacy)})}
+    )
+    with session_manager.session() as session:
+        SqlAlchemyDeviceRepository(session).save_observation(forged, "tester")
+        session.commit()
+
+    with session_manager.session() as session:
+        repo = SqlAlchemyDeviceRepository(session)
+        assert {row.fingerprint.serial.value for row in repo.observation_history(widened)} == {widened, legacy}
+        assert [row.fingerprint.serial.value for row in repo.observation_history(legacy)] == [legacy]
+
+
 def test_gate_row_carries_the_verdict_and_its_evidence(session_manager, svc, box: Path) -> None:
     from trace_core.audit.events import parse_details
     from trace_core.core.operators import process_session_id
@@ -305,6 +343,7 @@ def test_gate_row_carries_the_verdict_and_its_evidence(session_manager, svc, box
     with session_manager.session() as session:
         payload = session.execute(text("SELECT payload_json FROM audit_events ORDER BY seq DESC LIMIT 1")).scalar()
     details = parse_details(payload)
+    assert details is not None
     assert details["verdict"] == "READ_ONLY"
     assert details["unknown_cause"] is None
     assert any(c["name"] == "open_exclusive" for c in details["evidence"]["checks"])
@@ -360,6 +399,7 @@ def test_the_override_event_preserves_the_pre_override_verdict_and_cause(session
         ).all()
     assert len(rows) == 1
     details = parse_details(rows[0][1])
+    assert details is not None
     assert details["original_verdict"] == "UNKNOWN"
     assert details["original_unknown_cause"] == "IOCTL_FAILURE"
     assert details["reason"] == "custody handoff"
@@ -380,7 +420,9 @@ def test_an_override_without_a_stated_reason_still_records_one(session_manager, 
         payload = session.execute(
             text("SELECT payload_json FROM audit_events WHERE action = 'DEVICE_OVERRIDE'")
         ).scalar()
-    assert parse_details(payload)["reason"].strip()
+    details = parse_details(payload)
+    assert details is not None
+    assert details["reason"].strip()
 
 
 def test_every_device_ledger_row_is_written_through_a_before_commit_hook(
@@ -442,7 +484,9 @@ def test_the_ledger_row_is_written_before_the_refusal_propagates(session_manager
         svc.check_device(str(box / "disk-a.dd"))
     with session_manager.session() as session:
         payload = session.execute(text("SELECT payload_json FROM audit_events")).scalar()
-    assert parse_details(payload)["verdict"] == "WRITABLE"
+    details = parse_details(payload)
+    assert details is not None
+    assert details["verdict"] == "WRITABLE"
 
 
 def test_a_failed_audit_rolls_the_observation_back(session_manager, svc, box: Path, monkeypatch) -> None:

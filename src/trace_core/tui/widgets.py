@@ -73,24 +73,22 @@ def repaint_selection(
     """O(1) › repaint: touch the old and new rows only, so the arrow tracks the cursor.
 
     Single source for the Cases/Audit tables. Callers own the cursor state and
-    pass a per-row cell builder; failures are swallowed row by row (a stale
-    cursor must never crash the view).
+    pass a per-row cell builder; coordinates that are no longer valid are
+    skipped, so a stale cursor never crashes the view.
     """
     if old == new:
         return
     count = table.row_count
     if old is not None and 0 <= old < count:
         for col, value in enumerate(row_cells(old, False)):
-            try:
-                table.update_cell_at(Coordinate(old, col), value)
-            except Exception:
-                pass
+            coordinate = Coordinate(old, col)
+            if table.is_valid_coordinate(coordinate):
+                table.update_cell_at(coordinate, value)
     if 0 <= new < count:
         for col, value in enumerate(row_cells(new, True)):
-            try:
-                table.update_cell_at(Coordinate(new, col), value)
-            except Exception:
-                pass
+            coordinate = Coordinate(new, col)
+            if table.is_valid_coordinate(coordinate):
+                table.update_cell_at(coordinate, value)
 
 
 def selected_item[T](table: DataTable, items: Sequence[T]) -> T | None:

@@ -112,6 +112,12 @@ def test_inspect_captures_and_reports(device_file_env: Path) -> None:
     assert payload["fingerprint"]["capacity_bytes"] == 2048
 
 
+def test_the_inspect_card_names_the_device_identity(device_file_env: Path) -> None:
+    result = runner.invoke(app, ["device", "inspect", str(device_file_env / "disk-a.dd")])
+    assert result.exit_code == EXIT_SUCCESS
+    assert "Device identity" in result.stdout
+
+
 def test_check_reports_read_only_and_exits_zero(device_file_env: Path) -> None:
     result = runner.invoke(app, ["device", "check", str(device_file_env / "disk-a.dd"), "--output", "json"])
     assert result.exit_code == EXIT_SUCCESS
@@ -448,6 +454,14 @@ def test_the_shell_handler_reports_an_unknown_action() -> None:
     assert DeviceShellCommandHandler().execute("frobnicate", [], None) is False
 
 
+def test_the_shell_help_names_the_device_identity() -> None:
+    from trace_core.devices.shell_handler import DeviceShellCommandHandler
+
+    help_text = " ".join(entry[2] for entry in DeviceShellCommandHandler().get_help_entries())
+    assert "device identity" in help_text
+    assert "fingerprint" not in help_text
+
+
 def test_the_shell_handler_reports_a_missing_node() -> None:
     from trace_core.devices.shell_handler import DeviceShellCommandHandler
 
@@ -576,3 +590,19 @@ def test_the_shell_completes_device_nodes(device_file_env: Path) -> None:
     assert any("disk-a.dd" in v for v in values)
     flags = [value for value, _ in handler.get_completions("device check --", None)]
     assert "--physical" in flags
+
+
+def test_the_short_flag_aliases_reach_the_same_gate(device_file_env: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["device", "check", str(device_file_env / "disk-a.dd"), "--real", "--ack-unverified"],
+        input="UNVERIFIED\n",
+    )
+    assert result.exit_code == EXIT_SUCCESS
+    assert "READ_ONLY" in result.stdout
+
+
+def test_the_gate_card_calls_the_file_adapter_simulated(device_file_env: Path) -> None:
+    result = runner.invoke(app, ["device", "check", str(device_file_env / "disk-a.dd")])
+    assert result.exit_code == EXIT_SUCCESS
+    assert "Evidence (simulated /" in result.stdout

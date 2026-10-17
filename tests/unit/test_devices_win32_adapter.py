@@ -198,7 +198,7 @@ def test_a_serialless_drive_is_marked_absent_not_named_by_its_node(monkeypatch: 
     )
     fingerprint = win32.Win32Device().inspect(_info()).fingerprint
     node = r"\\.\PhysicalDrive0"
-    assert fingerprint.serial.value == absent_serial(node)
+    assert fingerprint.serial.value == absent_serial(node, size_bytes=500)
     assert fingerprint.serial.value != node
 
 

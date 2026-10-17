@@ -49,7 +49,7 @@ from trace_core.devices.domain import (
     UnknownCause,
     verdict_for,
 )
-from trace_core.devices.synthetic import absent_serial
+from trace_core.devices.synthetic import absent_serial, is_synthetic_serial
 
 ADAPTER_VERSION: Final[str] = "linux-v1"
 DEV_ROOT: Final[str] = "/dev"
@@ -109,6 +109,7 @@ class LinuxDevice:
         entry = self._entry(name)
         native = self._native(device, name, entry)
         cause, firmware, enriched_wwn = self._enrich(name, native.interface)
+        enriched = cause is None and (firmware or enriched_wwn)
         fingerprint = DeviceFingerprint(
             serial=ObservedSerial(value=native.serial),
             model=native.model,
@@ -116,7 +117,7 @@ class LinuxDevice:
             firmware=firmware,
             interface=native.interface,
             wwn=native.wwn or enriched_wwn,
-            source="smartctl" if cause is None and (firmware or enriched_wwn) else "os",
+            source="synthetic" if is_synthetic_serial(native.serial) else ("smartctl" if enriched else "os"),
         )
         return DeviceInspection(device=device, fingerprint=fingerprint, inspected_at=now_utc())
 
@@ -178,13 +179,14 @@ class LinuxDevice:
         serial produced the SAME fingerprint: unplug A from /dev/sdb, plug a different
         physical B that also reports no serial, and any later comparison keyed on serial
         concludes "same device". `absent_serial` exists precisely to mark an absent
-        identity and marks it deterministically from the node alone, so the two states
-        cannot collide. The caller reports the result as `synthetic`, never as observed.
+        identity and marks it deterministically from the node plus the observed size and
+        model, so the two states cannot collide. The caller reports the result as
+        `synthetic`, never as observed.
         """
         return _Native(
             serial=clean_text(entry.get("serial"))
             or _sysfs_value(name, "serial")
-            or absent_serial(f"{self._dev_root}/{name}"),
+            or absent_serial(f"{self._dev_root}/{name}", size_bytes=device.size_bytes, model=device.model_hint),
             model=clean_text(entry.get("model")) or device.model_hint or name,
             interface=_interface(clean_text(entry.get("tran")) or _sysfs_value(name, "transport")),
             wwn=clean_text(entry.get("wwn")),
@@ -269,8 +271,8 @@ class LinuxDevice:
         try:
             buffer = bytearray(ctypes.c_int())
             fcntl.ioctl(fd, BLKROGET, buffer, True)
-        except OSError:
-            return None
+        except OSError as exc:
+            return exc
         finally:
             os.close(fd)
         return ctypes.c_int.from_buffer(buffer).value == 1

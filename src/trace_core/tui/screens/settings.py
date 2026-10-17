@@ -159,7 +159,7 @@ class SettingsView(Vertical):
         try:
             renderer(body, pane_width)
         except Exception as exc:
-            body.append(f"Couldn't load this section ({exc})", style="dim")
+            body.append(f"Could not render this section ({exc})", style="dim")
         self.query_one(f"#{DETAIL_ID}", Static).update(body)
         from trace_core.tui.widgets import ThothSpinner
 
@@ -278,13 +278,11 @@ class SettingsView(Vertical):
             body.append(f"Events Checked     {res.events_verified}\n")
             body.append(f"Chain Breaks       {len(res.sequence_gaps)}\n")
             body.append("This does not prove no records are missing.\n", style="dim")
-        elif res.mismatch_type in ("signing_key", "insecure_key", "tip_key"):
+        elif res.mismatch_type in ("signing_key", "insecure_key"):
             body.append("⚠ ", style=DOT_BAD)
             body.append("SIGNING KEY PROBLEM\n", style="bold")
             if res.mismatch_type == "insecure_key":
                 body.append("Signed with the shipped development key, which is public.\n", style="dim")
-            elif res.mismatch_type == "tip_key":
-                body.append("The chain head's signature doesn't verify with the active key.\n", style="dim")
             else:
                 body.append("The key this ledger was signed with is not the active key.\n", style="dim")
             body.append(f"Events Checked     {res.events_verified}\n")
@@ -484,14 +482,10 @@ class SettingsView(Vertical):
     def run_command(self, command: str) -> None:
         if command in ("check", "updates-check"):
             self.action_check()
-        elif command in ("install", "updates-install"):
-            self.app.notify("Updates install from the CLI: trace update install --yes", severity="warning")
         elif command in ("migrate", "database-migrate"):
             self.action_migrate()
         elif command in ("verify", "anchor"):
             self.action_verify()
-        elif command == "uninstall":
-            self.app.notify("Run standalone: trace uninstall [--purge-data] [--yes]", severity="warning")
         else:
             self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")
 

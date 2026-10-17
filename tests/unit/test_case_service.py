@@ -17,6 +17,7 @@ from trace_core.cases.service import (
     DuplicateCaseNumberError,
     InvalidCaseStateError,
 )
+from trace_core.core.database.session import DatabaseSessionManager
 
 pytestmark = pytest.mark.unit
 
@@ -150,6 +151,61 @@ def test_cannot_update_closed_case(service: CaseService) -> None:
     update_dto = CaseUpdateDto(title="Illegal Edit")
     with pytest.raises(InvalidCaseStateError, match="permanently sealed"):
         service.update_case("2026-SEALED-0001", update_dto)
+
+
+def test_review_case_moves_under_review_and_resumes(service: CaseService) -> None:
+    service.create_case(CaseCreateDto(number="2026-REVIEW-0001", title="Review Test", lead_examiner="Examiner 1"))
+
+    under = service.review_case("2026-REVIEW-0001", reason="Second pair of eyes")
+    assert under.status == CaseStatus.UNDER_REVIEW
+    assert [c.number for c in service.list_cases(CaseFilterDto(status=CaseStatus.UNDER_REVIEW))] == ["2026-REVIEW-0001"]
+
+    resumed = service.review_case("2026-REVIEW-0001", resume=True)
+    assert resumed.status == CaseStatus.OPEN
+    assert service.list_cases(CaseFilterDto(status=CaseStatus.UNDER_REVIEW)) == []
+
+
+def test_review_refuses_closed_and_archived_cases(service: CaseService) -> None:
+    service.create_case(CaseCreateDto(number="2026-REVIEW-0002", title="Sealed", lead_examiner="Examiner 1"))
+    service.close_case("2026-REVIEW-0002", reason="Sealing for test")
+    with pytest.raises(InvalidCaseStateError, match="permanently closed"):
+        service.review_case("2026-REVIEW-0002")
+
+    service.create_case(CaseCreateDto(number="2026-REVIEW-0003", title="Archived", lead_examiner="Examiner 1"))
+    service.delete_case("2026-REVIEW-0003")
+    with pytest.raises(InvalidCaseStateError, match="archived"):
+        service.review_case("2026-REVIEW-0003")
+
+
+def test_review_refuses_same_state_transitions(service: CaseService) -> None:
+    service.create_case(CaseCreateDto(number="2026-REVIEW-0004", title="Double", lead_examiner="Examiner 1"))
+    service.review_case("2026-REVIEW-0004")
+    with pytest.raises(InvalidCaseStateError, match="Illegal transition"):
+        service.review_case("2026-REVIEW-0004")
+
+    service.review_case("2026-REVIEW-0004", resume=True)
+    with pytest.raises(InvalidCaseStateError, match="Illegal transition"):
+        service.review_case("2026-REVIEW-0004", resume=True)
+
+
+def test_review_records_a_status_change_in_the_ledger(
+    service: CaseService, session_manager: DatabaseSessionManager
+) -> None:
+    import json
+
+    from trace_core.audit.service import AuditService
+
+    service.create_case(CaseCreateDto(number="2026-REVIEW-0005", title="Ledger", lead_examiner="Examiner 1"))
+    service.review_case("2026-REVIEW-0005", reason="Peer check", actor="Claimed Name")
+
+    events = AuditService(session_manager).list_events()
+    updated = next(e for e in events if json.loads(e.payload_json)["action"] == "CASE_UPDATED")
+    details = json.loads(updated.payload_json)["details"]
+    assert details["changed"] == ["status"]
+    assert details["before"] == {"status": "OPEN"}
+    assert details["after"] == {"status": "UNDER_REVIEW"}
+    assert details["reason"] == "Peer check"
+    assert details["command"] == "case review 2026-REVIEW-0005"
 
 
 def test_tracked_snapshot_and_changed_fields() -> None:

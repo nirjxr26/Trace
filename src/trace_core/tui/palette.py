@@ -19,6 +19,7 @@ COMMANDS: list[tuple[str, str, str]] = [
     ("tab-settings", "Settings  —  database, updates, diagnostics", "sections + detail"),
     ("case-create", "Create a new case", "guided form"),
     ("case-edit", "Edit the selected case", "diff preview + reason"),
+    ("case-review", "Move the selected case under review", "or return it to active work"),
     ("case-close", "Seal (close) the selected case", "type number to confirm"),
     ("case-archive", "Archive the selected case", _CONFIRM_HINT),
     ("case-purge", "Permanently erase the selected case", "type number, irreversible"),
@@ -34,8 +35,6 @@ COMMANDS: list[tuple[str, str, str]] = [
     ("device-export", "Export device observations to JSONL", "header + one line per record"),
     ("database-migrate", "Apply pending database migrations", "pending only"),
     ("updates-check", "Check for a Trace update", "available version"),
-    ("updates-install", "Install the available Trace update", _CONFIRM_HINT),
-    ("uninstall", "Uninstall Trace", "app only, or app + all data"),
 ]
 
 
@@ -112,7 +111,8 @@ class KeysModal(_BaseModal, ModalScreen[None]):
         (
             "Cases",
             (
-                ("c / e / x / a / p", "create · edit · seal · archive · purge"),
+                ("c / e / w", "create · edit · review"),
+                ("x / a / p", "seal · archive · purge"),
                 ("u", "restore archived"),
                 ("r", "recent-first toggle"),
                 ("v", "raw JSON drawer"),
@@ -123,6 +123,7 @@ class KeysModal(_BaseModal, ModalScreen[None]):
             (
                 ("i", "inspect device"),
                 ("c", "check write protection"),
+                ("a", "acknowledge unverified source"),
                 ("k", "cycle device kind"),
             ),
         ),
@@ -131,9 +132,9 @@ class KeysModal(_BaseModal, ModalScreen[None]):
             (
                 ("s", "scope to case  (Audit)"),
                 ("e", "export bundle  (Audit)"),
+                ("a", "verify against anchor  (Audit)"),
                 ("m", "apply migrations  (Settings · Database)"),
                 ("c", "check updates  (Settings · Updates)"),
-                ("u", "install update  (Settings · Updates)"),
                 ("v", "verify chain  (Settings · Integrity)"),
             ),
         ),

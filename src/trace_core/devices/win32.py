@@ -129,7 +129,9 @@ class Win32Device:
             raise DeviceGoneError(device.node)
         cause, wwn = self._enrich(index, drive.interface)
         fingerprint = DeviceFingerprint(
-            serial=ObservedSerial(value=drive.serial or absent_serial(node)),
+            serial=ObservedSerial(
+                value=drive.serial or absent_serial(node, size_bytes=drive.size_bytes, model=drive.model)
+            ),
             model=drive.model or f"PhysicalDrive{index}",
             capacity_bytes=drive.size_bytes or 0,
             firmware=drive.firmware,

@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from trace_core.audit.domain import GENESIS_CHAIN, chain_hash, payload_hash
 from trace_core.audit.dto import VerifyResultDto
 from trace_core.audit.models import AuditEventModel
+from trace_core.core.canonical import _coerce_utc_required, canonical_ts
 
 
 def _expected_payload_hash(payload_json: str) -> str:
@@ -44,6 +45,7 @@ def _mismatch(
 ) -> VerifyResultDto:
     is_payload = mismatch_type == "payload_hash"
     is_signature = mismatch_type == "signature"
+    is_column = mismatch_type.startswith("column:")
     return VerifyResultDto(
         is_valid=False,
         events_verified=events_verified,
@@ -53,46 +55,12 @@ def _mismatch(
         mismatch_type=mismatch_type,
         expected_payload_hash=expected if is_payload else None,
         actual_payload_hash=actual if is_payload else None,
-        expected_chain_hash=None if (is_payload or is_signature) else expected,
-        actual_chain_hash=None if (is_payload or is_signature) else actual,
+        expected_chain_hash=None if (is_payload or is_signature or is_column) else expected,
+        actual_chain_hash=None if (is_payload or is_signature or is_column) else actual,
         expected_signature=expected if is_signature else None,
         actual_signature=actual if is_signature else None,
         sequence_gaps=list(gaps),
     )
-
-
-def _tip_result(res: VerifyResultDto, mismatch_type: str, first_mismatch_seq: int | None) -> VerifyResultDto:
-    return VerifyResultDto(
-        is_valid=False,
-        events_verified=res.events_verified,
-        first_seq=res.first_seq,
-        last_seq=res.last_seq,
-        first_mismatch_seq=first_mismatch_seq,
-        mismatch_type=mismatch_type,
-        sequence_gaps=list(res.sequence_gaps),
-    )
-
-
-def verify_tip(
-    res: VerifyResultDto,
-    *,
-    head_seq: int,
-    head_chain: str,
-    last_chain: str | None,
-    tip_key_id: str | None,
-    tip_signature: str | None,
-) -> VerifyResultDto | None:
-    """Head-vs-tail binding plus tip signature. None when the head checks out."""
-    from trace_core.audit.signing import verify_bytes
-    from trace_core.core.canonical import canonical_json_str
-
-    if head_seq != (res.last_seq or 0) or head_chain != (last_chain or GENESIS_CHAIN):
-        return _tip_result(res, "chain_head", res.last_seq)
-    if tip_key_id and tip_signature:
-        payload = canonical_json_str({"last_chain": head_chain, "last_seq": head_seq}).encode("utf-8")
-        if not verify_bytes(tip_key_id, payload, tip_signature):
-            return _tip_result(res, "tip_key", head_seq)
-    return None
 
 
 def verify_event(
@@ -136,6 +104,26 @@ def _signature_mismatch(m: AuditEventModel) -> tuple[str, str] | None:
     return expected_signature(m.key_id, raw) or f"key:{m.key_id}", m.signature
 
 
+_COLUMN_MIRRORS = ("action", "actor", "subject_case_number", "subject_device_serial")
+
+
+def _column_mismatch(m: AuditEventModel) -> tuple[str, str, str] | None:
+    try:
+        payload = json.loads(m.payload_json)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for name in _COLUMN_MIRRORS:
+        if name in payload and payload[name] != getattr(m, name):
+            return f"column:{name}", str(payload[name]), str(getattr(m, name))
+    if "ts" in payload:
+        column_ts = canonical_ts(_coerce_utc_required(m.ts))
+        if payload["ts"] != column_ts:
+            return "column:ts", str(payload["ts"]), column_ts
+    return None
+
+
 def _row_mismatch(m: AuditEventModel, prev_chain: str) -> tuple[str, str, str] | None:
     expected_p = _expected_payload_hash(m.payload_json)
     if expected_p != m.payload_hash:
@@ -151,6 +139,9 @@ def _row_mismatch(m: AuditEventModel, prev_chain: str) -> tuple[str, str, str] |
         if expected_s in ("signing_key", "insecure_key"):
             return expected_s, "", actual_s
         return "signature", expected_s, actual_s
+    column = _column_mismatch(m)
+    if column is not None:
+        return column
     return None
 
 
@@ -158,7 +149,7 @@ def verify_rows(rows: Iterable[AuditEventModel]) -> VerifyResultDto:
     """Recompute every link from stored payloads. Policy: hash/prev_chain mismatch =
     tamper (fail fast at first seq); missing seqs = gaps (warning — a middle delete
     already fails as prev_chain mismatch at the next row, while a pure tail delete
-    is invisible to this scan and is caught by `verify_tip`'s head binding)."""
+    is caught by the head-to-tail binding in `helpers.bind_head_to_tail`)."""
     first_seq: int | None = None
     last_seq: int | None = None
     gaps: list[int] = []

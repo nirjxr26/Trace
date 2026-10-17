@@ -244,18 +244,22 @@ def test_archived_filter_shows_only_deleted(service: CaseService) -> None:
     assert "2026-ARC-0001" not in numbers
 
 
-def test_delete_actor_falls_back_to_lead_examiner(service: CaseService) -> None:
-    """Verify archive audit attributes the lead examiner instead of system."""
+def test_archive_audit_names_the_os_identity_not_the_lead_examiner(
+    service: CaseService,
+    as_user,  # type: ignore[no-untyped-def]
+) -> None:
+    """Verify the archive audit names the OS identity, not the typed examiner."""
     from trace_core.audit.dto import AuditFilterDto
     from trace_core.audit.service import AuditService
 
+    as_user("clerk")
     service.create_case(CaseCreateDto(number="2026-ACT-0001", title="Actor Check", lead_examiner="Lead Who"))
     service.delete_case("2026-ACT-0001", purge=False)
 
     events = AuditService(service.session_manager).list_events(AuditFilterDto(case_number="2026-ACT-0001"))
     archived = [e for e in events if e.action.value == "CASE_ARCHIVED"]
     assert len(archived) == 1
-    assert archived[0].actor == "Lead Who"
+    assert archived[0].actor == "clerk@workstation"
 
 
 def test_dto_input_size_limits() -> None:

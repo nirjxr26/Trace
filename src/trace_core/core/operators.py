@@ -52,16 +52,24 @@ class OperatorModel(Base):
     __table_args__ = (UniqueConstraint("name", "host", name="uq_operators_name_host"),)
 
 
+_IDENTITY_REFUSAL = (
+    "Could not resolve this session's OS user or hostname, so the action cannot be attributed; "
+    "refusing to act without an accountable identity."
+)
+
+
 def current_identity() -> tuple[str, str]:
     """OS user + host. Metadata for attribution, never proof of login."""
     try:
-        user = getpass.getuser() or "unknown"
-    except Exception:
-        user = "unknown"
+        user = getpass.getuser().strip()
+    except Exception as exc:
+        raise ApplicationError(_IDENTITY_REFUSAL) from exc
     try:
-        host = socket.gethostname() or "unknown"
-    except Exception:
-        host = "unknown"
+        host = socket.gethostname().strip()
+    except Exception as exc:
+        raise ApplicationError(_IDENTITY_REFUSAL) from exc
+    if not user or not host:
+        raise ApplicationError(_IDENTITY_REFUSAL)
     return user, host
 
 

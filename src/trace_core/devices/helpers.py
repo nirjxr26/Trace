@@ -16,6 +16,8 @@ from trace_core.devices.dto import (
 )
 from trace_core.devices.service import KIND_ALL, DeviceService
 
+OVERRIDE_TOKEN = "UNVERIFIED"
+
 
 def _service(session_manager: DatabaseSessionManager | None = None) -> DeviceService:
     return DeviceService(session_manager)
@@ -136,6 +138,17 @@ def do_case_device_rows(
     return rows
 
 
+def do_node_case_labels(session_manager: DatabaseSessionManager | None, node: str) -> list[str]:
+    """Case numbers filed under one device, tombstoned numbers marked "(purged)"."""
+    from trace_core.cases.service import CaseService
+
+    cases = CaseService(session_manager)
+    return [
+        f"{link.case_number} (purged)" if cases.is_purged(link.case_number) else link.case_number
+        for link in do_node_links(session_manager, node)
+    ]
+
+
 def do_node_case_numbers(session_manager: DatabaseSessionManager | None, node: str) -> list[str] | None:
     """Cases one device is filed under, for the CLI inspection card. None (with a dim
     notice) when the links cannot be read — unreadable is not the same as unfiled."""
@@ -143,7 +156,7 @@ def do_node_case_numbers(session_manager: DatabaseSessionManager | None, node: s
     from trace_core.core.ui.renderers import console
 
     try:
-        return [link.case_number for link in do_node_links(session_manager, node)]
+        return do_node_case_labels(session_manager, node)
     except ApplicationError as exc:
         console.print(f"[dim]Filed cases unavailable — {exc}[/dim]\n")
         return None

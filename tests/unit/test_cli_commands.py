@@ -90,6 +90,28 @@ def test_cli_case_crud_flow() -> None:
     assert "Case Not Found" in res_missing.stdout
 
 
+def test_cli_case_review_flow() -> None:
+    res = runner.invoke(
+        app, ["case", "create", "--number", "2026-CLI-0002", "--title", "Review", "--examiner", "Investigator CLI"]
+    )
+    assert res.exit_code == 0
+
+    res_review = runner.invoke(app, ["case", "review", "2026-CLI-0002", "--reason", "Peer check"])
+    assert res_review.exit_code == 0
+    assert "moved under review" in res_review.stdout
+
+    res_list = runner.invoke(app, ["case", "list", "--status", "UNDER_REVIEW"])
+    assert "2026-CLI-0002" in res_list.stdout
+
+    res_resume = runner.invoke(app, ["case", "review", "2026-CLI-0002", "--resume"])
+    assert res_resume.exit_code == 0
+    assert "returned to active work" in res_resume.stdout
+
+    res_again = runner.invoke(app, ["case", "review", "2026-CLI-0002", "--resume"])
+    assert res_again.exit_code == EXIT_ERROR
+    assert "Illegal transition" in res_again.stdout
+
+
 def test_show_case_lists_linked_and_historical_devices(device_file_env) -> None:  # type: ignore[no-untyped-def]
     number = "2026-LINK-0001"
     assert (

@@ -142,10 +142,7 @@ def _atomic_write(
         with handle:
             write(handle)
             handle.flush()
-            try:
-                os.fsync(handle.fileno())
-            except Exception:
-                pass
+            os.fsync(handle.fileno())
         os.chmod(tmp, mode)
         os.replace(tmp, target)
     except BaseException:
@@ -168,8 +165,6 @@ def fsync_dir(path: str | Path) -> None:
         return
     try:
         os.fsync(fd)
-    except OSError:
-        pass
     finally:
         os.close(fd)
 

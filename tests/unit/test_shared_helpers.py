@@ -79,7 +79,7 @@ def test_update_lifecycle_record_fills_the_invariant_fields() -> None:
 
 def test_case_service_audit_hooks_are_built_by_one_factory() -> None:
     src = _source(cases_service)
-    assert src.count("_audit_hook(") == 8, "5 builder sites plus 3 uses inside the two factories"
+    assert src.count("_audit_hook(") == 9, "6 builder sites plus 3 uses inside the two factories"
     assert src.count("def _audit_hook(") == 1, "exactly one factory definition"
     assert src.count("def _close_audit_hook(") == 1, "the close hook factory is defined once"
     built: tuple[Any, Any, dict[str, Any], Any] = ("ACTION", object(), {}, object())
@@ -397,46 +397,40 @@ def test_uninstall_reports_a_failure_instead_of_printing_nothing(tmp_path, monke
     assert "install" in out, out
 
 
-def test_purge_data_removes_storage_and_trust(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """F-25: the consent promised cases, evidence and signing keys; the flag must delete them."""
+def test_purge_data_removes_storage_and_trust_not_just_the_app(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from trace_core.core.cli import uninstall
 
     home = tmp_path / "home"
-    storage = home / ".trace" / "storage" / "cases"
-    storage.mkdir(parents=True)
-    (storage / "2026-PUR-0001.txt").write_bytes(b"synthetic evidence")
-    trust = home / ".trace" / "trust"
-    trust.mkdir(parents=True)
-    (trust / "keys.json").write_bytes(b"key material")
-    (home / ".trace" / "app").mkdir(parents=True)
+    for target in ("app", "install", "releases", "backups", "storage", "trust"):
+        (home / ".trace" / target).mkdir(parents=True)
     monkeypatch.setattr(uninstall, "_trace_root", lambda: home / ".trace")
     monkeypatch.setattr(uninstall, "_shim_paths", lambda: [])
 
     code = uninstall.run_uninstall(purge_data=True)
 
     assert code == EXIT_SUCCESS
-    assert not (home / ".trace" / "storage").exists()
-    assert not (home / ".trace" / "trust").exists()
-    assert not (home / ".trace" / "app").exists()
+    root = home / ".trace"
+    assert not (root / "storage").exists(), "purge must delete the evidence tree"
+    assert not (root / "trust").exists(), "purge must delete the signing keys"
+    assert not (root / "app").exists()
 
 
-def test_without_purge_data_storage_and_trust_survive(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """The default scope stays honest in the other direction: evidence and keys are kept."""
+def test_plain_uninstall_keeps_storage_and_trust(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from trace_core.core.cli import uninstall
 
     home = tmp_path / "home"
-    (home / ".trace" / "storage").mkdir(parents=True)
-    (home / ".trace" / "trust").mkdir(parents=True)
-    (home / ".trace" / "app").mkdir(parents=True)
+    for target in ("app", "install", "storage", "trust"):
+        (home / ".trace" / target).mkdir(parents=True)
     monkeypatch.setattr(uninstall, "_trace_root", lambda: home / ".trace")
     monkeypatch.setattr(uninstall, "_shim_paths", lambda: [])
 
     code = uninstall.run_uninstall(purge_data=False)
 
     assert code == EXIT_SUCCESS
-    assert (home / ".trace" / "storage").exists()
-    assert (home / ".trace" / "trust").exists()
-    assert not (home / ".trace" / "app").exists()
+    root = home / ".trace"
+    assert (root / "storage").is_dir(), "a plain uninstall must keep the evidence tree"
+    assert (root / "trust").is_dir(), "a plain uninstall must keep the signing keys"
+    assert not (root / "app").exists()
 
 
 def test_a_blocked_purge_target_is_reported_and_keeps_the_launcher(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]

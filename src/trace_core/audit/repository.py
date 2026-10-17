@@ -136,7 +136,7 @@ class SqlAlchemyAuditRepository:
         subject_device_serial: str | None,
     ) -> AuditEventDto:
         from trace_core.audit.signing import sign_bytes
-        from trace_core.core.canonical import canonical_json_str
+        from trace_core.core.canonical import canonical_json, canonical_json_str
         from trace_core.core.clock import now_utc
 
         ts_val = now_utc()
@@ -150,9 +150,7 @@ class SqlAlchemyAuditRepository:
         prev = head.last_chain_hash
         seq = head.last_seq + 1
         c_hash = chain_hash(prev, p_hash, seq)
-        tip_key_id, tip_signature = sign_bytes(
-            canonical_json_str({"last_chain": c_hash, "last_seq": seq}).encode("utf-8")
-        )
+        tip_key_id, tip_signature = sign_bytes(canonical_json({"last_seq": seq, "last_chain": c_hash}))
 
         model = AuditEventModel(
             seq=seq,

@@ -121,7 +121,9 @@ def _recover() -> None:
         if state in _ROLLBACK_WORTHY_STATES:
             from trace_core.updates.migration import rollback_release
 
-            restored = rollback_release(base, mgr, marker.get("backup_path"))
+            restored = rollback_release(
+                base, mgr, marker.get("backup_path"), target=marker.get("rollback_target") or None
+            )
             _mark_rolled_back(marker)
             console.print(f"[green]Restored previous release {restored}.[/green]")
             return

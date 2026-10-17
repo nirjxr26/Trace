@@ -16,12 +16,12 @@ from trace_core.core.cli.exit_codes import (
 )
 from trace_core.core.domain import DomainError, InvariantViolationError
 from trace_core.core.errors import (
+    AnchorOutrunsLedgerError,
     AnchorVerificationError,
     ApplicationError,
     AuditTamperError,
     ConcurrencyConflictError,
     ConflictError,
-    DefaultSecretError,
     NotFoundError,
     StateTransitionError,
 )
@@ -254,6 +254,15 @@ def _typed_error(e: Exception, operation_title: str | None, default_remediation:
         ),
         (DomainError, "Invalid Input", "Trace refused this value. Correct the input and retry.", EXIT_USAGE),
         (
+            AnchorOutrunsLedgerError,
+            "Anchor Names Missing Records",
+            "This anchor is signed with a trusted key, and it names records this ledger does not "
+            "have. If the anchor belongs to a different ledger, nothing is missing here - confirm "
+            "which ledger it came from. If it belongs to this one, records were deleted from the "
+            "end: recover them from your off-host copies before trusting what remains.",
+            EXIT_LEDGER_BROKEN,
+        ),
+        (
             AnchorVerificationError,
             "Anchor Not Trusted",
             "Check the anchor file itself. Verify without --anchor to check this ledger on "
@@ -266,12 +275,6 @@ def _typed_error(e: Exception, operation_title: str | None, default_remediation:
             "Find where the records changed. If it's a signing-key rotation rather than an "
             "edit, set TRACE_SECRET_KEY to the key these records were signed with first.",
             EXIT_LEDGER_BROKEN,
-        ),
-        (
-            DefaultSecretError,
-            "Signing Key Refused",
-            "Set TRACE_SECRET_KEY to a private value, then retry.",
-            EXIT_ERROR,
         ),
     )
     for err_cls, title, remed, code in specs:
