@@ -159,6 +159,16 @@ def _attempt_tamper_write(session, stmt: str) -> None:  # type: ignore[no-untype
     session.flush()
 
 
+def _attempt_duplicate_intents(mgr: DatabaseSessionManager) -> None:
+    """Stage two outbox rows for one (case_number, seq). Single throwing call for narrow raises blocks."""
+    from trace_core.audit.models import AnchorIntentModel
+
+    with mgr.session() as session:
+        session.add(AnchorIntentModel(case_number="2026-PGUNQ-0001", seq=7, chain_hash="0" * 64))
+        session.add(AnchorIntentModel(case_number="2026-PGUNQ-0001", seq=7, chain_hash="0" * 64))
+        session.commit()
+
+
 def _seed_ledger_row(mgr: DatabaseSessionManager, label: str) -> str:
     """Create the case whose ledger row a tamper test needs. A tamper at a seq that does
     not exist updates zero rows and raises nothing, so the row must be created here rather
@@ -301,3 +311,89 @@ def test_postgres_migration_017_accepts_a_null_case_row(
         assert row is not None
         assert row.subject_case_number is None
         assert row.subject_type == "device"
+
+
+def test_postgres_chain_state_only_advances(pg_session_manager: DatabaseSessionManager) -> None:
+    """Verify the 023 trigger rejects chain-head rewinds, deletions and truncation (H-39)."""
+    from trace_core.core.database.migrations import get_applied_migrations
+
+    assert any(
+        m["name"] == "023_audit_chain_state_protection_and_tip"
+        for m in get_applied_migrations(pg_session_manager.engine)
+    )
+
+    service = CaseService(pg_session_manager)
+    created = _seed_ledger_row(pg_session_manager, "ChainHead")
+    try:
+        with pg_session_manager.session() as session:
+            for stmt in (
+                "UPDATE audit_chain_state SET last_seq = last_seq - 1 WHERE id = 1",
+                "UPDATE audit_chain_state SET last_chain_hash = repeat('0', 64) WHERE id = 1",
+                "DELETE FROM audit_chain_state WHERE id = 1",
+                "TRUNCATE audit_chain_state",
+            ):
+                with pytest.raises(DBAPIError):
+                    _attempt_tamper_write(session, stmt)
+                session.rollback()
+    finally:
+        service.delete_case(created, purge=False)
+        service.delete_case(created, purge=True)
+
+
+def test_postgres_anchor_intents_refuse_a_duplicate_case_seq(pg_session_manager: DatabaseSessionManager) -> None:
+    """Verify the 024 unique index holds on PostgreSQL (H-40)."""
+    from trace_core.core.database.migrations import get_applied_migrations
+
+    assert any(
+        m["name"] == "024_anchor_intents_case_seq_unique" for m in get_applied_migrations(pg_session_manager.engine)
+    )
+
+    with pytest.raises(DBAPIError):
+        _attempt_duplicate_intents(pg_session_manager)
+
+
+def test_postgres_fresh_install_succeeds_without_createrole() -> None:
+    """H-58: a managed-PostgreSQL role (no superuser, no CREATEROLE) must complete the
+    whole migration chain and come up with the ledger protections installed."""
+    import secrets
+
+    pg_url = get_postgres_url()
+    if not pg_url:
+        pytest.skip("PostgreSQL environment not configured (set TRACE_TEST_POSTGRES_URL)")
+
+    admin = create_engine(pg_url, isolation_level="AUTOCOMMIT")
+    try:
+        admin.connect().close()
+    except Exception as exc:
+        admin.dispose()
+        pytest.skip(f"Cannot reach configured PostgreSQL service: {exc}")
+
+    role = f"{DISPOSABLE_PREFIX}limited_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    db = f"{role}_db"
+    password = secrets.token_hex(16)
+    with admin.connect() as conn:
+        try:
+            conn.execute(
+                text(f"CREATE ROLE \"{role}\" LOGIN NOSUPERUSER NOCREATEROLE PASSWORD '{password}'")  # noqa: S608
+            )
+        except Exception as exc:
+            admin.dispose()
+            pytest.skip(f"CI bootstrap role cannot create a limited role: {exc}")
+        conn.execute(text(f'CREATE DATABASE "{db}" OWNER "{role}"'))  # noqa: S608
+
+    mgr = DatabaseSessionManager(
+        make_url(pg_url).set(database=db, username=role, password=password).render_as_string(hide_password=False)
+    )
+    try:
+        mgr.init_schema()
+        applied = {m["name"] for m in get_applied_migrations(mgr.engine)}
+        assert "011_create_least_privilege_roles" in applied
+        assert "025_least_privilege_roles_replacement" in applied
+        with mgr.engine.connect() as conn:
+            assert _verify_008_audit_protection(conn) is True
+    finally:
+        mgr.engine.dispose()
+        with admin.connect() as conn:
+            conn.execute(text(f'DROP DATABASE IF EXISTS "{db}" WITH (FORCE)'))  # noqa: S608
+            conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))  # noqa: S608
+        admin.dispose()

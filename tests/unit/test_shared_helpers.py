@@ -14,7 +14,7 @@ from trace_core.audit import signing as audit_signing
 from trace_core.audit import verifier as audit_verifier
 from trace_core.cases import domain as cases_domain
 from trace_core.cases import service as cases_service
-from trace_core.core.cli.exit_codes import EXIT_ERROR
+from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_SUCCESS
 from trace_core.core.domain import InvariantViolationError
 from trace_core.core.ui.renderers import console
 from trace_core.tui import widgets as tui_widgets
@@ -395,3 +395,82 @@ def test_uninstall_reports_a_failure_instead_of_printing_nothing(tmp_path, monke
     assert code == EXIT_ERROR
     assert "Couldn't remove" in out, out
     assert "install" in out, out
+
+
+def test_purge_data_removes_storage_and_trust(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """F-25: the consent promised cases, evidence and signing keys; the flag must delete them."""
+    from trace_core.core.cli import uninstall
+
+    home = tmp_path / "home"
+    storage = home / ".trace" / "storage" / "cases"
+    storage.mkdir(parents=True)
+    (storage / "2026-PUR-0001.txt").write_bytes(b"synthetic evidence")
+    trust = home / ".trace" / "trust"
+    trust.mkdir(parents=True)
+    (trust / "keys.json").write_bytes(b"key material")
+    (home / ".trace" / "app").mkdir(parents=True)
+    monkeypatch.setattr(uninstall, "_trace_root", lambda: home / ".trace")
+    monkeypatch.setattr(uninstall, "_shim_paths", lambda: [])
+
+    code = uninstall.run_uninstall(purge_data=True)
+
+    assert code == EXIT_SUCCESS
+    assert not (home / ".trace" / "storage").exists()
+    assert not (home / ".trace" / "trust").exists()
+    assert not (home / ".trace" / "app").exists()
+
+
+def test_without_purge_data_storage_and_trust_survive(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The default scope stays honest in the other direction: evidence and keys are kept."""
+    from trace_core.core.cli import uninstall
+
+    home = tmp_path / "home"
+    (home / ".trace" / "storage").mkdir(parents=True)
+    (home / ".trace" / "trust").mkdir(parents=True)
+    (home / ".trace" / "app").mkdir(parents=True)
+    monkeypatch.setattr(uninstall, "_trace_root", lambda: home / ".trace")
+    monkeypatch.setattr(uninstall, "_shim_paths", lambda: [])
+
+    code = uninstall.run_uninstall(purge_data=False)
+
+    assert code == EXIT_SUCCESS
+    assert (home / ".trace" / "storage").exists()
+    assert (home / ".trace" / "trust").exists()
+    assert not (home / ".trace" / "app").exists()
+
+
+def test_a_blocked_purge_target_is_reported_and_keeps_the_launcher(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Partial failure during a purge must be loud, keep the launcher, and still attempt the rest."""
+    from trace_core.core.cli import uninstall
+
+    home = tmp_path / "home"
+    storage = home / ".trace" / "storage"
+    storage.mkdir(parents=True)
+    trust = home / ".trace" / "trust"
+    trust.mkdir(parents=True)
+    (home / ".trace" / "app").mkdir(parents=True)
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    shim = bin_dir / "trace"
+    shim.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(uninstall, "_trace_root", lambda: home / ".trace")
+    monkeypatch.setattr(uninstall, "_shim_paths", lambda: [shim])
+
+    real_remove = uninstall._remove
+
+    def _locked_storage(path):
+        if path.name == "storage":
+            return False
+        return real_remove(path)
+
+    monkeypatch.setattr(uninstall, "_remove", _locked_storage)
+    with console.capture() as capture:
+        code = uninstall.run_uninstall(purge_data=True)
+    out = capture.get()
+
+    assert code == EXIT_ERROR
+    assert "Couldn't remove" in out, out
+    assert "storage" in out, out
+    assert shim.exists(), "the launcher must survive a partial purge"
+    assert storage.exists()
+    assert not trust.exists(), "a blocked storage must not skip the remaining purge target"

@@ -365,3 +365,38 @@ async def test_a_failing_section_is_not_reported_as_a_version_problem(
         assert "Version unavailable" not in detail
         assert "Couldn't load this section" in detail
         assert "section exploded" in detail
+
+
+async def test_integrity_names_a_key_problem_and_not_tampering(
+    session_manager: DatabaseSessionManager, monkeypatch
+) -> None:
+    """F-03: a ledger that cannot be authenticated must not read as an edited one."""
+    from textual.widgets import Static
+
+    from trace_core.audit.dto import VerifyResultDto
+    from trace_core.audit.service import AuditService
+
+    for mismatch_type in ("signing_key", "insecure_key", "tip_key"):
+        monkeypatch.setattr(
+            AuditService,
+            "verify",
+            lambda self, mt=mismatch_type: VerifyResultDto(
+                is_valid=False, events_verified=1, first_mismatch_seq=1, mismatch_type=mt
+            ),
+        )
+        app = TraceApp(session_manager)
+        async with app.run_test() as pilot:
+            await _goto_settings_updates(pilot, app)
+            detail = app.query_one("#settings-detail", Static)
+            for _ in range(20):
+                if "SIGNING KEY PROBLEM" in _text(detail):
+                    break
+                await pilot.press("down")
+                await pilot.pause()
+            text = _text(detail)
+            assert "SIGNING KEY PROBLEM" in text, text
+            assert "TAMPER DETECTED" not in text, text
+            if mismatch_type == "insecure_key":
+                assert "shipped development key" in text, text
+            if mismatch_type == "tip_key":
+                assert "chain head" in text, text

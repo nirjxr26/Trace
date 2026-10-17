@@ -168,6 +168,50 @@ def test_purge_policy_guardrail_prevents_active_case_destruction(service: CaseSe
     assert service.delete_case("2026-GUARD-0001", purge=True) is True
 
 
+def test_a_refused_active_case_purge_leaves_no_partial_state(session_manager, service: CaseService) -> None:  # type: ignore[no-untyped-def]
+    """N1: the guard is the service's, and a refused purge strips nothing - no tombstone,
+    no CASE_PURGED ledger entry, and the case still listed as active."""
+    from sqlalchemy import text
+
+    from trace_core.audit.domain import AuditAction
+    from trace_core.audit.dto import AuditFilterDto
+    from trace_core.audit.service import AuditService
+    from trace_core.cases.repository import SqlAlchemyCaseRepository
+
+    created = service.create_case(
+        CaseCreateDto(number="2026-PART-0001", title="Active Case Untouched", lead_examiner="Guard Examiner")
+    )
+
+    with pytest.raises(InvalidCaseStateError, match="must be archived before it can be purged"):
+        service.delete_case(created.number, purge=True)
+
+    with session_manager.session() as session:
+        stored = SqlAlchemyCaseRepository(session).get_by_number(created.number)
+        tombstones = session.execute(text("SELECT count(*) FROM purged_numbers")).scalar()
+    assert stored is not None
+    assert stored.is_deleted is False
+    assert tombstones == 0
+    actions = [event.action for event in AuditService(session_manager).list_events(AuditFilterDto())]
+    assert AuditAction.CASE_PURGED not in actions
+
+
+def test_a_successful_purge_writes_the_case_purged_entry(session_manager, service: CaseService) -> None:  # type: ignore[no-untyped-def]
+    """N1: the irreversible step is on the ledger, written in the purge's own transaction."""
+    from trace_core.audit.domain import AuditAction
+    from trace_core.audit.dto import AuditFilterDto
+    from trace_core.audit.service import AuditService
+
+    created = service.create_case(
+        CaseCreateDto(number="2026-PART-0002", title="Archived Then Purged", lead_examiner="Guard Examiner")
+    )
+    service.delete_case(created.number, purge=False)
+
+    assert service.delete_case(created.number, purge=True) is True
+
+    actions = [event.action for event in AuditService(session_manager).list_events(AuditFilterDto())]
+    assert AuditAction.CASE_PURGED in actions
+
+
 def test_error_sanitization_for_unexpected_exceptions() -> None:
     """Verify non-ApplicationError exceptions are sanitized when debug is False."""
     from trace_core.core.settings import settings

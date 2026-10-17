@@ -88,3 +88,29 @@ def test_an_intact_anchor_still_passes(svc, tmp_path) -> None:
     """The three holes above must not have broken the working case."""
     seq, chain = svc.head()
     _verify(svc, _signed({"last_seq": seq, "last_chain": chain}), tmp_path / "anchor.json")
+
+
+def _signed_with_the_development_key(envelope: dict) -> dict:
+    import hashlib
+    import hmac
+
+    from trace_core.core.canonical import canonical_json
+    from trace_core.core.settings import DEV_SECRET_SENTINEL
+
+    signature = hmac.new(DEV_SECRET_SENTINEL.encode("utf-8"), canonical_json(envelope), hashlib.sha256).hexdigest()
+    return {**envelope, "key_id": "hmac-v1", "signature": signature}
+
+
+def test_an_anchor_signed_with_the_development_key_is_refused(svc, monkeypatch) -> None:
+    """F-03: while the public placeholder is active its signatures authenticate nothing, and a
+    forged anchor whose reference digest was recomputed would otherwise compare clean."""
+    from trace_core.audit.anchor import check_anchor_match
+    from trace_core.core.errors import AnchorVerificationError
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    seq, chain = svc.head()
+    envelope = _signed_with_the_development_key({"last_seq": seq, "last_chain": chain})
+    res = type(svc.verify())(is_valid=True, events_verified=1, first_seq=1, last_seq=seq)
+    monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+    with pytest.raises(AnchorVerificationError, match="development key"):
+        check_anchor_match(res, envelope, chain)

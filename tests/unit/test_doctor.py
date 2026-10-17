@@ -53,6 +53,7 @@ def test_doctor_fails_when_the_signing_key_is_the_default(
     res = CliRunner().invoke(app, ["doctor"])
     assert res.exit_code == EXIT_ERROR, res.output
     assert "Signing key" in res.output
+    assert "cannot be signed or verified" in res.output
     assert "FAIL" in res.output
 
 

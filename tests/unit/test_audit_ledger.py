@@ -322,7 +322,7 @@ def test_delete_middle_row_detected(session_manager: DatabaseSessionManager) -> 
     assert res.first_mismatch_seq == 3
 
 
-def test_tail_deletion_is_not_internally_detected(session_manager: DatabaseSessionManager) -> None:
+def test_tail_deletion_is_caught_by_the_chain_head(session_manager: DatabaseSessionManager) -> None:
     for t in ("A", "B", "C"):
         CaseService(session_manager).create_case(CaseCreateDto(title=t, lead_examiner="Ex"))
     with session_manager.engine.begin() as conn:
@@ -330,8 +330,10 @@ def test_tail_deletion_is_not_internally_detected(session_manager: DatabaseSessi
         conn.execute(sqlalchemy.text("DELETE FROM audit_events WHERE seq=3"))
         _enable_audit_triggers(conn)
     res = AuditService(session_manager).verify()
-    # truncated chain validates internally (V1 limitation, needs external anchor)
-    assert res.is_valid is True
+    # the row scan alone is blind to a missing tail; the head still names seq 3,
+    # so the binding between head and tail is what reports it.
+    assert res.is_valid is False
+    assert res.mismatch_type == "chain_head"
     assert res.last_seq == 2
 
 
@@ -370,11 +372,18 @@ def test_rollback_gap_is_warning_not_tamper(session_manager: DatabaseSessionMana
         s.add(m3)
         # update head to 3
         from trace_core.audit.models import AuditChainStateModel
+        from trace_core.audit.signing import sign_bytes
+        from trace_core.core.canonical import canonical_json_str
 
         head = s.get(AuditChainStateModel, 1)
         assert head is not None
         head.last_seq = 3
         head.last_chain_hash = c_hash
+        tip_key_id, tip_signature = sign_bytes(
+            canonical_json_str({"last_chain": c_hash, "last_seq": 3}).encode("utf-8")
+        )
+        head.tip_key_id = tip_key_id
+        head.tip_signature = tip_signature
         s.commit()
     res = AuditService(session_manager).verify()
     assert res.is_valid is True
@@ -677,3 +686,340 @@ def test_installing_the_sqlite_triggers_raises_when_one_cannot_be_created(
         failing = cast(Connection, _FailThird(c))
         with pytest.raises(sqlalchemy.exc.OperationalError):
             _install_sqlite_audit_triggers(failing)
+
+
+def _resign_seq_one_with_default_key(session_manager: DatabaseSessionManager) -> None:
+    """Store a signature that recomputes under the published placeholder.
+
+    This is the state a dev install produced before the refusal existed: a full HMAC
+    envelope over the untouched payload, verifiable by anyone holding the repo.
+    """
+    import hmac
+
+    from trace_core.core.settings import DEV_SECRET_SENTINEL
+
+    with session_manager.session() as s:
+        payload_json = s.scalars(sqlalchemy.select(AuditEventModel.payload_json).where(AuditEventModel.seq == 1)).one()
+    signature = hmac.new(DEV_SECRET_SENTINEL.encode("utf-8"), payload_json.encode("utf-8"), hashlib.sha256).hexdigest()
+    with session_manager.engine.begin() as conn:
+        _disable_audit_triggers(conn)
+        conn.execute(sqlalchemy.text("UPDATE audit_events SET signature=:s WHERE seq=1"), {"s": signature})
+        _enable_audit_triggers(conn)
+
+
+def test_signing_refuses_the_shipped_development_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F-03: the published placeholder must not sign anything, in any environment."""
+    from trace_core.audit.signing import sign_bytes
+    from trace_core.core.errors import DefaultSecretError
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+    with pytest.raises(DefaultSecretError) as exc:
+        sign_bytes(b"payload")
+    assert "TRACE_SECRET_KEY" in str(exc.value)
+    assert DEV_SECRET_SENTINEL not in str(exc.value)
+
+
+def test_case_creation_refuses_to_sign_under_the_development_key(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal stops the write, not just the signature: the case must not land."""
+    from trace_core.core.errors import DefaultSecretError
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+    with pytest.raises(DefaultSecretError):
+        CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+    with session_manager.session() as s:
+        assert s.execute(sqlalchemy.text("SELECT count(*) FROM audit_events")).scalar() == 0
+
+
+def test_a_ledger_signed_with_the_development_key_is_never_valid(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F-03: signatures that recompute under the public placeholder authenticate nothing."""
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="T1", lead_examiner="Ex"))
+    _resign_seq_one_with_default_key(session_manager)
+    monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+    res = AuditService(session_manager).verify()
+    assert res.is_valid is False
+    assert res.mismatch_type == "insecure_key"
+    assert res.first_mismatch_seq == 1
+
+
+def test_do_verify_treats_a_public_key_ledger_as_a_key_problem(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same policy as a missing key: no tamper card, no restore advice, not valid either."""
+    from trace_core.audit.helpers import do_verify
+    from trace_core.core.errors import ApplicationError, AuditTamperError
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="T1", lead_examiner="Ex"))
+    _resign_seq_one_with_default_key(session_manager)
+    monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+    with pytest.raises(ApplicationError) as exc:
+        do_verify(AuditService(session_manager), "json", None)
+    assert not isinstance(exc.value, AuditTamperError)
+    assert "tamper" not in str(exc.value).lower()
+    assert "restore" not in str(exc.value).lower()
+
+
+def test_a_public_key_ledger_card_names_the_problem_not_a_restore() -> None:
+    from trace_core.audit.dto import VerifyResultDto
+    from trace_core.audit.renderers import render_verify_result
+    from trace_core.core.ui.renderers import console
+
+    with console.capture() as capture:
+        render_verify_result(
+            VerifyResultDto(is_valid=False, events_verified=0, first_mismatch_seq=1, mismatch_type="insecure_key")
+        )
+    out = capture.get()
+    assert "SIGNED WITH THE DEVELOPMENT KEY" in out
+    assert "TAMPER DETECTED" not in out
+    assert "Restore audit_events from backup" not in out
+    assert "TRACE_SECRET_KEY" in out
+
+
+def test_the_refusal_card_gives_the_remedy_without_echoing_the_key(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import typer
+
+    from trace_core.audit.signing import sign_bytes
+    from trace_core.core.cli.error_handler import capture_cli_errors
+    from trace_core.core.cli.exit_codes import EXIT_ERROR
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+    with pytest.raises(typer.Exit) as exit_info, capture_cli_errors():
+        sign_bytes(b"payload")
+    out = capsys.readouterr().out
+    assert "Signing Key Refused" in out, out
+    assert exit_info.value.exit_code == EXIT_ERROR
+    assert "TRACE_SECRET_KEY" in out, out
+    assert DEV_SECRET_SENTINEL not in out, out
+
+
+CHAIN_STATE_TRIGGERS = {"audit_chain_state_no_update", "audit_chain_state_no_delete"}
+
+
+def _chain_state_trigger_names(session_manager: DatabaseSessionManager) -> set[str]:
+    with session_manager.engine.connect() as c:
+        rows = c.execute(
+            sqlalchemy.text("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='audit_chain_state'")
+        ).fetchall()
+    return {r[0] for r in rows}
+
+
+def _chain_state_values(session_manager: DatabaseSessionManager) -> tuple[int, str, str | None, str | None]:
+    from trace_core.audit.models import AuditChainStateModel
+
+    with session_manager.session() as s:
+        row = s.scalar(sqlalchemy.select(AuditChainStateModel).where(AuditChainStateModel.id == 1))
+        assert row is not None
+        return row.last_seq, row.last_chain_hash, row.tip_key_id, row.tip_signature
+
+
+def _disable_chain_state_triggers(conn: Connection) -> None:
+    for name in sorted(CHAIN_STATE_TRIGGERS):
+        conn.execute(sqlalchemy.text(f"DROP TRIGGER IF EXISTS {name}"))
+
+
+def _shorten_tail_and_rewind_head(session_manager: DatabaseSessionManager, *, keep_tip: bool) -> None:
+    """Simulate a privileged rewrite: triggers disabled, last row deleted, head rolled back."""
+    with session_manager.session() as s:
+        chain_two = s.scalars(sqlalchemy.select(AuditEventModel.chain_hash).where(AuditEventModel.seq == 2)).one()
+    tip_clear = "" if keep_tip else ", tip_key_id = NULL, tip_signature = NULL"
+    with session_manager.engine.begin() as conn:
+        _disable_audit_triggers(conn)
+        _disable_chain_state_triggers(conn)
+        conn.execute(sqlalchemy.text("DELETE FROM audit_events WHERE seq = 3"))
+        conn.execute(
+            sqlalchemy.text(f"UPDATE audit_chain_state SET last_seq = 2, last_chain_hash = :h{tip_clear} WHERE id = 1"),
+            {"h": chain_two},
+        )
+
+
+def test_chain_state_refuses_rewind_delete_and_id_change(session_manager: DatabaseSessionManager) -> None:
+    """F-11: the head must only ever advance, and its row must never be removed or replaced."""
+    CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+    with session_manager.session() as s:
+        for stmt in (
+            "UPDATE audit_chain_state SET last_seq = 0 WHERE id = 1",
+            f"UPDATE audit_chain_state SET last_chain_hash = '{'0' * 64}' WHERE id = 1",
+            "UPDATE audit_chain_state SET id = 2 WHERE id = 1",
+            "DELETE FROM audit_chain_state WHERE id = 1",
+        ):
+            with pytest.raises(sqlalchemy.exc.IntegrityError):
+                _attempt_ledger_write(s, stmt)
+            s.rollback()
+    # the guard must not block the only legitimate move: the head advancing
+    with session_manager.engine.begin() as conn:
+        conn.execute(
+            sqlalchemy.text("UPDATE audit_chain_state SET last_seq = 2, last_chain_hash = :h WHERE id = 1"),
+            {"h": "1" * 64},
+        )
+    assert _chain_state_values(session_manager)[0] == 2
+
+
+def test_an_append_signs_the_chain_head(session_manager: DatabaseSessionManager) -> None:
+    from trace_core.audit.signing import verify_bytes
+    from trace_core.core.canonical import canonical_json_str
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
+    seq, chain, key_id, signature = _chain_state_values(session_manager)
+    assert key_id == "hmac-v1"
+    assert signature
+    payload = canonical_json_str({"last_chain": chain, "last_seq": seq}).encode("utf-8")
+    assert verify_bytes(key_id, payload, signature)
+
+
+def test_a_rewound_head_with_its_old_signature_fails_closed(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    for t in ("A", "B", "C"):
+        CaseService(session_manager).create_case(CaseCreateDto(title=t, lead_examiner="Ex"))
+    _shorten_tail_and_rewind_head(session_manager, keep_tip=True)
+    res = AuditService(session_manager).verify()
+    # rows 1-2 re-verify and the head matches the shortened tail; only the tip's
+    # signature, made when the head still said seq 3, shows the regression.
+    assert res.is_valid is False
+    assert res.mismatch_type == "tip_key"
+
+
+def test_do_verify_treats_a_rewritten_head_as_a_key_problem(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    from trace_core.audit.helpers import do_verify
+    from trace_core.core.errors import ApplicationError, AuditTamperError
+
+    for t in ("A", "B", "C"):
+        CaseService(session_manager).create_case(CaseCreateDto(title=t, lead_examiner="Ex"))
+    _shorten_tail_and_rewind_head(session_manager, keep_tip=True)
+    with pytest.raises(ApplicationError) as exc:
+        do_verify(AuditService(session_manager), "json", None)
+    assert not isinstance(exc.value, AuditTamperError)
+    assert "tamper" not in str(exc.value).lower()
+    assert "restore" not in str(exc.value).lower()
+
+
+def test_a_privileged_rewrite_that_clears_the_tip_needs_the_anchor(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    """Documented boundary: with triggers disabled and the tip cleared, internal checks
+    cannot see the shortened tail - the external anchor is the control for that case."""
+    for t in ("A", "B", "C"):
+        CaseService(session_manager).create_case(CaseCreateDto(title=t, lead_examiner="Ex"))
+    _shorten_tail_and_rewind_head(session_manager, keep_tip=False)
+    res = AuditService(session_manager).verify()
+    assert res.is_valid is True
+    assert res.last_seq == 2
+
+
+def test_a_head_that_predates_the_tip_columns_still_verifies(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    CaseService(session_manager).create_case(CaseCreateDto(title="Legacy", lead_examiner="Ex"))
+    with session_manager.engine.begin() as conn:
+        conn.execute(
+            sqlalchemy.text("UPDATE audit_chain_state SET tip_key_id = NULL, tip_signature = NULL WHERE id = 1")
+        )
+    res = AuditService(session_manager).verify()
+    assert res.is_valid is True
+    assert res.mismatch_type is None
+
+
+def test_migration_023_adds_the_tip_and_chain_state_triggers(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    from trace_core.core.database.migrations import _verify_023_chain_state_protection, get_applied_migrations
+
+    assert any(
+        m["name"] == "023_audit_chain_state_protection_and_tip" for m in get_applied_migrations(session_manager.engine)
+    )
+    with session_manager.engine.connect() as conn:
+        assert _verify_023_chain_state_protection(conn) is True
+    assert _chain_state_trigger_names(session_manager) == CHAIN_STATE_TRIGGERS
+
+
+def test_a_second_intent_for_the_same_close_position_is_refused(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    """H-40: one outbox row per (case_number, seq), refused by the database itself."""
+    from trace_core.audit.anchor import record_anchor_intent
+    from trace_core.audit.models import AnchorIntentModel
+
+    with session_manager.session() as s:
+        record_anchor_intent(s, "2026-UNQ-0001", None, 7, "0" * 64)
+        s.commit()
+
+    with pytest.raises(sqlalchemy.exc.IntegrityError):
+        with session_manager.session() as s:
+            record_anchor_intent(s, "2026-UNQ-0001", None, 7, "0" * 64)
+
+    with session_manager.session() as s:
+        rows = s.scalars(sqlalchemy.select(AnchorIntentModel)).all()
+    assert [(r.case_number, r.seq) for r in rows] == [("2026-UNQ-0001", 7)]
+
+
+def test_a_restored_database_regains_chain_state_protection_on_startup(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    CaseService(session_manager).create_case(CaseCreateDto(title="Restore", lead_examiner="Ex"))
+    with session_manager.engine.begin() as c:
+        _disable_chain_state_triggers(c)
+    assert _chain_state_trigger_names(session_manager) == set()
+
+    apply_migrations(session_manager.engine)
+
+    assert _chain_state_trigger_names(session_manager) == CHAIN_STATE_TRIGGERS
+    with session_manager.session() as s:
+        with pytest.raises(sqlalchemy.exc.IntegrityError):
+            _attempt_ledger_write(s, "DELETE FROM audit_chain_state WHERE id = 1")
+        s.rollback()
+
+
+def test_a_rewritten_head_card_names_the_key_problem_not_a_restore() -> None:
+    from trace_core.audit.dto import VerifyResultDto
+    from trace_core.audit.renderers import render_verify_result
+    from trace_core.core.ui.renderers import console
+
+    with console.capture() as capture:
+        render_verify_result(
+            VerifyResultDto(
+                is_valid=False,
+                events_verified=2,
+                first_seq=1,
+                last_seq=2,
+                first_mismatch_seq=2,
+                mismatch_type="tip_key",
+            )
+        )
+    out = capture.get()
+    assert "CHAIN HEAD" in out
+    assert "TAMPER DETECTED" not in out
+    assert "Restore audit_events from backup" not in out
+
+
+def test_a_chain_head_card_reads_as_tamper() -> None:
+    from trace_core.audit.dto import VerifyResultDto
+    from trace_core.audit.renderers import render_verify_result
+    from trace_core.core.ui.renderers import console
+
+    with console.capture() as capture:
+        render_verify_result(
+            VerifyResultDto(
+                is_valid=False,
+                events_verified=2,
+                first_seq=1,
+                last_seq=2,
+                first_mismatch_seq=2,
+                mismatch_type="chain_head",
+            )
+        )
+    out = capture.get()
+    assert "TAMPER DETECTED" in out
+    assert "chain_head" in out
