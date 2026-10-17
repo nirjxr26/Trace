@@ -80,6 +80,7 @@ def check_device(
     ),
     acknowledge_unverified_source: bool = typer.Option(
         False,
+        "--ack-unverified",
         "--acknowledge-unverified-source",
         help="Proceed past UNKNOWN only. A writable source is never overridable",
     ),

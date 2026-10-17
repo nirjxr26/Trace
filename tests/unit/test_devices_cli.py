@@ -266,6 +266,56 @@ def test_yes_skips_the_acknowledgement_prompt(device_file_env: Path) -> None:
     assert "READ_ONLY" in result.stdout
 
 
+def test_the_short_acknowledgement_spelling_reaches_the_cli_gate(device_file_env: Path, monkeypatch) -> None:
+    from trace_core.devices import commands as commands_module
+
+    seen: list[dict[str, Any]] = []
+    real = commands_module.do_check
+
+    def _spy(_session, node, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(kwargs)
+        return real(_session, node, **kwargs)
+
+    monkeypatch.setattr("trace_core.devices.commands.do_check", _spy)
+    result = runner.invoke(
+        app,
+        ["device", "check", str(device_file_env / "disk-a.dd"), "--physical", "--ack-unverified", "--yes"],
+    )
+    assert result.exit_code == EXIT_SUCCESS, result.stdout
+    assert seen, "the check never reached the service"
+    assert seen[0]["acknowledge_unverified_source"] is True
+
+
+def test_every_option_in_the_unknown_refusal_remedy_is_accepted_by_the_cli() -> None:
+    from datetime import datetime
+
+    from typer.main import get_command
+
+    from trace_core.devices.commands import device_app
+    from trace_core.devices.domain import GateCheck, ProtectionCheck, ProtectionEvidence, UnknownCause, WpVerdict
+    from trace_core.devices.service import _refusal_for
+
+    evidence = ProtectionEvidence(
+        platform="fake",
+        checks=(ProtectionCheck(name="exists", result="True"),),
+        adapter_version="file",
+        checked_at=datetime.now(UTC),
+        unknown_cause=UnknownCause.IOCTL_FAILURE,
+    )
+    gate = GateCheck(verdict=WpVerdict.UNKNOWN, evidence=evidence, checked_at=datetime.now(UTC))
+    refusal = _refusal_for(gate, False, "pd0")
+    assert refusal is not None
+    remedy = str(refusal).split("run: ", 1)[1]
+    tokens = remedy.split()
+    assert tokens[:3] == ["trace", "device", "check"]
+
+    group: Any = get_command(device_app)
+    accepted = {opt for param in group.commands["check"].params for opt in getattr(param, "opts", [])}
+    for token in tokens:
+        if token.startswith("--"):
+            assert token in accepted, f"the refusal names {token}, which the CLI rejects"
+
+
 def test_the_documented_tui_behaviour_is_what_the_tui_offers() -> None:
     """Stale hint text misdirects an operator mid-incident, so bind it to the real bindings."""
     from textual.binding import Binding
