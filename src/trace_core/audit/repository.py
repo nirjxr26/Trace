@@ -150,6 +150,9 @@ class SqlAlchemyAuditRepository:
         prev = head.last_chain_hash
         seq = head.last_seq + 1
         c_hash = chain_hash(prev, p_hash, seq)
+        tip_key_id, tip_signature = sign_bytes(
+            canonical_json_str({"last_chain": c_hash, "last_seq": seq}).encode("utf-8")
+        )
 
         model = AuditEventModel(
             seq=seq,
@@ -170,6 +173,8 @@ class SqlAlchemyAuditRepository:
         self.session.add(model)
         head.last_seq = seq
         head.last_chain_hash = c_hash
+        head.tip_key_id = tip_key_id
+        head.tip_signature = tip_signature
         self.session.flush()
         return _model_to_dto(model)
 

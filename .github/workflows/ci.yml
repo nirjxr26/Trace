@@ -177,3 +177,49 @@ jobs:
 
       - name: Run PostgreSQL Integration Tests
         run: pytest tests/integration/ -v
+
+  update-e2e:
+    name: Real Update E2E (${{ matrix.os }})
+    needs: [lint-and-types]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    env:
+      TRACE_E2E_WHEELS: ${{ runner.temp }}/e2e-wheels
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          pip install --require-hashes --only-binary :all: -r requirements.txt
+          pip install --no-deps -e .
+
+      - name: Build old release wheels from their tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/e2e-wheels" "$RUNNER_TEMP/old"
+          for tag in v0.2.3 v0.2.4; do
+            git worktree add "$RUNNER_TEMP/old/$tag" "$tag"
+            python -m build --wheel --outdir "$RUNNER_TEMP/e2e-wheels" "$RUNNER_TEMP/old/$tag"
+            git worktree remove --force "$RUNNER_TEMP/old/$tag"
+          done
+          ls "$RUNNER_TEMP/e2e-wheels"
+
+      - name: Run real update E2E
+        run: pytest tests/updates/test_update_e2e_local.py -v

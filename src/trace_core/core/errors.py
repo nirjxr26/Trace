@@ -85,3 +85,7 @@ class AnchorVerificationError(AuditTamperError):
 
 class AuthorizationError(ApplicationError):
     """Raised when an operator lacks the role for an action."""
+
+
+class DefaultSecretError(ApplicationError):
+    """Raised when an operation would sign with the shipped development key."""

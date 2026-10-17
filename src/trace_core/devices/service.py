@@ -41,6 +41,7 @@ KIND_ALL = "all"
 ENV_ADAPTER = "TRACE_DEVICE_ADAPTER"
 ENV_DEVICE_ROOT = "TRACE_DEVICE_ROOT"
 _OVERRIDE_REASON = "accepted unverified source"
+_EMPTY_NODE_MESSAGE = "device node must not be empty"
 
 
 def _case_or_none(case_number: str | None, manager: DatabaseSessionManager | None) -> tuple[str, Any] | None:
@@ -131,7 +132,7 @@ class DeviceService(BaseService):
         case, sid = resolved
         cleaned = str(node).strip()
         if not cleaned:
-            raise ValidationError("device node must not be empty")
+            raise ValidationError(_EMPTY_NODE_MESSAGE)
         existing = {link.case_number for link in self.links_for_node(cleaned)}
         if case in existing:
             raise ValidationError(f"{cleaned} is already filed under {case}")
@@ -256,7 +257,7 @@ class DeviceService(BaseService):
         """A node must be in the freshly enumerated set; stale names and traversal die here."""
         cleaned = str(node).strip()
         if not cleaned:
-            raise ValidationError("device node must not be empty")
+            raise ValidationError(_EMPTY_NODE_MESSAGE)
         devices = self.enumerator.list_block_devices()
         exact = [d for d in devices if d.node == cleaned]
         if len(exact) == 1:
@@ -351,7 +352,7 @@ _PD_ALIAS = re.compile(r"(?:physicaldrive|pd)(\d+)$")
 def _node_name(node: str) -> str:
     cleaned = str(node).strip()
     if not cleaned:
-        raise ValidationError("device node must not be empty")
+        raise ValidationError(_EMPTY_NODE_MESSAGE)
     return cleaned.replace("\\", "/").rsplit("/", 1)[-1]
 
 

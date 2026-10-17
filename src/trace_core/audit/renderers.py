@@ -354,7 +354,7 @@ def render_audit_detail(e: AuditEventDto) -> None:
 
     details = parse_details(e.payload_json)
     utc_display = format_utc_zulu(e.ts)
-    bp, term_w = breakpoint_width()
+    bp, _ = breakpoint_width()
 
     render_detail_header(
         "AUDIT",
@@ -443,8 +443,14 @@ def _what_text(mismatch_type: str | None) -> str:
         return "prev_chain linkage broken"
     if mismatch_type == "signing_key":
         return "verification key is the shipped default, not this ledger's signing key"
+    if mismatch_type == "insecure_key":
+        return "signature matches the shipped development key, which is public"
     if mismatch_type == "signature":
         return "signature mismatch (event not signed by trusted key)"
+    if mismatch_type == "chain_head":
+        return "the stored chain head does not match the ledger's last record"
+    if mismatch_type == "tip_key":
+        return "the chain head's signature does not verify with the active key"
     return "chain_hash mismatch"
 
 
@@ -498,7 +504,10 @@ def _render_valid(res: VerifyResultDto, anchor: str | None = None) -> None:
         rows.append(
             (
                 "Anchor",
-                Text("No anchor checked — tail truncation is undetectable without one.", style=THEME_TOKENS["warning"]),
+                Text(
+                    "No anchor checked — a rewritten chain head is undetectable without one.",
+                    style=THEME_TOKENS["warning"],
+                ),
             )
         )
     rows.append(
@@ -515,7 +524,7 @@ def _render_valid(res: VerifyResultDto, anchor: str | None = None) -> None:
     console.print("[dim]Tip: export with `audit export --out bundle.jsonl` to preserve chain.[/dim]")
     if res.events_verified > 0 and not res.sequence_gaps:
         console.print(
-            "[dim]Note: Tail truncation (deleting last seq) is not detectable without external anchor — export header stores last_seq/last_chain for manual compare.[/dim]"
+            "[dim]Note: A deleted tail shows as a chain-head mismatch unless the head was rewritten with it; the export header stores last_seq/last_chain for manual compare.[/dim]"
         )
         console.print("")
     else:
@@ -523,6 +532,33 @@ def _render_valid(res: VerifyResultDto, anchor: str | None = None) -> None:
 
 
 def _render_tamper(res: VerifyResultDto) -> None:
+    if res.mismatch_type == "insecure_key":
+        render_key_value_grid(
+            "Audit Verify — ⚠ SIGNED WITH THE DEVELOPMENT KEY",
+            [
+                ("Where", f"Seq {res.first_mismatch_seq} · signature"),
+                ("What", _what_text(res.mismatch_type)),
+                (
+                    "Chain",
+                    f"payload_hash and chain_hash matched through seq {res.first_mismatch_seq}; the signature "
+                    "matches the shipped development key, which is public",
+                ),
+                ("Gaps", ", ".join(str(g) for g in res.sequence_gaps) if res.sequence_gaps else "None"),
+                (
+                    "Result",
+                    Text(
+                        "⚠ These signatures prove nothing. This is a key problem, NOT evidence of tampering.",
+                        style=THEME_TOKENS["warning"],
+                    ),
+                ),
+                (
+                    "Action",
+                    "→ Set TRACE_SECRET_KEY to a private value so new records can be authenticated. "
+                    "Do not restore from backup on the strength of this message alone.",
+                ),
+            ],
+        )
+        return
     if res.mismatch_type == "signing_key":
         render_key_value_grid(
             "Audit Verify — ⚠ SIGNING KEY UNAVAILABLE",
@@ -544,6 +580,32 @@ def _render_tamper(res: VerifyResultDto) -> None:
                 (
                     "Action",
                     "→ Set TRACE_SECRET_KEY to the key this ledger was signed with, then re-run. "
+                    "Do not restore from backup on the strength of this message alone.",
+                ),
+            ],
+        )
+        return
+    if res.mismatch_type == "tip_key":
+        render_key_value_grid(
+            "Audit Verify — ⚠ CHAIN HEAD UNAVAILABLE",
+            [
+                ("Where", "Chain head · signature"),
+                ("What", _what_text(res.mismatch_type)),
+                (
+                    "Chain",
+                    "Every record checked matched; only the chain head's signature could not be checked",
+                ),
+                ("Gaps", ", ".join(str(g) for g in res.sequence_gaps) if res.sequence_gaps else "None"),
+                (
+                    "Result",
+                    Text(
+                        "⚠ Head authenticity not verifiable. This is a key problem, NOT evidence of tampering.",
+                        style=THEME_TOKENS["warning"],
+                    ),
+                ),
+                (
+                    "Action",
+                    "→ Set TRACE_SECRET_KEY to the key the chain head was signed with, then re-run. "
                     "Do not restore from backup on the strength of this message alone.",
                 ),
             ],

@@ -8,7 +8,7 @@ import hashlib
 import hmac
 import re
 
-from trace_core.core.errors import ApplicationError
+from trace_core.core.errors import ApplicationError, DefaultSecretError
 from trace_core.core.settings import DEV_SECRET_SENTINEL
 
 HMAC_KEY_ID = "hmac-v1"
@@ -17,7 +17,6 @@ _KEY_SUFFIX_RE = re.compile(r"^[0-9a-f]{16}$")
 _KEYSTORE_UNAVAILABLE_MESSAGE = (
     "Ledger signing key {key_id} unavailable in keystore; case writes are paused until it is restored."
 )
-_warned_default_key = False
 _warned_pointer = False
 
 
@@ -36,18 +35,6 @@ def is_default_key() -> bool:
     from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
 
     return settings.secret_key.get_secret_value() == DEV_SECRET_SENTINEL
-
-
-def _warn_default_key() -> None:
-    global _warned_default_key
-    if _warned_default_key:
-        return
-    _warned_default_key = True
-    import structlog
-
-    structlog.get_logger().warning(
-        "Signing ledger with the default development key; set TRACE_SECRET_KEY in production."
-    )
 
 
 def expected_signature(key_id: str | None, data: bytes) -> str:
@@ -241,5 +228,8 @@ def sign_bytes(data: bytes) -> tuple[str, str]:
             raise ApplicationError(_KEYSTORE_UNAVAILABLE_MESSAGE.format(key_id=key_id)) from e
     secret = _secret()
     if secret.decode("utf-8", "replace") == DEV_SECRET_SENTINEL:
-        _warn_default_key()
+        raise DefaultSecretError(
+            "The ledger signing key is the shipped development placeholder, which is public. "
+            "Set TRACE_SECRET_KEY to a private value before recording evidence."
+        )
     return HMAC_KEY_ID, hmac.new(secret, data, hashlib.sha256).hexdigest()

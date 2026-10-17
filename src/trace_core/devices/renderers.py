@@ -26,11 +26,9 @@ VERDICT_STYLES: dict[str, tuple[str, str]] = {
 }
 
 
-_PART_NUMBER = re.compile(r"(?<!-)[ _]+(?=[A-Z0-9]*\d)[A-Z0-9]{4,}(?:_[A-Z0-9]{2,})*$")
-_CAPACITY_SUFFIX = re.compile(
-    r"\s+\d+(?:\.\d+)?\s?(?:TB|GB|MB)\b|\s+USB\s?3\.0\b|\s+External\b",
-    re.IGNORECASE,
-)
+_PART_NUMBER = re.compile(r"(?<!-)[ _]{1,64}(?=[A-Z]{0,64}[0-9])[A-Z0-9]{4,64}(?:_[A-Z0-9]{2,64}){0,16}$")
+_CAPACITY_SUFFIX = re.compile(r"\s{1,64}\d{1,64}(?:\.\d{1,64})?\s?[TGM]B\b", re.IGNORECASE)
+_TAG_SUFFIX = re.compile(r"\s{1,64}(?:USB\s?3\.0|External)\b", re.IGNORECASE)
 
 
 _DRIVE_PREFIX = "physicaldrive"
@@ -58,8 +56,9 @@ def readable_model(model: str) -> str:
     Display only - the raw string stays on `Model` and in every stored observation.
     """
     text = _PART_NUMBER.sub("", model).strip(" _-")
-    text = _CAPACITY_SUFFIX.sub("", text).strip(" _-,")
-    return text or model
+    text = _CAPACITY_SUFFIX.sub("", text)
+    text = _TAG_SUFFIX.sub("", text)
+    return text.strip(" _-,") or model
 
 
 def format_bytes(value: int | None) -> str:

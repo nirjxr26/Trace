@@ -30,6 +30,7 @@ DEVICE_SUMMARY_ID = "device-summary"
 TABLE_COLUMNS = (("Device", 15), ("Size", 9))
 MAX_PICKER_ROWS = 200
 POLL_SECONDS = 1.0
+SELECT_DEVICE_FIRST = "Select a device first."
 
 
 def _display_name(device: DeviceInfoDto) -> str:
@@ -188,21 +189,8 @@ class DevicesView(TablePane[DeviceInfoDto]):
             body.append(pane.divider())
             body.append("\nFINGERPRINT\n", style=THEME_TOKENS["accent"])
             self._append_fingerprint(body)
-        cases = self._cases_for(device.node)
-        if cases:
-            body.append(pane.divider())
-            body.append("\nCASES\n", style=THEME_TOKENS["accent"])
-            for number in cases:
-                body.append(f"  {sanitize_terminal(number)}\n", style=THEME_HEX["value"])
-        if self._history:
-            body.append(pane.divider())
-            body.append(f"\nHISTORY · {len(self._history)}\n", style=THEME_TOKENS["accent"])
-            for row in self._history:
-                verdict = row.verdict.value if row.verdict else "-"
-                body.append(
-                    f"  {format_india_datetime(row.inspected_at)}  {sanitize_terminal(verdict)}"
-                    f"  {sanitize_terminal(row.inspected_by)}\n"
-                )
+        self._append_cases(body, pane, device.node)
+        self._append_history(body, pane)
         if self._gate is not None and self._gate_node == device.node:
             body.append(pane.divider())
             body.append("\nWRITE PROTECTION\n", style=THEME_TOKENS["accent"])
@@ -269,6 +257,27 @@ class DevicesView(TablePane[DeviceInfoDto]):
                 body.append(f"  {sanitize_terminal(check.detail)}")
             body.append("\n")
 
+    def _append_cases(self, body: Text, pane: DossierScroll, node: str) -> None:
+        cases = self._cases_for(node)
+        if not cases:
+            return
+        body.append(pane.divider())
+        body.append("\nCASES\n", style=THEME_TOKENS["accent"])
+        for number in cases:
+            body.append(f"  {sanitize_terminal(number)}\n", style=THEME_HEX["value"])
+
+    def _append_history(self, body: Text, pane: DossierScroll) -> None:
+        if not self._history:
+            return
+        body.append(pane.divider())
+        body.append(f"\nHISTORY · {len(self._history)}\n", style=THEME_TOKENS["accent"])
+        for row in self._history:
+            verdict = row.verdict.value if row.verdict else "-"
+            body.append(
+                f"  {format_india_datetime(row.inspected_at)}  {sanitize_terminal(verdict)}"
+                f"  {sanitize_terminal(row.inspected_by)}\n"
+            )
+
     def _selected_node(self) -> str | None:
         device = self._selected()
         return None if device is None else device.node
@@ -276,14 +285,14 @@ class DevicesView(TablePane[DeviceInfoDto]):
     def action_inspect(self) -> None:
         node = self._selected_node()
         if node is None:
-            self.app.notify("Select a device first.", severity="warning")
+            self.app.notify(SELECT_DEVICE_FIRST, severity="warning")
             return
         self._authorise(node, lambda allowed: self._do_inspect(node, allowed))
 
     def action_check(self) -> None:
         node = self._selected_node()
         if node is None:
-            self.app.notify("Select a device first.", severity="warning")
+            self.app.notify(SELECT_DEVICE_FIRST, severity="warning")
             return
         self._authorise(node, lambda allowed: self._do_check(node, allowed))
 
@@ -344,7 +353,7 @@ class DevicesView(TablePane[DeviceInfoDto]):
     def action_link(self) -> None:
         node = self._selected_node()
         if node is None:
-            self.app.notify("Select a device first.", severity="warning")
+            self.app.notify(SELECT_DEVICE_FIRST, severity="warning")
             return
         from trace_core.tui.forms import CasePicker
 
@@ -379,7 +388,7 @@ class DevicesView(TablePane[DeviceInfoDto]):
     def action_unlink(self) -> None:
         node = self._selected_node()
         if node is None:
-            self.app.notify("Select a device first.", severity="warning")
+            self.app.notify(SELECT_DEVICE_FIRST, severity="warning")
             return
         cases = self._cases_for(node)
         if not cases:
@@ -429,7 +438,7 @@ class DevicesView(TablePane[DeviceInfoDto]):
         """Every prior observation of the selected device, newest first."""
         node = self._selected_node()
         if node is None:
-            self.app.notify("Select a device first.", severity="warning")
+            self.app.notify(SELECT_DEVICE_FIRST, severity="warning")
             return
         serial = self._history_key(node)
         if not serial:

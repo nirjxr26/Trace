@@ -62,7 +62,7 @@ def _signing_key_check() -> tuple[str, str, bool]:
     from trace_core.audit.signing import is_default_key
 
     if is_default_key():
-        return ("Signing key", "not set — your records can't be verified", False)
+        return ("Signing key", "not set — records cannot be signed or verified", False)
     return ("Signing key", "set", True)
 
 
@@ -73,7 +73,8 @@ def _ledger_check(manager: DatabaseSessionManager) -> tuple[str, str, bool]:
 
     res = AuditService(manager).verify()
     if not res.is_valid:
-        return (RECORDS_NAME, f"problem at record {res.first_mismatch_seq} ({res.mismatch_type})", False)
+        where = f"record {res.first_mismatch_seq}" if res.first_mismatch_seq is not None else "the chain head"
+        return (RECORDS_NAME, f"problem at {where} ({res.mismatch_type})", False)
     if not res.events_verified:
         return (RECORDS_NAME, "no records yet", True)
     return (RECORDS_NAME, f"{res.events_verified} records, all linking correctly", True)

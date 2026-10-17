@@ -21,6 +21,7 @@ from trace_core.core.errors import (
     AuditTamperError,
     ConcurrencyConflictError,
     ConflictError,
+    DefaultSecretError,
     NotFoundError,
     StateTransitionError,
 )
@@ -265,6 +266,12 @@ def _typed_error(e: Exception, operation_title: str | None, default_remediation:
             "Find where the records changed. If it's a signing-key rotation rather than an "
             "edit, set TRACE_SECRET_KEY to the key these records were signed with first.",
             EXIT_LEDGER_BROKEN,
+        ),
+        (
+            DefaultSecretError,
+            "Signing Key Refused",
+            "Set TRACE_SECRET_KEY to a private value, then retry.",
+            EXIT_ERROR,
         ),
     )
     for err_cls, title, remed, code in specs:

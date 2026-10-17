@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from trace_core.audit.domain import AUDIT_LEDGER_NOT_INITIALIZED_MESSAGE, AuditAction
+from trace_core.audit.domain import AUDIT_LEDGER_NOT_INITIALIZED_MESSAGE, GENESIS_CHAIN, AuditAction
 from trace_core.audit.dto import AuditEventDto, AuditEventSummaryDto, AuditFilterDto, VerifyResultDto
 from trace_core.audit.events import Context, Subject
 from trace_core.audit.models import AuditEventModel
@@ -145,11 +145,25 @@ class AuditService(BaseService):
             return SqlAlchemyAuditRepository(session).list_event_summaries(filt)
 
     def verify(self) -> VerifyResultDto:
+        from trace_core.audit.models import AuditChainStateModel
+        from trace_core.audit.verifier import verify_rows, verify_tip
+
         with _ledger_session(self.session_manager) as session:
             stmt = select(AuditEventModel).order_by(AuditEventModel.seq.asc())
-            from trace_core.audit.verifier import verify_rows
-
-            return verify_rows(session.scalars(stmt).yield_per(500))
+            res = verify_rows(session.scalars(stmt).yield_per(500))
+            if not res.is_valid:
+                return res
+            head = session.scalar(select(AuditChainStateModel).where(AuditChainStateModel.id == 1))
+            tip_row = session.get(AuditEventModel, res.last_seq) if res.last_seq else None
+            tip = verify_tip(
+                res,
+                head_seq=head.last_seq if head is not None else 0,
+                head_chain=head.last_chain_hash if head is not None else GENESIS_CHAIN,
+                last_chain=tip_row.chain_hash if tip_row is not None else None,
+                tip_key_id=head.tip_key_id if head is not None else None,
+                tip_signature=head.tip_signature if head is not None else None,
+            )
+            return tip if tip is not None else res
 
     def export(self, out_path: str | Path) -> Path:
         out = Path(out_path)

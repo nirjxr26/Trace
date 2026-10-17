@@ -61,6 +61,40 @@ def _mismatch(
     )
 
 
+def _tip_result(res: VerifyResultDto, mismatch_type: str, first_mismatch_seq: int | None) -> VerifyResultDto:
+    return VerifyResultDto(
+        is_valid=False,
+        events_verified=res.events_verified,
+        first_seq=res.first_seq,
+        last_seq=res.last_seq,
+        first_mismatch_seq=first_mismatch_seq,
+        mismatch_type=mismatch_type,
+        sequence_gaps=list(res.sequence_gaps),
+    )
+
+
+def verify_tip(
+    res: VerifyResultDto,
+    *,
+    head_seq: int,
+    head_chain: str,
+    last_chain: str | None,
+    tip_key_id: str | None,
+    tip_signature: str | None,
+) -> VerifyResultDto | None:
+    """Head-vs-tail binding plus tip signature. None when the head checks out."""
+    from trace_core.audit.signing import verify_bytes
+    from trace_core.core.canonical import canonical_json_str
+
+    if head_seq != (res.last_seq or 0) or head_chain != (last_chain or GENESIS_CHAIN):
+        return _tip_result(res, "chain_head", res.last_seq)
+    if tip_key_id and tip_signature:
+        payload = canonical_json_str({"last_chain": head_chain, "last_seq": head_seq}).encode("utf-8")
+        if not verify_bytes(tip_key_id, payload, tip_signature):
+            return _tip_result(res, "tip_key", head_seq)
+    return None
+
+
 def verify_event(
     payload_json: str,
     payload_hash: str,
@@ -90,10 +124,12 @@ def verify_event(
 def _signature_mismatch(m: AuditEventModel) -> tuple[str, str] | None:
     if m.signature is None:
         return None
-    from trace_core.audit.signing import expected_signature, is_default_key, verify_bytes
+    from trace_core.audit.signing import HMAC_KEY_ID, expected_signature, is_default_key, verify_bytes
 
     raw = m.payload_json.encode("utf-8")
     if verify_bytes(m.key_id, raw, m.signature):
+        if is_default_key() and m.key_id == HMAC_KEY_ID:
+            return "insecure_key", m.signature
         return None
     if is_default_key():
         return "signing_key", m.signature
@@ -112,8 +148,8 @@ def _row_mismatch(m: AuditEventModel, prev_chain: str) -> tuple[str, str, str] |
     signature = _signature_mismatch(m)
     if signature is not None:
         expected_s, actual_s = signature
-        if expected_s == "signing_key":
-            return "signing_key", "", actual_s
+        if expected_s in ("signing_key", "insecure_key"):
+            return expected_s, "", actual_s
         return "signature", expected_s, actual_s
     return None
 
@@ -122,7 +158,7 @@ def verify_rows(rows: Iterable[AuditEventModel]) -> VerifyResultDto:
     """Recompute every link from stored payloads. Policy: hash/prev_chain mismatch =
     tamper (fail fast at first seq); missing seqs = gaps (warning — a middle delete
     already fails as prev_chain mismatch at the next row, while a pure tail delete
-    is invisible here and needs an external anchor)."""
+    is invisible to this scan and is caught by `verify_tip`'s head binding)."""
     first_seq: int | None = None
     last_seq: int | None = None
     gaps: list[int] = []

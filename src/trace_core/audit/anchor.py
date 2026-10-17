@@ -89,9 +89,14 @@ def check_anchor_match(res, data: dict, anchored_chain: str | None) -> None:  # 
     key_id = data.get("key_id")
     if not (signature and key_id):
         raise AnchorVerificationError("Anchor is unsigned; refusing to trust an unverifiable envelope")
-    from trace_core.audit.signing import verify_bytes
+    from trace_core.audit.signing import HMAC_KEY_ID, is_default_key, verify_bytes
     from trace_core.core.canonical import canonical_json
 
+    if key_id == HMAC_KEY_ID and is_default_key():
+        raise AnchorVerificationError(
+            "Anchor cannot be authenticated while the signing key is the shipped development key, "
+            "which is public. Set TRACE_SECRET_KEY to the key this anchor was signed with."
+        )
     unsigned = {k: v for k, v in data.items() if k not in ("key_id", "signature")}
     if not verify_bytes(key_id, canonical_json(unsigned), signature):
         raise AnchorVerificationError("Anchor signature invalid - the file was altered, or signed with a different key")

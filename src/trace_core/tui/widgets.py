@@ -244,31 +244,39 @@ class TablePane[T](Vertical):
         """
         new_items = list(rows)
         new_keys = list(keys)
-        table = self._table()
         if new_keys and new_keys == self._keys:
-            cursor = table.cursor_row if table.cursor_row is not None else 0
-            for idx, row in enumerate(new_items):
-                self._items[idx] = row
-                for col, value in enumerate(self.row_cells(row, idx == cursor)):
-                    try:
-                        table.update_cell_at(Coordinate(idx, col), value)
-                    except Exception:
-                        pass
-            self._last_cursor = table.cursor_row if table.cursor_row is not None else 0
-            self._update_header()
-            self.render_detail()
+            self._patch_rows(new_items)
             return
+        self._rebuild_rows(new_items, new_keys)
+
+    def _patch_rows(self, new_items: list[T]) -> None:
+        table = self._table()
+        cursor = table.cursor_row if table.cursor_row is not None else 0
+        for idx, row in enumerate(new_items):
+            self._items[idx] = row
+            for col, value in enumerate(self.row_cells(row, idx == cursor)):
+                try:
+                    table.update_cell_at(Coordinate(idx, col), value)
+                except Exception:
+                    pass
+        self._after_fill(table)
+
+    def _rebuild_rows(self, new_items: list[T], new_keys: list[str]) -> None:
+        table = self._table()
         self._items = new_items
         self._keys = new_keys
         table.clear()
         cursor = table.cursor_row if table.cursor_row is not None else 0
         for idx, row in enumerate(self._items):
-            table.add_row(*self.row_cells(row, idx == cursor), key=keys[idx])
+            table.add_row(*self.row_cells(row, idx == cursor), key=new_keys[idx])
         try:
             if self._items:
                 table.move_cursor(row=min(cursor, len(self._items) - 1))
         except Exception:
             pass
+        self._after_fill(table)
+
+    def _after_fill(self, table: DataTable) -> None:
         self._last_cursor = table.cursor_row if table.cursor_row is not None else 0
         self._update_header()
         self.render_detail()

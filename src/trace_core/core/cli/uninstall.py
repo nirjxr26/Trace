@@ -133,6 +133,8 @@ def _report_failures(failures: list[Path]) -> None:
 def run_uninstall(purge_data: bool) -> int:
     console.print("Uninstalling Trace\n")
     failures = _remove_targets(_ALWAYS)
+    if purge_data:
+        failures += _remove_targets(_PURGE_ONLY)
     shim_ok = _remove_shims() if not failures else False
     if failures:
         # Leaving the launcher in place is what makes a partial uninstall recoverable:

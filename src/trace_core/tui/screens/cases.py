@@ -245,16 +245,19 @@ class CasesView(TablePane[CaseResponseDto]):
             body.append(rule)
             body.append("\nNOTES\n", style=THEME_TOKENS["accent"])
             body.append(f"  {sanitize_terminal(case.notes)}\n")
-        devices = self._case_devices(case.number)
-        if devices:
-            body.append(rule)
-            body.append("\nLINKED DEVICE\n", style=THEME_TOKENS["accent"])
-            for row in devices:
-                heading = row.heading
-                body.append(f"  {sanitize_terminal(heading)}\n", style=None if row.current else "dim")
-                if row.label:
-                    body.append(f"    {'Label':<10}", style="dim")
-                    body.append(f"{sanitize_terminal(row.label)}\n", style=None if row.current else "dim")
+        self._append_linked_devices(body, rule, self._case_devices(case.number))
+
+    def _append_linked_devices(self, body, rule, devices) -> None:  # type: ignore[no-untyped-def]
+        if not devices:
+            return
+        body.append(rule)
+        body.append("\nLINKED DEVICE\n", style=THEME_TOKENS["accent"])
+        for row in devices:
+            heading = row.heading
+            body.append(f"  {sanitize_terminal(heading)}\n", style=None if row.current else "dim")
+            if row.label:
+                body.append(f"    {'Label':<10}", style="dim")
+                body.append(f"{sanitize_terminal(row.label)}\n", style=None if row.current else "dim")
 
     def drop_dossier(self, case_number: str) -> None:
         self._event_cache.pop(case_number, None)

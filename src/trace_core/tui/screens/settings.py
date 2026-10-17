@@ -278,6 +278,18 @@ class SettingsView(Vertical):
             body.append(f"Events Checked     {res.events_verified}\n")
             body.append(f"Chain Breaks       {len(res.sequence_gaps)}\n")
             body.append("This does not prove no records are missing.\n", style="dim")
+        elif res.mismatch_type in ("signing_key", "insecure_key", "tip_key"):
+            body.append("⚠ ", style=DOT_BAD)
+            body.append("SIGNING KEY PROBLEM\n", style="bold")
+            if res.mismatch_type == "insecure_key":
+                body.append("Signed with the shipped development key, which is public.\n", style="dim")
+            elif res.mismatch_type == "tip_key":
+                body.append("The chain head's signature doesn't verify with the active key.\n", style="dim")
+            else:
+                body.append("The key this ledger was signed with is not the active key.\n", style="dim")
+            body.append(f"Events Checked     {res.events_verified}\n")
+            body.append("This is a key problem, not evidence of tampering.\n", style="dim")
+            return
         else:
             body.append("× ", style=DOT_BAD)
             body.append("TAMPER DETECTED\n", style=f"bold {DOT_BAD}")

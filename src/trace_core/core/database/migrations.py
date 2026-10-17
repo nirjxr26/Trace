@@ -64,6 +64,10 @@ MIGRATION_OPERATIONS: dict[int, tuple[str, ...]] = {}
 # Production rule: run migration → verify resulting schema → record on success, abort on failure.
 MIGRATION_VERIFIERS: dict[int, MigrationVerifier] = {}
 
+DECOMMISSIONED_MIGRATIONS: dict[int, str] = {
+    11: "011's CREATE ROLE hard-fails without CREATEROLE and blocked every later migration; replaced by 025"
+}
+
 
 def register_migration(
     version: int,
@@ -377,6 +381,81 @@ def _install_sqlite_audit_triggers(conn: Connection) -> None:
         raise RuntimeError("sqlite append-only triggers did not install; refusing to continue")
 
 
+PG_CHAIN_STATE_TRUNCATE_TRIGGER_DDL = (
+    "CREATE TRIGGER audit_chain_state_no_truncate "
+    "BEFORE TRUNCATE ON audit_chain_state "
+    "FOR EACH STATEMENT EXECUTE FUNCTION audit_chain_state_block_write()"
+)
+
+
+def _install_pg_chain_state_trigger(conn: Connection) -> None:
+    """Install chain-head write protection for PostgreSQL connections."""
+    if conn.dialect.name != "postgresql":
+        return
+    conn.execute(
+        text(
+            "CREATE OR REPLACE FUNCTION audit_chain_state_block_write() RETURNS trigger AS $$ "
+            "BEGIN "
+            "IF TG_OP = 'TRUNCATE' THEN RAISE EXCEPTION 'audit_chain_state cannot be truncated'; END IF; "
+            "IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'audit_chain_state cannot be deleted'; END IF; "
+            "IF NEW.id <> OLD.id OR NEW.last_seq < OLD.last_seq OR "
+            "(NEW.last_seq = OLD.last_seq AND NEW.last_chain_hash <> OLD.last_chain_hash) THEN "
+            "RAISE EXCEPTION 'audit_chain_state only advances forward'; END IF; "
+            "RETURN NEW; END; $$ LANGUAGE plpgsql"
+        )
+    )
+    conn.execute(text("DROP TRIGGER IF EXISTS audit_chain_state_no_update_delete ON audit_chain_state"))
+    conn.execute(
+        text(
+            "CREATE TRIGGER audit_chain_state_no_update_delete "
+            "BEFORE UPDATE OR DELETE ON audit_chain_state "
+            "FOR EACH ROW EXECUTE FUNCTION audit_chain_state_block_write()"
+        )
+    )
+    conn.execute(text("DROP TRIGGER IF EXISTS audit_chain_state_no_truncate ON audit_chain_state"))
+    conn.execute(text(PG_CHAIN_STATE_TRUNCATE_TRIGGER_DDL))
+
+
+def _verify_chain_state_protection(conn: Connection) -> bool:
+    """Confirm chain-head write protection exists on the current backend."""
+    if "audit_chain_state" not in inspect(conn).get_table_names():
+        return True
+    if conn.dialect.name == "postgresql":
+        count = conn.execute(
+            text("SELECT count(*) FROM pg_trigger WHERE tgrelid = 'audit_chain_state'::regclass AND NOT tgisinternal")
+        ).scalar()
+        return (count or 0) >= 1
+    rows = conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'audit_chain_state'")
+    ).fetchall()
+    return {"audit_chain_state_no_update", "audit_chain_state_no_delete"} <= {r[0] for r in rows}
+
+
+def _install_sqlite_chain_state_triggers(conn: Connection) -> None:
+    """Install chain-head write protection for SQLite connections."""
+    if conn.dialect.name != "sqlite":
+        return
+    for ddl in (
+        "DROP TRIGGER IF EXISTS audit_chain_state_no_update",
+        "DROP TRIGGER IF EXISTS audit_chain_state_no_delete",
+        "CREATE TRIGGER audit_chain_state_no_update BEFORE UPDATE ON audit_chain_state "
+        "WHEN NEW.id <> OLD.id OR NEW.last_seq < OLD.last_seq OR "
+        "(NEW.last_seq = OLD.last_seq AND NEW.last_chain_hash <> OLD.last_chain_hash) "
+        "BEGIN SELECT RAISE(ABORT, 'audit_chain_state only advances forward'); END",
+        "CREATE TRIGGER audit_chain_state_no_delete BEFORE DELETE ON audit_chain_state "
+        "BEGIN SELECT RAISE(ABORT, 'audit_chain_state cannot be deleted'); END",
+    ):
+        conn.execute(text(ddl))
+    if not _verify_chain_state_protection(conn):
+        raise RuntimeError("sqlite audit_chain_state triggers did not install; refusing to continue")
+
+
+def _install_chain_state_triggers(conn: Connection) -> None:
+    """Install chain-head write protection on the current backend."""
+    _install_pg_chain_state_trigger(conn)
+    _install_sqlite_chain_state_triggers(conn)
+
+
 def _migration_checksum(version: int, name: str) -> str:
     """Canonical identity digest: scheme, version, name, declared operations.
 
@@ -538,19 +617,44 @@ def _reassert_audit_protection(engine: Engine) -> None:
     with engine.begin() as conn:
         if "audit_events" not in inspect(conn).get_table_names():
             return
-        if _verify_008_audit_protection(conn):
-            return
-        _install_pg_audit_trigger(conn)
-        _install_sqlite_audit_triggers(conn)
         if not _verify_008_audit_protection(conn):
-            raise RuntimeError(
-                "audit_events append-only protection is missing and could not be reinstalled; refusing to start"
-            )
+            _install_pg_audit_trigger(conn)
+            _install_sqlite_audit_triggers(conn)
+            if not _verify_008_audit_protection(conn):
+                raise RuntimeError(
+                    "audit_events append-only protection is missing and could not be reinstalled; refusing to start"
+                )
+        if "audit_chain_state" in inspect(conn).get_table_names() and not _verify_chain_state_protection(conn):
+            _install_chain_state_triggers(conn)
+            if not _verify_chain_state_protection(conn):
+                raise RuntimeError(
+                    "audit_chain_state write protection is missing and could not be reinstalled; refusing to start"
+                )
+
+
+def _refuse_foreign_sqlite_database(engine: Engine) -> None:
+    """Refuse to migrate into a non-empty SQLite file that is not a Trace database."""
+    if engine.dialect.name != "sqlite":
+        return
+    from trace_core.core.database.session import sqlite_file_path
+
+    path = sqlite_file_path(str(engine.url))
+    if path is None or not path.exists():
+        return
+    with engine.connect() as conn:
+        tables = set(inspect(conn).get_table_names())
+    if tables and "schema_migrations" not in tables:
+        raise RuntimeError(
+            f"the SQLite database at {path} does not look like a Trace database (no "
+            "schema_migrations table); refusing to write into it. Point TRACE_DATABASE_URL "
+            "at a Trace database or a new file."
+        )
 
 
 def apply_migrations(engine: Engine) -> list[str]:
     """Apply all pending migrations sequentially within transaction boundaries."""
     with _migration_lock(engine):
+        _refuse_foreign_sqlite_database(engine)
         ensure_migration_table(engine)
         applied_versions = {m["version"] for m in verify_migration_checksums(engine)}
         applied_names: list[str] = []
@@ -558,7 +662,18 @@ def apply_migrations(engine: Engine) -> list[str]:
         for version, name, action in MIGRATIONS:
             if version not in applied_versions:
                 with engine.begin() as conn:
-                    action(conn)
+                    reason = DECOMMISSIONED_MIGRATIONS.get(version)
+                    if reason is None:
+                        action(conn)
+                    else:
+                        import structlog
+
+                        structlog.get_logger().warning(
+                            "Decommissioned migration recorded without running",
+                            version=version,
+                            name=name,
+                            reason=reason,
+                        )
                     verifier = MIGRATION_VERIFIERS.get(version)
                     if verifier is not None and not verifier(conn):
                         raise RuntimeError(f"Migration {name} failed verification; rolled back, not recorded.")
@@ -1126,3 +1241,139 @@ def _migration_022_audit_device_subject_serial(bind: Engine | Connection) -> Non
     else:
         with bind.begin() as conn:
             _run_migration_022(conn)
+
+
+CHAIN_STATE_TIP_KEY_COLUMN = "tip_key_id"
+CHAIN_STATE_TIP_SIGNATURE_COLUMN = "tip_signature"
+CHAIN_STATE_ADD_TIP_KEY = f"ALTER TABLE audit_chain_state ADD COLUMN {CHAIN_STATE_TIP_KEY_COLUMN} VARCHAR(64)"
+CHAIN_STATE_ADD_TIP_SIGNATURE = (
+    f"ALTER TABLE audit_chain_state ADD COLUMN {CHAIN_STATE_TIP_SIGNATURE_COLUMN} VARCHAR(128)"
+)
+
+
+def _verify_023_chain_state_protection(conn: Connection) -> bool:
+    if "audit_chain_state" not in inspect(conn).get_table_names():
+        return True
+    cols = _column_names(conn, "audit_chain_state")
+    if CHAIN_STATE_TIP_KEY_COLUMN not in cols or CHAIN_STATE_TIP_SIGNATURE_COLUMN not in cols:
+        return False
+    return _verify_chain_state_protection(conn)
+
+
+def _run_migration_023(conn: Connection) -> None:
+    if "audit_chain_state" not in inspect(conn).get_table_names():
+        return
+    _ensure_column(conn, "audit_chain_state", CHAIN_STATE_TIP_KEY_COLUMN, CHAIN_STATE_ADD_TIP_KEY)
+    _ensure_column(conn, "audit_chain_state", CHAIN_STATE_TIP_SIGNATURE_COLUMN, CHAIN_STATE_ADD_TIP_SIGNATURE)
+    _install_chain_state_triggers(conn)
+
+
+@register_migration(
+    23,
+    "023_audit_chain_state_protection_and_tip",
+    operations=(
+        CHAIN_STATE_ADD_TIP_KEY,
+        CHAIN_STATE_ADD_TIP_SIGNATURE,
+        "install postgresql audit_chain_state write-protection trigger",
+        "install sqlite audit_chain_state write-protection triggers",
+    ),
+    verify=lambda conn: _verify_023_chain_state_protection(conn),
+)
+def _migration_023_audit_chain_state_protection_and_tip(bind: Engine | Connection) -> None:
+    if isinstance(bind, Connection):
+        _run_migration_023(bind)
+    else:
+        with bind.begin() as conn:
+            _run_migration_023(conn)
+
+
+ANCHOR_INTENTS_TABLE = "anchor_intents"
+ANCHOR_INTENT_UNIQUE_INDEX = "uq_anchor_intents_case_seq"
+ANCHOR_INTENT_UNIQUE_ADD_INDEX = (
+    f"CREATE UNIQUE INDEX IF NOT EXISTS {ANCHOR_INTENT_UNIQUE_INDEX} ON {ANCHOR_INTENTS_TABLE} (case_number, seq)"
+)
+
+
+def _verify_024_anchor_intent_uniqueness(conn: Connection) -> bool:
+    if ANCHOR_INTENTS_TABLE not in inspect(conn).get_table_names():
+        return True
+    return any(
+        idx["name"] == ANCHOR_INTENT_UNIQUE_INDEX and idx.get("unique")
+        for idx in inspect(conn).get_indexes(ANCHOR_INTENTS_TABLE)
+    )
+
+
+def _run_migration_024(conn: Connection) -> None:
+    if ANCHOR_INTENTS_TABLE not in inspect(conn).get_table_names():
+        return
+    duplicates = conn.execute(
+        text(
+            f"SELECT case_number, seq, COUNT(*) FROM {ANCHOR_INTENTS_TABLE}"
+            " GROUP BY case_number, seq HAVING COUNT(*) > 1 ORDER BY case_number, seq"
+        )
+    ).all()
+    if duplicates:
+        detail = "; ".join(f"{row[0]} seq {row[1]} x{row[2]}" for row in duplicates)
+        raise RuntimeError(
+            "anchor_intents holds duplicate (case_number, seq) rows: "
+            f"{detail}. Nothing was deleted; resolve the duplicates by hand and re-run."
+        )
+    conn.execute(text(ANCHOR_INTENT_UNIQUE_ADD_INDEX))
+
+
+@register_migration(
+    24,
+    "024_anchor_intents_case_seq_unique",
+    operations=(ANCHOR_INTENT_UNIQUE_ADD_INDEX,),
+    verify=lambda conn: _verify_024_anchor_intent_uniqueness(conn),
+)
+def _migration_024_anchor_intents_case_seq_unique(bind: Engine | Connection) -> None:
+    if isinstance(bind, Connection):
+        _run_migration_024(bind)
+    else:
+        with bind.begin() as conn:
+            _run_migration_024(conn)
+
+
+def _can_create_roles(conn: Connection) -> bool:
+    return bool(
+        conn.execute(text("SELECT rolsuper OR rolcreaterole FROM pg_roles WHERE rolname = current_user")).scalar()
+    )
+
+
+def _verify_025_least_privilege_roles(conn: Connection) -> bool:
+    if conn.dialect.name != "postgresql":
+        return True
+    if not _can_create_roles(conn):
+        return True
+    names = {row[0] for row in conn.execute(text("SELECT rolname FROM pg_roles"))}
+    return {"trace_app", "trace_reader", "trace_migrator"} <= names
+
+
+def _run_migration_025(conn: Connection) -> None:
+    if conn.dialect.name != "postgresql":
+        return
+    if not _can_create_roles(conn):
+        import structlog
+
+        structlog.get_logger().warning(
+            "Least-privilege roles not installed: the connecting role cannot create roles. "
+            "Provision trace_app, trace_reader and trace_migrator manually (docs/operations/runbook.md)."
+        )
+        return
+    for stmt in ROLE_DDL:
+        conn.execute(text(stmt))
+
+
+@register_migration(
+    25,
+    "025_least_privilege_roles_replacement",
+    operations=ROLE_DDL,
+    verify=lambda conn: _verify_025_least_privilege_roles(conn),
+)
+def _migration_025_least_privilege_roles_replacement(bind: Engine | Connection) -> None:
+    if isinstance(bind, Connection):
+        _run_migration_025(bind)
+    else:
+        with bind.begin() as conn:
+            _run_migration_025(conn)
