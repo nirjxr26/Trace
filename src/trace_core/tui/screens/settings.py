@@ -120,6 +120,7 @@ class SettingsView(Vertical):
             pass
         self._index = self._selected_index()
         self._db_snapshot = None
+        self._kind = "idle"
         for idx in range(len(SECTIONS)):
             self._paint_item(idx, idx == self._index)
         self._render_detail()
@@ -158,7 +159,7 @@ class SettingsView(Vertical):
         try:
             renderer(body, pane_width)
         except Exception as exc:
-            body.append(f"Version unavailable ({exc})", style="dim")
+            body.append(f"Couldn't load this section ({exc})", style="dim")
         self.query_one(f"#{DETAIL_ID}", Static).update(body)
         from trace_core.tui.widgets import ThothSpinner
 
@@ -227,6 +228,9 @@ class SettingsView(Vertical):
         body.append(f"{current}\n\n", style="bold")
         if self._kind == "failed":
             body.append("✕ Check failed\n", style=THEME_HEX["amber"])
+        elif self._kind == "unchecked":
+            body.append("○ No recent check result\n", style=THEME_HEX["amber"])
+            body.append("\nPress c to check for updates.\n", style="dim")
         elif self._kind == "available" and self._current:
             body.append(f"Update available with version: v{current}\n", style=THEME_HEX["blue"])
             body.append("\nRun this to update:\n\n", style="dim")
@@ -365,13 +369,17 @@ class SettingsView(Vertical):
     def _check_text(self) -> tuple[str, str, str, str]:
         """Cached state only. Painting the tab must never touch the network; a live
         check runs on the user's action (action_check) in a worker thread."""
-        from trace_core.updates.checker import get_installed_version, peek_cached_update
+        from trace_core.updates.cache import read_check_cache
+        from trace_core.updates.checker import get_installed_version
 
         prev = str(get_installed_version())
-        payload = peek_cached_update()
-        if payload is None or not payload["available"]:
-            return prev, prev, "current", ""
-        return self._describe_update(prev, payload)
+        cached = read_check_cache()
+        payload = (cached or {}).get("payload") or {}
+        if payload.get("available") and payload.get("target"):
+            return self._describe_update(prev, payload)
+        if cached is None:
+            return prev, prev, "unchecked", ""
+        return prev, prev, "current", ""
 
     def _refresh_hint(self) -> None:
         """Cached only: a paint never touches the network (H-65 shape)."""
@@ -411,6 +419,8 @@ class SettingsView(Vertical):
 
     def action_check(self) -> None:
         if not self._require_section("Updates"):
+            return
+        if self._checking:
             return
         self._checking = True
         self._render_detail()

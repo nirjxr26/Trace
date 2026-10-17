@@ -265,3 +265,103 @@ async def test_db_snapshot_fetch_runs_once_per_visit(session_manager, monkeypatc
         await pilot.pause()
         assert calls == base + 1, f"repaint re-snapshotted: {calls} vs {base}"
         assert "Migration complete" in _text(app.query_one("#settings-detail", Static))
+
+
+async def test_updates_section_without_a_cache_never_claims_up_to_date(
+    session_manager: DatabaseSessionManager, temp_storage_root
+) -> None:
+    from textual.widgets import Static
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await _goto_settings_updates(pilot, app)
+        detail = _text(app.query_one("#settings-detail", Static))
+        assert "You're up to date" not in detail
+        assert "No recent check result" in detail
+        assert "Press c to check for updates" in detail
+
+
+async def test_fresh_cached_result_still_reads_up_to_date(
+    session_manager: DatabaseSessionManager, temp_storage_root
+) -> None:
+    from textual.widgets import Static
+
+    from trace_core.updates.cache import write_check_cache
+
+    write_check_cache({"manifest_path": "m", "channel": "stable", "payload": {"current": "0.3.2", "available": False}})
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await _goto_settings_updates(pilot, app)
+        detail = _text(app.query_one("#settings-detail", Static))
+        assert "You're up to date" in detail
+        assert "No recent check result" not in detail
+
+
+async def test_refresh_drops_a_removed_check_cache(session_manager: DatabaseSessionManager, temp_storage_root) -> None:
+    from textual.widgets import Static
+
+    from trace_core.tui.screens.settings import SettingsView
+    from trace_core.updates.cache import cache_path, write_check_cache
+
+    write_check_cache({"manifest_path": "m", "channel": "stable", "payload": {"current": "0.3.2", "available": False}})
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await _goto_settings_updates(pilot, app)
+        assert "You're up to date" in _text(app.query_one("#settings-detail", Static))
+        cache_path().unlink()
+        app.query_one(SettingsView).refresh_data()
+        await pilot.pause()
+        detail = _text(app.query_one("#settings-detail", Static))
+        assert "You're up to date" not in detail
+        assert "No recent check result" in detail
+
+
+async def test_a_second_check_press_while_running_is_ignored(
+    session_manager: DatabaseSessionManager, monkeypatch
+) -> None:
+    from trace_core.tui.screens.settings import SettingsView
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await _goto_settings_updates(pilot, app)
+        view = app.query_one(SettingsView)
+        calls = 0
+
+        def fake_live_check():  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            return ("1.0", "1.0", "current", "")
+
+        monkeypatch.setattr(view, "_live_check", fake_live_check)
+        view.action_check()
+        view.action_check()
+        for _ in range(60):
+            await pilot.pause(0.05)
+            if not view._checking:
+                break
+        assert not view._checking, "the check worker never finished"
+        assert calls == 1, f"a double press ran {calls} live checks"
+
+
+async def test_a_failing_section_is_not_reported_as_a_version_problem(
+    session_manager: DatabaseSessionManager, monkeypatch
+) -> None:
+    from textual.widgets import Static, TabbedContent
+
+    from trace_core.tui.screens.settings import SettingsView
+
+    def explode(self, body, width):  # type: ignore[no-untyped-def]
+        raise RuntimeError("section exploded")
+
+    monkeypatch.setattr(SettingsView, "_database_body", explode)
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(TabbedContent).active = "settings"
+        await pilot.pause()
+        app.query_one(SettingsView).refresh_data()
+        await pilot.pause()
+        detail = _text(app.query_one("#settings-detail", Static))
+        assert "Version unavailable" not in detail
+        assert "Couldn't load this section" in detail
+        assert "section exploded" in detail
