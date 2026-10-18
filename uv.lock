@@ -1532,8 +1532,21 @@ wheels = [
 ]
 
 [[package]]
+name = "thothspinner"
+version = "1.2.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "rich" },
+    { name = "textual" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/95/51/19981ea285718081ed4e953898066e47e2e597880d2757e95631db87ee18/thothspinner-1.2.6.tar.gz", hash = "sha256:8f79a46a1ee8b1e251c6e072c2d8c7b34f04589ab0a0e5cdaca67318918b9915", size = 48301, upload-time = "2026-04-13T19:26:17.248Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bf/c0/9c6a9b7fae710a4ec04c904e9111cba61d8c1500b7a310693ba66f85736c/thothspinner-1.2.6-py3-none-any.whl", hash = "sha256:07fde8d673abd13a2a4913fe40d7aeddb19a1ff780df50e6363b5444a3e9ca75", size = 66148, upload-time = "2026-04-13T19:26:18.113Z" },
+]
+
+[[package]]
 name = "trace"
-version = "0.1.0"
+version = "0.3.2"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
@@ -1546,6 +1559,7 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "structlog" },
     { name = "textual" },
+    { name = "thothspinner" },
     { name = "typer" },
 ]
 
@@ -1579,6 +1593,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0.28" },
     { name = "structlog", specifier = ">=24.1.0" },
     { name = "textual", specifier = ">=8.2.8" },
+    { name = "thothspinner", specifier = ">=1.2.6" },
     { name = "typer", specifier = ">=0.12.0" },
 ]
 provides-extras = ["dev"]
