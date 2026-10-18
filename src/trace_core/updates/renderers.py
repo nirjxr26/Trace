@@ -5,7 +5,6 @@ from trace_core.core.ui.renderers import closing_block, console, safe_text, step
 from trace_core.core.ui.theme import THEME_HEX
 from trace_core.updates.domain import UpdateFailureStage
 from trace_core.updates.dto import UpdateResultDto
-from trace_core.updates.manifest import ReleaseManifest
 from trace_core.updates.stages import (
     STAGE_ORDER,
     ProgressCallback,
@@ -77,23 +76,6 @@ def render_check_card(payload: dict, channel: str) -> None:
     )
 
 
-def render_install_summary(manifest: ReleaseManifest, current: str, bypass_note: str) -> None:
-    """Pre-flight facts only.
-
-    The target version and the step list are deliberately absent: `begin_update` titles
-    the region with the version, and the four steps are printed as live rows a moment
-    later. Both used to appear here as well, so one screen stated each of them three times.
-    """
-    console.print("")
-    console.print("Update available")
-    console.print(f"Product: {safe_text(manifest.product)}")
-    console.print(f"Current: v{safe_text(current)}")
-    if manifest.restart_required:
-        console.print("Restart: Required")
-    if bypass_note:
-        console.print(f"[yellow]Override: {safe_text(bypass_note)}[/yellow]")
-
-
 def _active_version() -> str | None:
     """The release the pointer names right now, or None when it cannot be read. An
     unreadable pointer is not the same as the pre-update version."""
@@ -130,9 +112,7 @@ class UpdateProgressDisplay(ProgressCallback):
 
     def begin_update(self) -> None:
         console.print("")
-        # product/target/current come from the (signature-verified) manifest, but a
-        # verified manifest still controls these strings — escape before markup.
-        console.print(f"Updating {safe_text(self.product)}")
+        console.print("Updating Trace...")
         console.print("")
         if not self.tty:
             return

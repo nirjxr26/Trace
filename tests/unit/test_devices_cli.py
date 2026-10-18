@@ -206,6 +206,28 @@ def test_a_writable_source_exits_ten(monkeypatch: pytest.MonkeyPatch, device_fil
     assert "writable" in result.stdout.lower()
 
 
+def test_a_boot_disk_refusal_exits_eighteen(monkeypatch: pytest.MonkeyPatch, device_file_env: Path) -> None:
+    from datetime import datetime
+
+    from trace_core.core.cli.exit_codes import EXIT_BOOT_DISK
+    from trace_core.devices.domain import BootDiskRefusalError, ProtectionCheck, ProtectionEvidence
+
+    evidence = ProtectionEvidence(
+        platform="windows",
+        checks=(ProtectionCheck(name="boot_disk", result="True", detail="hosts C:"),),
+        adapter_version="win32-v1",
+        checked_at=datetime.now(UTC),
+    )
+
+    def _boot(*_args, **_kwargs):
+        raise BootDiskRefusalError("source is the running system's boot disk (hosts C:)", evidence)
+
+    monkeypatch.setattr("trace_core.devices.commands.do_check", _boot)
+    result = runner.invoke(app, ["device", "check", str(device_file_env / "disk-a.dd")])
+    assert result.exit_code == EXIT_BOOT_DISK == 18
+    assert "boot disk" in result.stdout.lower()
+
+
 def test_the_acknowledgement_flag_needs_the_typed_token(device_file_env: Path) -> None:
     """A y/N answer is too thin for a step that manufactures trust over unverified evidence."""
     result = runner.invoke(

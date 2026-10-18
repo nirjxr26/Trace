@@ -110,3 +110,20 @@ def test_a_tampered_ledger_exits_with_the_ledger_code_end_to_end(
 
     assert res.exit_code == EXIT_LEDGER_BROKEN
     assert res.exit_code != EXIT_VERIFY_FAILED
+
+
+def test_a_boot_disk_refusal_exits_with_its_own_code_not_unknown_or_writable() -> None:
+    from datetime import UTC, datetime
+
+    from trace_core.core.cli.exit_codes import EXIT_BOOT_DISK, EXIT_SOURCE_WRITABLE, EXIT_UNKNOWN
+    from trace_core.devices.domain import BootDiskRefusalError, ProtectionCheck, ProtectionEvidence
+
+    evidence = ProtectionEvidence(
+        platform="windows",
+        checks=(ProtectionCheck(name="boot_disk", result="True"),),
+        adapter_version="win32-v1",
+        checked_at=datetime.now(UTC),
+    )
+    code = _code(BootDiskRefusalError("source is the running system's boot disk", evidence))
+    assert code == EXIT_BOOT_DISK
+    assert code not in (EXIT_UNKNOWN, EXIT_SOURCE_WRITABLE)

@@ -932,6 +932,28 @@ def test_a_restored_database_regains_chain_state_protection_on_startup(
         s.rollback()
 
 
+def test_a_legacy_chain_state_trigger_is_dropped_on_startup(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    CaseService(session_manager).create_case(CaseCreateDto(title="Legacy", lead_examiner="Ex"))
+    with session_manager.engine.begin() as c:
+        c.execute(
+            sqlalchemy.text(
+                "CREATE TRIGGER audit_chain_state_no_update_delete BEFORE UPDATE ON audit_chain_state "
+                "BEGIN SELECT RAISE(ABORT, 'audit_chain_state only moves forward'); END"
+            )
+        )
+    with pytest.raises(sqlalchemy.exc.IntegrityError):
+        with session_manager.engine.begin() as c:
+            c.execute(sqlalchemy.text("UPDATE audit_chain_state SET last_seq = last_seq + 1 WHERE id = 1"))
+
+    apply_migrations(session_manager.engine)
+
+    assert _chain_state_trigger_names(session_manager) == CHAIN_STATE_TRIGGERS
+    CaseService(session_manager).create_case(CaseCreateDto(title="Flows", lead_examiner="Ex"))
+    assert AuditService(session_manager).verify().is_valid is True
+
+
 def test_a_chain_state_card_reads_as_tamper() -> None:
     from trace_core.audit.dto import VerifyResultDto
     from trace_core.audit.renderers import render_verify_result

@@ -384,6 +384,71 @@ def test_acknowledgement_cannot_buy_a_writable_source(session_manager, box: Path
     assert _fingerprints(session_manager) == 0
 
 
+def test_a_boot_disk_is_refused_even_with_the_acknowledgement(session_manager, box: Path) -> None:
+    from trace_core.core.clock import now_utc
+    from trace_core.core.operators import process_session_id
+    from trace_core.devices.domain import (
+        CHECK_BOOT_DISK,
+        BootDiskRefusalError,
+        GateCheck,
+        ProtectionCheck,
+        ProtectionEvidence,
+    )
+
+    _ = process_session_id()
+    adapter = file_device.FileDevice(box)
+
+    class _BootProbe:
+        def verify(self, device):  # type: ignore[no-untyped-def]
+            return GateCheck(
+                verdict=WpVerdict.READ_ONLY,
+                evidence=ProtectionEvidence(
+                    platform="fake",
+                    checks=(
+                        ProtectionCheck(name="exists", result="True"),
+                        ProtectionCheck(name=CHECK_BOOT_DISK, result="True", detail="hosts C:"),
+                        ProtectionCheck(name="sysfs_ro", result="True"),
+                    ),
+                    adapter_version="stub",
+                    checked_at=now_utc(),
+                ),
+                checked_at=now_utc(),
+            )
+
+    svc = DeviceService(session_manager, adapter, adapter, _BootProbe())
+    with pytest.raises(BootDiskRefusalError):
+        svc.check_device(str(box / "disk-a.dd"), acknowledge_unverified_source=True, override_reason="because")
+    assert _actions(session_manager) == ["DEVICE_GATE_CHECKED"]
+    assert _fingerprints(session_manager) == 0
+
+
+def test_the_boot_refusal_is_taken_before_a_writable_verdict() -> None:
+    from trace_core.core.clock import now_utc
+    from trace_core.devices.domain import (
+        CHECK_BOOT_DISK,
+        BootDiskRefusalError,
+        GateCheck,
+        ProtectionCheck,
+        ProtectionEvidence,
+    )
+    from trace_core.devices.service import _refusal_for
+
+    evidence = ProtectionEvidence(
+        platform="windows",
+        checks=(
+            ProtectionCheck(name="exists", result="True"),
+            ProtectionCheck(name=CHECK_BOOT_DISK, result="True", detail="hosts C:"),
+            ProtectionCheck(name="ioctl_is_writable", result="True"),
+        ),
+        adapter_version="stub",
+        checked_at=now_utc(),
+    )
+    gate = GateCheck(verdict=WpVerdict.WRITABLE, evidence=evidence, checked_at=now_utc())
+    refusal = _refusal_for(gate, True, r"\\.\PhysicalDrive0")
+    assert isinstance(refusal, BootDiskRefusalError)
+    assert "boot disk" in str(refusal)
+
+
 def test_the_override_event_preserves_the_pre_override_verdict_and_cause(session_manager, box: Path) -> None:
     """[D19], [§12.2] the ledger records what was overridden, not what it became."""
     from trace_core.audit.events import parse_details

@@ -8,17 +8,17 @@ as `ProtectionCheck` rows in the schema the fake and Linux probes emit [D33].
 tribunal replaces on other platforms. That is what lets this module import and be
 tested anywhere.
 
-Subpart 3 records wrong-drive protection as a Subpart 4 requirement [D28]: mapping
-a `PhysicalDriveN` node to volume letters and refusing a boot device is an
-acquisition control. The three ingredients here are resolve-against-enumerated-set, the
-real-hardware opt-in flag, and serial echo. Drive mapping is deliberately absent.
+[D28] wrong-drive protection: the probe maps `PhysicalDriveN` to the volume letters
+hosting the running system and emits a `boot_disk` row; `DeviceService` refuses a boot
+disk outright, and resolve-against-enumerated-set, the real-hardware opt-in flag and
+serial echo complete the control.
 """
 
 import ctypes.wintypes as wintypes
 import json
 import sys
 from dataclasses import dataclass
-from typing import Any, Final, cast
+from typing import Any, Final, Literal, cast
 
 from trace_core.core.clock import now_utc
 from trace_core.devices._subprocess import (
@@ -34,6 +34,7 @@ from trace_core.devices._subprocess import (
     smartctl_succeeded,
 )
 from trace_core.devices.domain import (
+    CHECK_BOOT_DISK,
     RESULT_FALSE,
     RESULT_TRUE,
     DeviceAccessDeniedError,
@@ -50,7 +51,7 @@ from trace_core.devices.domain import (
     UnknownCause,
     verdict_for,
 )
-from trace_core.devices.synthetic import absent_serial
+from trace_core.devices.synthetic import absent_serial, is_synthetic_serial
 
 ADAPTER_VERSION: Final[str] = "win32-v1"
 PHYSICAL_DRIVE: Final[str] = r"\\.\PhysicalDrive"
@@ -72,15 +73,18 @@ SHARE_MODE: Final[int] = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
 OPEN_EXISTING: Final[int] = 3
 INVALID_HANDLE_VALUE: Final[int] = cast(int, wintypes.HANDLE(-1).value)
 ERROR_ACCESS_DENIED: Final[int] = 5
+ERROR_WRITE_PROTECT: Final[int] = 19
 ERROR_INSUFFICIENT_BUFFER: Final[int] = 122
 ERROR_MORE_DATA: Final[int] = 234
 
+WINDOWS_PATH_BUFFER: Final[int] = 512
 DOS_DEVICE_BUFFER: Final[int] = 4096
 MAX_DOS_DEVICE_BUFFER: Final[int] = 1 << 20
 
 IOCTL_STORAGE_QUERY_PROPERTY: Final[int] = 0x2D1400
 IOCTL_DISK_GET_DRIVE_GEOMETRY_EX: Final[int] = 0x000700A0
 IOCTL_DISK_IS_WRITABLE: Final[int] = 0x00070024
+IOCTL_STORAGE_GET_DEVICE_NUMBER: Final[int] = 0x2D1080
 
 STORAGE_PROPERTY_QUERY: Final[int] = 0
 StorageDeviceProperty: Final[int] = 0
@@ -88,6 +92,7 @@ PROPERTY_QUERY_SIZE: Final[int] = 64
 QUERY_BUFFER_SIZE: Final[int] = 1024
 QUERY_INPUT_SIZE: Final[int] = 12
 DESCRIPTOR_HEADER: Final[int] = 36
+STORAGE_DEVICE_NUMBER_SIZE: Final[int] = 12
 
 MAX_DRIVES: Final[int] = 64
 
@@ -108,6 +113,8 @@ class Win32Device:
     adapter_version = ADAPTER_VERSION
 
     def list_block_devices(self) -> list[DeviceInfo]:
+        if _windll() is None:
+            raise HelperFailure(UnknownCause.TOOL_MISSING, "the Windows adapter is only usable on Windows")
         return [
             DeviceInfo(
                 node=self._node(drive.index),
@@ -128,16 +135,20 @@ class Win32Device:
         if drive is None:
             raise DeviceGoneError(device.node)
         cause, wwn = self._enrich(index, drive.interface)
+        serial_value = drive.serial or absent_serial(node, size_bytes=drive.size_bytes, model=drive.model)
+        source: Literal["os", "smartctl", "synthetic"] = "os"
+        if is_synthetic_serial(serial_value):
+            source = "synthetic"
+        elif cause is None and wwn:
+            source = "smartctl"
         fingerprint = DeviceFingerprint(
-            serial=ObservedSerial(
-                value=drive.serial or absent_serial(node, size_bytes=drive.size_bytes, model=drive.model)
-            ),
+            serial=ObservedSerial(value=serial_value),
             model=drive.model or f"PhysicalDrive{index}",
             capacity_bytes=drive.size_bytes or 0,
             firmware=drive.firmware,
             interface=drive.interface,
             wwn=wwn,
-            source="smartctl" if cause is None and wwn else "os",
+            source=source,
         )
         return DeviceInspection(device=device, fingerprint=fingerprint, inspected_at=now_utc())
 
@@ -256,19 +267,21 @@ class Win32Device:
     def _probe(self, index: int | None) -> tuple[tuple[ProtectionCheck, ...], UnknownCause | None]:
         if index is None:
             return (ProtectionCheck(name=CHECK_EXISTENCE, result="False"),), UnknownCause.DEVICE_DISAPPEARED
+        boot = _boot_disk_check(index)
         handle, error = _try_open(self._node(index))
         if handle is None:
             if error == ERROR_ACCESS_DENIED:
                 return (
                     ProtectionCheck(name=CHECK_EXISTENCE, result="True"),
+                    boot,
                     ProtectionCheck(name=CHECK_IS_WRITABLE, result=UnknownCause.EACCES.value, detail=EACCES_DETAIL),
                 ), UnknownCause.EACCES
-            return (ProtectionCheck(name=CHECK_EXISTENCE, result="False"),), UnknownCause.DEVICE_DISAPPEARED
+            return (ProtectionCheck(name=CHECK_EXISTENCE, result="False"), boot), UnknownCause.DEVICE_DISAPPEARED
         try:
             checks, cause = _writable_checks(handle)
         finally:
             _close(handle)
-        return (ProtectionCheck(name=CHECK_EXISTENCE, result="True"), *checks), cause
+        return (ProtectionCheck(name=CHECK_EXISTENCE, result="True"), boot, *checks), cause
 
 
 def _denied_drive(index: int, row: dict[str, Any]) -> _Drive:
@@ -331,6 +344,65 @@ def _query_dos_devices() -> set[str]:
         if kernel.GetLastError() not in (ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA) or size >= MAX_DOS_DEVICE_BUFFER:
             return set()
         size *= 2
+
+
+def _drive_of(path: str) -> str | None:
+    if len(path) >= 2 and path[1] == ":":
+        return path[:2].upper()
+    return None
+
+
+def _system_volume_letters() -> tuple[str, ...]:
+    kernel = _windll()
+    if kernel is None:
+        return ()
+    import ctypes
+
+    letters: list[str] = []
+    for query in (kernel.GetWindowsDirectoryW, kernel.GetSystemDirectoryW):
+        buffer = ctypes.create_unicode_buffer(WINDOWS_PATH_BUFFER)
+        if not query(buffer, WINDOWS_PATH_BUFFER):
+            continue
+        letter = _drive_of(buffer.value)
+        if letter is not None and letter not in letters:
+            letters.append(letter)
+    return tuple(letters)
+
+
+def _volume_disk_number(letter: str) -> int | None:
+    kernel = _windll()
+    if kernel is None:
+        return None
+    import ctypes
+
+    create_file = kernel.CreateFileW
+    create_file.restype = wintypes.HANDLE
+    kernel.SetLastError(0)
+    handle = create_file(ctypes.c_wchar_p(rf"\\.\{letter}"), 0, SHARE_MODE, None, OPEN_EXISTING, 0, None)
+    if not handle or handle == INVALID_HANDLE_VALUE:
+        return None
+    result = _device_ioctl(int(handle), IOCTL_STORAGE_GET_DEVICE_NUMBER, 0, 0, STORAGE_DEVICE_NUMBER_SIZE)
+    _close(int(handle))
+    if result is None:
+        return None
+    buffer, returned = result
+    if returned < STORAGE_DEVICE_NUMBER_SIZE:
+        return None
+    return int.from_bytes(bytes(buffer[4:8]), "little")
+
+
+def _system_volume_numbers() -> dict[str, int | None]:
+    return {letter: _volume_disk_number(letter) for letter in _system_volume_letters()}
+
+
+def _boot_disk_check(index: int) -> ProtectionCheck:
+    mapping = _system_volume_numbers()
+    hosts = sorted(letter for letter, number in mapping.items() if number == index)
+    if hosts:
+        return ProtectionCheck(name=CHECK_BOOT_DISK, result=RESULT_TRUE, detail=f"hosts {', '.join(hosts)}")
+    if mapping and all(number is not None for number in mapping.values()):
+        return ProtectionCheck(name=CHECK_BOOT_DISK, result=RESULT_FALSE)
+    return ProtectionCheck(name=CHECK_BOOT_DISK, result="unknown", detail="could not map the running system's volumes")
 
 
 def _try_open(node: str) -> tuple[int | None, int]:
@@ -509,5 +581,6 @@ def _is_writable(handle: int) -> bool | int | None:
     result = _device_ioctl(handle, IOCTL_DISK_IS_WRITABLE, 0, 0, 16)
     if result is None:
         kernel = _windll()
-        return int(kernel.GetLastError()) if kernel is not None else None
+        error = int(kernel.GetLastError()) if kernel is not None else None
+        return False if error == ERROR_WRITE_PROTECT else error
     return True

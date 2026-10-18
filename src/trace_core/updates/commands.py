@@ -5,7 +5,7 @@ import typer
 
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.output import SKIP_CONFIRM_HELP
-from trace_core.core.ui.renderers import console, render_output
+from trace_core.core.ui.renderers import console, render_output, safe_text
 from trace_core.updates.manifest import ManifestArtifact, ReleaseManifest
 
 update_app = typer.Typer(name="update", help="Check and install updates.")
@@ -87,7 +87,7 @@ def update_install(
         from trace_core.updates.checker import ensure_artifact_path, resolve_channel
         from trace_core.updates.errors import UpdateError
         from trace_core.updates.lifecycle import UpdateLifecycle
-        from trace_core.updates.renderers import UpdateProgressDisplay, render_install_summary
+        from trace_core.updates.renderers import UpdateProgressDisplay
         from trace_core.updates.stages import Stage, StageStatus
         from trace_core.updates.verifier import verify_manifest
 
@@ -95,12 +95,12 @@ def update_install(
         m, target, current, entry = load_update(manifest, artifact)
         display = UpdateProgressDisplay(current=current, target=m.version, product=m.product)
         display.begin_update()
-        bypass_note = ""
         if bypass_minimum:
             from trace_core.updates.policy import minimum_bypass_note
 
             bypass_note = minimum_bypass_note(current, m) or ""
-        render_install_summary(m, current, bypass_note)
+            if bypass_note:
+                console.print(f"[yellow]Override: {safe_text(bypass_note)}[/yellow]")
         if not yes:
             if not interactive_terminal():
                 raise UpdateError("refusing interactive install without --yes in non-interactive mode")

@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy import event as sa_event
+from textual.events import Idle
 from textual.widgets import DataTable
 from typer.testing import CliRunner
 
@@ -332,6 +333,14 @@ async def _audit_tab_on_a_long_ledger(
         yield pilot, table, seqs
 
 
+async def _wait_scrollable(pilot: Any, table: DataTable, tries: int = 40) -> None:
+    for _ in range(tries):
+        if table.max_scroll_y > 0:
+            return
+        await pilot.pause()
+    assert table.max_scroll_y > 0
+
+
 @pytest.mark.unit
 @pytest.mark.anyio
 async def test_audit_view_pages_back_through_every_event(
@@ -404,6 +413,7 @@ async def test_audit_header_reports_the_whole_matching_ledger_not_the_window(
         assert not header.rstrip().endswith(f"· {PAGE_ROWS}")
         table = app.query_one("#audit-table", DataTable)
         assert table.row_count == PAGE_ROWS
+        await _wait_scrollable(pilot, table)
         table.scroll_to(y=table.max_scroll_y, animate=False)
         await pilot.pause()
         assert table.row_count == len(seqs)
@@ -437,6 +447,7 @@ async def test_audit_view_extends_when_the_viewport_is_scrolled_not_the_cursor(
     session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async with _audit_tab_on_a_long_ledger(session_manager, monkeypatch) as (pilot, table, seqs):
+        await _wait_scrollable(pilot, table)
         cursor_before = table.cursor_row
         with _selects(session_manager) as seen:
             table.scroll_to(y=table.max_scroll_y, animate=False)
@@ -445,6 +456,31 @@ async def test_audit_view_extends_when_the_viewport_is_scrolled_not_the_cursor(
             assert table.cursor_row == cursor_before
             assert len([s for s in seen if "seq < " in s]) == 1
         assert table.vertical_scrollbar.position == table.scroll_offset.y
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_audit_view_does_not_extend_before_the_table_is_measured(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("trace_core.core.service.db_manager", session_manager)
+    original_idle = DataTable._on_idle
+
+    async def hold_dimensions(table: DataTable, event: Idle) -> None:
+        if table._require_update_dimensions:
+            return
+        await original_idle(table, event)
+
+    monkeypatch.setattr(DataTable, "_on_idle", hold_dimensions)
+    _seed(session_manager, PAGE_ROWS + 25)
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(110, 40)) as pilot:
+        await pilot.press("3")
+        for _ in range(3):
+            await pilot.pause()
+        table = app.query_one("#audit-table", DataTable)
+        assert table.row_count == PAGE_ROWS
+        assert table.max_scroll_y == 0
 
 
 @pytest.mark.unit

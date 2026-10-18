@@ -725,3 +725,19 @@ async def test_the_audit_detail_self_check_heading_matches_the_row_scope(
 
     assert "SELF-CHECK" in detail, detail
     assert "INTEGRITY" not in detail, detail
+
+
+async def test_an_error_toast_with_sqlalchemy_text_does_not_crash_the_console(
+    seeded_manager: DatabaseSessionManager,
+) -> None:
+    app = TraceApp(seeded_manager)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.notify(
+            "(psycopg.errors.RaiseException) audit_chain_state only moves forward "
+            "[SQL: UPDATE audit_chain_state SET last_seq=%(last_seq)s::INTEGER]"
+        )
+        await pilot.pause()
+        notes = list(app._notifications)
+        assert any("only moves forward" in n.message for n in notes), notes
+        assert all(n.markup is False for n in notes), notes
