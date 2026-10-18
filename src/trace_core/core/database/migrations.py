@@ -394,14 +394,18 @@ def _install_sqlite_audit_triggers(conn: Connection) -> None:
 def _verify_chain_state_protection(conn: Connection) -> bool:
     """Confirm the chain head can only move forward or be read."""
     if conn.dialect.name == "postgresql":
-        count = conn.execute(
-            text("SELECT count(*) FROM pg_trigger WHERE tgrelid = 'audit_chain_state'::regclass AND NOT tgisinternal")
-        ).scalar()
-        return (count or 0) >= 3
+        rows = conn.execute(
+            text("SELECT tgname FROM pg_trigger WHERE tgrelid = 'audit_chain_state'::regclass AND NOT tgisinternal")
+        ).fetchall()
+        names = {r[0] for r in rows}
+        expected = {"audit_chain_state_no_delete", "audit_chain_state_no_truncate", "audit_chain_state_no_rollback"}
+        return expected <= names and "audit_chain_state_no_update_delete" not in names
     rows = conn.execute(
         text("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'audit_chain_state'")
     ).fetchall()
-    return {"audit_chain_state_no_delete", "audit_chain_state_no_rollback"} <= {r[0] for r in rows}
+    names = {r[0] for r in rows}
+    expected = {"audit_chain_state_no_delete", "audit_chain_state_no_rollback"}
+    return expected <= names and "audit_chain_state_no_update_delete" not in names
 
 
 def _install_pg_chain_state_trigger(conn: Connection) -> None:
@@ -414,6 +418,7 @@ def _install_pg_chain_state_trigger(conn: Connection) -> None:
             "BEGIN RAISE EXCEPTION 'audit_chain_state only moves forward'; END; $$ LANGUAGE plpgsql"
         )
     )
+    conn.execute(text("DROP TRIGGER IF EXISTS audit_chain_state_no_update_delete ON audit_chain_state"))
     conn.execute(text("DROP TRIGGER IF EXISTS audit_chain_state_no_delete ON audit_chain_state"))
     conn.execute(
         text(
@@ -445,6 +450,7 @@ def _install_sqlite_chain_state_triggers(conn: Connection) -> None:
     if conn.dialect.name != "sqlite":
         return
     for ddl in (
+        "DROP TRIGGER IF EXISTS audit_chain_state_no_update_delete",
         "DROP TRIGGER IF EXISTS audit_chain_state_no_delete",
         "DROP TRIGGER IF EXISTS audit_chain_state_no_rollback",
         "CREATE TRIGGER audit_chain_state_no_delete BEFORE DELETE ON audit_chain_state "

@@ -20,6 +20,7 @@ from trace_core.cases.service import CaseService
 from trace_core.core.canonical import canonical_json_str
 from trace_core.core.database.migrations import (
     _verify_008_audit_protection,
+    apply_migrations,
     get_applied_migrations,
     get_table_names,
 )
@@ -337,6 +338,47 @@ def test_postgres_chain_state_only_advances(pg_session_manager: DatabaseSessionM
     finally:
         service.delete_case(created, purge=False)
         service.delete_case(created, purge=True)
+
+
+def test_postgres_legacy_unconditional_chain_trigger_is_decommissioned(
+    pg_session_manager: DatabaseSessionManager,
+) -> None:
+    with pg_session_manager.engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TRIGGER audit_chain_state_no_update_delete BEFORE DELETE OR UPDATE "
+                "ON audit_chain_state FOR EACH ROW EXECUTE FUNCTION audit_chain_state_block_write()"
+            )
+        )
+    with pytest.raises(DBAPIError):
+        with pg_session_manager.engine.begin() as conn:
+            conn.execute(text("UPDATE audit_chain_state SET last_seq = last_seq + 1 WHERE id = 1"))
+
+    apply_migrations(pg_session_manager.engine)
+
+    with pg_session_manager.engine.connect() as conn:
+        names = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT tgname FROM pg_trigger WHERE tgrelid = 'audit_chain_state'::regclass AND NOT tgisinternal")
+            ).fetchall()
+        }
+    assert "audit_chain_state_no_update_delete" not in names
+    assert {
+        "audit_chain_state_no_delete",
+        "audit_chain_state_no_truncate",
+        "audit_chain_state_no_rollback",
+    } <= names
+
+    healed = _seed_ledger_row(pg_session_manager, "LegacyHealed")
+    try:
+        with pg_session_manager.session() as session:
+            with pytest.raises(DBAPIError):
+                _attempt_tamper_write(session, "UPDATE audit_chain_state SET last_seq = last_seq - 1 WHERE id = 1")
+            session.rollback()
+    finally:
+        CaseService(pg_session_manager).delete_case(healed, purge=False)
+        CaseService(pg_session_manager).delete_case(healed, purge=True)
 
 
 def test_postgres_chain_head_rewrite_is_caught_by_the_tail_binding(

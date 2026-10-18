@@ -3,6 +3,7 @@
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.notifications import SeverityLevel
 from textual.widgets import Static, TabbedContent, TabPane
 
 from trace_core.core.database.session import DatabaseSessionManager
@@ -108,6 +109,17 @@ class TraceApp(App[None]):
     def session_manager(self) -> DatabaseSessionManager | None:
         """Injected manager (tests) or None for the shared global. Passed to every view."""
         return self._session_manager
+
+    def notify(
+        self,
+        message: str,
+        *,
+        title: str = "",
+        severity: SeverityLevel = "information",
+        timeout: float | None = None,
+        markup: bool = False,
+    ) -> None:
+        super().notify(message, title=title, severity=severity, timeout=timeout, markup=markup)
 
     def compose(self) -> ComposeResult:
         from trace_core.tui.screens.audit import AuditView
