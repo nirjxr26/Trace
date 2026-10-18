@@ -121,22 +121,14 @@ def test_check_card_up_to_date(capsys):
     assert "0.2.3" in out
 
 
-def test_install_summary_hides_trust_details(capsys, signed_release):
-    from trace_core.updates.renderers import render_install_summary
+def test_the_install_header_is_updating_trace_dots_with_space_around_it(capsys):
+    from trace_core.updates.renderers import UpdateProgressDisplay
 
-    manifest, _, _, _ = signed_release()
-    render_install_summary(manifest, "0.2.3", "")
+    display = UpdateProgressDisplay(current="0.2.3", target="0.2.4")
+    display.tty = False
+    display.begin_update()
     out = capsys.readouterr().out
-    assert "Product: trace" in out
-    assert "Current: v0.2.3" in out
-    assert "Signature" not in out
-    assert "TRUSTED" not in out
-    assert "sha256" not in out.lower()
-    assert manifest.signing_key_id not in out
-    # The target version and the step list are the live region's job; stating either here
-    # too put both on screen three times over.
-    assert f"Target:  v{manifest.version}" not in out
-    assert "Steps: download" not in out
+    assert out == "\nUpdating Trace...\n\n"
 
 
 def test_finish_success_frame(capsys):
@@ -313,14 +305,16 @@ def test_the_spinner_uses_theme_colours_and_not_the_widget_default():
     assert renderers.SHIMMER_HIGHLIGHT == renderers.THEME_HEX["title"]
 
     display = _tty_display()
-    message = display._spinner.get_component("message")
+    spinner = display._spinner
+    assert spinner is not None
+    message = spinner.get_component("message")
     assert message.color == renderers.DIM
     assert message.shimmer_light_color == renderers.SHIMMER_HIGHLIGHT
     assert message.shimmer_light_color != "#FFA500"
     assert message.shimmer_width == renderers.SHIMMER_WIDTH
     assert message.shimmer_speed == renderers.SHIMMER_SPEED
     assert renderers.SHIMMER_SPEED >= 1.0, "the sweep was slowed down and asked to stay fast"
-    assert display._spinner.get_component("spinner").color == renderers.DIM
+    assert spinner.get_component("spinner").color == renderers.DIM
     display.close()
 
 
