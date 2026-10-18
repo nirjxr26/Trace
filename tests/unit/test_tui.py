@@ -1,10 +1,14 @@
 """Pilot tests for the fullscreen console: mount, navigate, dossier, verify, db."""
 
 import json
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import pytest
 from rich.text import Text
+from textual.pilot import Pilot
 from textual.widgets import DataTable
 
 from trace_core.cases.dto import CaseCreateDto
@@ -497,9 +501,10 @@ async def test_background_tabs_skip_mount_fetch(session_manager, monkeypatch) ->
         assert counts.get("SettingsView", 0) >= 1, "settings tab blank after visit"
 
 
-async def test_a_refused_archive_reports_failure_instead_of_success(
+@asynccontextmanager
+async def _refused_case_delete_app(
     seeded_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
-) -> None:
+) -> AsyncGenerator[tuple[Any, Pilot, list[tuple[str, dict]]], None]:
     from trace_core.cases.service import CaseService
     from trace_core.tui.screens.cases import CasesView
 
@@ -510,6 +515,13 @@ async def test_a_refused_archive_reports_failure_instead_of_success(
         monkeypatch.setattr(CaseService, "delete_case", lambda self, *args, **kwargs: False)
         notices: list[tuple[str, dict]] = []
         monkeypatch.setattr(app, "notify", lambda message, **kwargs: notices.append((message, kwargs)))
+        yield view, pilot, notices
+
+
+async def test_a_refused_archive_reports_failure_instead_of_success(
+    seeded_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with _refused_case_delete_app(seeded_manager, monkeypatch) as (view, pilot, notices):
         view._archived("2026-CR-0001")
         await pilot.pause()
 
@@ -520,16 +532,7 @@ async def test_a_refused_archive_reports_failure_instead_of_success(
 async def test_a_refused_purge_reports_failure_instead_of_success(
     seeded_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from trace_core.cases.service import CaseService
-    from trace_core.tui.screens.cases import CasesView
-
-    app = TraceApp(seeded_manager)
-    async with app.run_test(size=(110, 30)) as pilot:
-        await pilot.pause()
-        view = app.query_one(CasesView)
-        monkeypatch.setattr(CaseService, "delete_case", lambda self, *args, **kwargs: False)
-        notices: list[tuple[str, dict]] = []
-        monkeypatch.setattr(app, "notify", lambda message, **kwargs: notices.append((message, kwargs)))
+    async with _refused_case_delete_app(seeded_manager, monkeypatch) as (view, pilot, notices):
         view._purged("2026-CR-0001")
         await pilot.pause()
 
@@ -555,14 +558,12 @@ async def test_review_moves_and_returns_the_case(seeded_manager: DatabaseSession
         assert CaseService(seeded_manager).get_case("2026-CR-0001").status is CaseStatus.OPEN
 
 
-async def test_the_audit_pane_marks_an_unreadable_payload(
-    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from textual.widgets import Static
-
+@asynccontextmanager
+async def _audit_tab_with_one_event(
+    session_manager: DatabaseSessionManager,
+) -> AsyncGenerator[tuple[TraceApp, Pilot], None]:
     from trace_core.audit.domain import AuditAction
     from trace_core.audit.repository import SqlAlchemyAuditRepository
-    from trace_core.tui.screens.audit import AuditView
 
     with session_manager.session() as session:
         SqlAlchemyAuditRepository(session).append(
@@ -574,10 +575,25 @@ async def test_the_audit_pane_marks_an_unreadable_payload(
     async with app.run_test(size=(120, 32)) as pilot:
         await pilot.press("3")
         await pilot.pause()
+        yield app, pilot
+
+
+async def _audit_detail(app: TraceApp, pilot: Pilot) -> str:
+    from textual.widgets import Static
+
+    from trace_core.tui.screens.audit import AuditView
+
+    app.query_one(AuditView).render_detail()
+    await pilot.pause()
+    return _text(app.query_one("#audit-detail", Static))
+
+
+async def test_the_audit_pane_marks_an_unreadable_payload(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with _audit_tab_with_one_event(session_manager) as (app, pilot):
         monkeypatch.setattr("trace_core.tui.screens.audit.parse_details", lambda payload: None)
-        app.query_one(AuditView).render_detail()
-        await pilot.pause()
-        detail = _text(app.query_one("#audit-detail", Static))
+        detail = await _audit_detail(app, pilot)
 
     assert "unreadable — details cannot be shown" in detail, detail
 
@@ -704,25 +720,8 @@ async def test_the_cases_dossier_self_check_heading_is_not_a_ledger_verdict(
 async def test_the_audit_detail_self_check_heading_matches_the_row_scope(
     session_manager: DatabaseSessionManager,
 ) -> None:
-    from textual.widgets import Static
-
-    from trace_core.audit.domain import AuditAction
-    from trace_core.audit.repository import SqlAlchemyAuditRepository
-    from trace_core.tui.screens.audit import AuditView
-
-    with session_manager.session() as session:
-        SqlAlchemyAuditRepository(session).append(
-            AuditAction.CASE_CREATED, "Ex", "2026-CR-0001", None, {}, subject_type="case"
-        )
-        session.commit()
-
-    app = TraceApp(session_manager)
-    async with app.run_test(size=(120, 32)) as pilot:
-        await pilot.press("3")
-        await pilot.pause()
-        app.query_one(AuditView).render_detail()
-        await pilot.pause()
-        detail = _text(app.query_one("#audit-detail", Static))
+    async with _audit_tab_with_one_event(session_manager) as (app, pilot):
+        detail = await _audit_detail(app, pilot)
 
     assert "SELF-CHECK" in detail, detail
     assert "INTEGRITY" not in detail, detail

@@ -40,7 +40,8 @@ def test_settings_storage_error_logging() -> None:
     with patch("pathlib.Path.mkdir", side_effect=OSError("Permission denied")):
         with patch("trace_core.core.settings.logger.warning") as mock_warning:
             Settings()
-            mock_warning.assert_called_once()
+            storage_warnings = [call for call in mock_warning.call_args_list if "storage" in str(call)]
+            assert len(storage_warnings) == 1, storage_warnings
 
 
 def test_a_stray_dot_env_in_another_directory_is_not_loaded(monkeypatch, tmp_path) -> None:
