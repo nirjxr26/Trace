@@ -18,6 +18,7 @@ MIN_PYTHON = (3, 12)
 NO_CONNECTION = "no connection"
 RECORDS_NAME = "Records"
 PROTECTED_NAME = "Records protected"
+SIGNING_KEY_NAME = "Signing key"
 DATABASE_CHECKS = ("Migrations", RECORDS_NAME, PROTECTED_NAME)
 
 
@@ -56,14 +57,22 @@ def _storage_check(*, probe: bool = True) -> tuple[str, str, bool]:
 
 
 def _signing_key_check() -> tuple[str, str, bool]:
-    """Signing key resolvable. False when the placeholder is active — records then
-    cannot be verified, which is a worse outcome than a plain offline database because
-    `audit verify` would otherwise report tampering."""
-    from trace_core.audit.signing import is_default_key
+    """Signing key resolvable. False when the placeholder is active and no key can be
+    generated — records then cannot be verified, which is a worse outcome than a plain
+    offline database because `audit verify` would otherwise report tampering."""
+    from trace_core.audit.signing import (
+        HMAC_KEY_ID,
+        active_key_id,
+        ensure_first_run_key,
+        is_default_key,
+    )
 
-    if is_default_key():
-        return ("Signing key", "not set — your records can't be verified", False)
-    return ("Signing key", "set", True)
+    if active_key_id() == HMAC_KEY_ID and is_default_key():
+        generated = ensure_first_run_key()
+        if generated is None:
+            return (SIGNING_KEY_NAME, "not set — your records can't be verified", False)
+        return (SIGNING_KEY_NAME, f"set — generated {generated}", True)
+    return (SIGNING_KEY_NAME, "set", True)
 
 
 def _ledger_check(manager: DatabaseSessionManager) -> tuple[str, str, bool]:
@@ -76,6 +85,9 @@ def _ledger_check(manager: DatabaseSessionManager) -> tuple[str, str, bool]:
         return (RECORDS_NAME, f"problem at record {res.first_mismatch_seq} ({res.mismatch_type})", False)
     if not res.events_verified:
         return (RECORDS_NAME, "no records yet", True)
+    if res.sequence_gaps:
+        gaps = ", ".join(str(g) for g in res.sequence_gaps)
+        return (RECORDS_NAME, f"{res.events_verified} records, sequence gaps at {gaps}", True)
     return (RECORDS_NAME, f"{res.events_verified} records, all linking correctly", True)
 
 

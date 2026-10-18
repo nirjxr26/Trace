@@ -7,6 +7,7 @@ from trace_core.core.cli.exit_codes import EXIT_SUCCESS
 from trace_core.core.cli.output import OUTPUT_HELP
 from trace_core.core.ui.renderers import confirm_typed_number, console, render_success, sanitize_terminal
 from trace_core.devices.helpers import (
+    OVERRIDE_TOKEN,
     do_check,
     do_history,
     do_inspect,
@@ -15,8 +16,6 @@ from trace_core.devices.helpers import (
     do_unlink,
 )
 from trace_core.devices.renderers import render_devices, render_gate, render_history, render_inspection
-
-_OVERRIDE_TOKEN = "UNVERIFIED"
 
 
 def confirm_override() -> bool:
@@ -27,7 +26,7 @@ def confirm_override() -> bool:
     on one surface: an operator who used the shell could manufacture trust over
     unverified evidence without typing anything.
     """
-    return confirm_typed_number(_OVERRIDE_TOKEN, "accepting an unverified source")
+    return confirm_typed_number(OVERRIDE_TOKEN, "accepting an unverified source")
 
 
 device_app = typer.Typer(
@@ -54,11 +53,12 @@ def inspect_device(
         False,
         "--physical",
         "--allow-real-hardware",
+        "--real",
         help="Required before touching a physical device; never implied by the adapter",
     ),
     output: str = typer.Option("table", "--output", "-o", help=OUTPUT_HELP),
 ) -> None:
-    """Capture a device fingerprint and record it in the signed ledger."""
+    """Capture a device identity and record it in the signed ledger."""
     with capture_cli_errors("Device Inspection Failed"):
         from trace_core.devices.helpers import do_node_case_numbers
 
@@ -76,11 +76,13 @@ def check_device(
         False,
         "--physical",
         "--allow-real-hardware",
+        "--real",
         help="Required before touching a physical device; never implied by the adapter",
     ),
     acknowledge_unverified_source: bool = typer.Option(
         False,
         "--acknowledge-unverified-source",
+        "--ack-unverified",
         help="Proceed past UNKNOWN only. A writable source is never overridable",
     ),
     assume_yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),

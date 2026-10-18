@@ -6,12 +6,12 @@ from trace_core.core.cli.shell_base import BaseShellHandler
 
 _ACTIONS = frozenset({"list", "ls", "inspect", "check", "link", "unlink", "history", "export", "help"})
 _ACK_FLAGS = ("--acknowledge-unverified-source", "--ack-unverified")
-_PHYSICAL_FLAGS = ("--physical", "--allow-real-hardware")
+_PHYSICAL_FLAGS = ("--physical", "--allow-real-hardware", "--real")
 _LIST_DEVICES_HELP = "List devices this adapter can see"
 _ACTION_HELP = (
     ("list", _LIST_DEVICES_HELP),
     ("ls", _LIST_DEVICES_HELP),
-    ("inspect", "Capture a fingerprint and record it"),
+    ("inspect", "Capture the device identity and record it"),
     ("check", "Verify write protection"),
     ("history", "Show prior observations of one device"),
     ("link", "File a device under a case"),
@@ -66,72 +66,86 @@ class DeviceShellCommandHandler(BaseShellHandler):
             return self._dispatch(act, args, parse_output_format)
 
     def _dispatch(self, act: str, args: list[str], parse_output) -> bool:  # type: ignore[no-untyped-def]
-        from trace_core.core.ui.renderers import render_success, sanitize_terminal
-        from trace_core.devices.helpers import do_check, do_history, do_inspect, do_link, do_list, do_unlink
-        from trace_core.devices.renderers import render_devices, render_gate, render_history, render_inspection
+        from trace_core.devices.helpers import do_list
+        from trace_core.devices.renderers import render_devices
 
         output = parse_output(args)
         if act in ("list", "ls"):
             render_devices(do_list(None, _flag(args, "--kind", "-k") or "all", audit_recognition=True), output=output)
             return True
-
         if act == "export":
             return self._export(args)
-
         if act == "history":
-            serial = _first_positional(args)
-            if serial is None:
-                self.unknown_action(act, "device history needs a device serial. Try `device help`.")
-                return False
-            render_history(do_history(None, serial, _positive_int(_flag(args, "--limit", "-n"), 10)), output=output)
-            return True
+            return self._history(args, output)
 
         node = _first_positional(args)
         if node is None:
             self.unknown_action(act, f"device {act} needs a device node. Try `device help`.")
             return False
-
         if act in ("link", "unlink"):
-            case_number = _flag(args, "--case")
-            if not case_number:
-                self.unknown_action(act, f"device {act} needs --case CASE_NUMBER.")
-                return False
-            if act == "link":
-                link = do_link(None, node, case_number, label=_flag(args, "--label") or None)
-                render_success(f"Filed {sanitize_terminal(link.node)} under {link.case_number}.")
-            else:
-                do_unlink(None, node, case_number)
-                render_success(f"Removed {sanitize_terminal(node)} from {case_number}.")
-            return True
+            return self._link(act, args, node)
+        if act == "inspect":
+            return self._inspect(args, node, output)
+        return self._check(args, node, output)
+
+    def _history(self, args: list[str], output: str) -> bool:
+        from trace_core.devices.helpers import do_history
+        from trace_core.devices.renderers import render_history
+
+        serial = _first_positional(args)
+        if serial is None:
+            self.unknown_action("history", "device history needs a device serial. Try `device help`.")
+            return False
+        render_history(do_history(None, serial, _positive_int(_flag(args, "--limit", "-n"), 10)), output=output)
+        return True
+
+    def _link(self, act: str, args: list[str], node: str) -> bool:
+        from trace_core.core.ui.renderers import render_success, sanitize_terminal
+        from trace_core.devices.helpers import do_link, do_unlink
+
+        case_number = _flag(args, "--case")
+        if not case_number:
+            self.unknown_action(act, f"device {act} needs --case CASE_NUMBER.")
+            return False
+        if act == "link":
+            link = do_link(None, node, case_number, label=_flag(args, "--label") or None)
+            render_success(f"Filed {sanitize_terminal(link.node)} under {link.case_number}.")
+        else:
+            do_unlink(None, node, case_number)
+            render_success(f"Removed {sanitize_terminal(node)} from {case_number}.")
+        return True
+
+    def _inspect(self, args: list[str], node: str, output: str) -> bool:
+        from trace_core.devices.helpers import do_inspect, do_node_case_numbers
+        from trace_core.devices.renderers import render_inspection
 
         real = any(flag in args for flag in _PHYSICAL_FLAGS)
-        if act == "inspect":
-            from trace_core.devices.helpers import do_node_case_numbers
-
-            render_inspection(
-                do_inspect(None, node, allow_real_hardware=real),
-                output=output,
-                case_numbers=do_node_case_numbers(None, node),
-            )
-            return True
-
-        acknowledged = any(flag in args for flag in _ACK_FLAGS)
-        if acknowledged and "--yes" not in args and "-y" not in args:
-            from trace_core.devices.commands import confirm_override
-
-            if not confirm_override():
-                return True
-
-        render_gate(
-            do_check(
-                None,
-                node,
-                allow_real_hardware=real,
-                acknowledge_unverified_source=acknowledged,
-                override_reason=_flag(args, "--reason") or "",
-            ),
+        render_inspection(
+            do_inspect(None, node, allow_real_hardware=real),
             output=output,
+            case_numbers=do_node_case_numbers(None, node),
         )
+        return True
+
+    def _check(self, args: list[str], node: str, output: str) -> bool:
+        from trace_core.devices.commands import confirm_override
+        from trace_core.devices.helpers import do_check
+        from trace_core.devices.renderers import render_gate
+
+        real = any(flag in args for flag in _PHYSICAL_FLAGS)
+        acknowledged = any(flag in args for flag in _ACK_FLAGS)
+        needs_consent = acknowledged and "--yes" not in args and "-y" not in args
+        if not needs_consent or confirm_override():
+            render_gate(
+                do_check(
+                    None,
+                    node,
+                    allow_real_hardware=real,
+                    acknowledge_unverified_source=acknowledged,
+                    override_reason=_flag(args, "--reason") or "",
+                ),
+                output=output,
+            )
         return True
 
     def _export(self, args: list[str]) -> bool:
@@ -185,7 +199,7 @@ class DeviceShellCommandHandler(BaseShellHandler):
         return [
             ("device list", "", _LIST_DEVICES_HELP),
             ("device list --kind os", "", "List only real-hardware nodes"),
-            ("device inspect <node>", "", "Capture a fingerprint and record it"),
+            ("device inspect <node>", "", "Capture the device identity and record it"),
             ("device inspect <node> --case <case>", "", "File the observation under a case"),
             ("device check <node>", "", "Verify write protection; aborts when writable"),
             ("device check --ack-unverified <node>", "", "Proceed past UNKNOWN (records an override)"),

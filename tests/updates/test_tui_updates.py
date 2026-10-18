@@ -265,3 +265,139 @@ async def test_db_snapshot_fetch_runs_once_per_visit(session_manager, monkeypatc
         await pilot.pause()
         assert calls == base + 1, f"repaint re-snapshotted: {calls} vs {base}"
         assert "Migration complete" in _text(app.query_one("#settings-detail", Static))
+
+
+async def test_updates_section_without_a_cache_never_claims_up_to_date(
+    session_manager: DatabaseSessionManager, temp_storage_root
+) -> None:
+    from textual.widgets import Static
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await _goto_settings_updates(pilot, app)
+        detail = _text(app.query_one("#settings-detail", Static))
+        assert "You're up to date" not in detail
+        assert "No recent check result" in detail
+        assert "Press c to check for updates" in detail
+
+
+async def test_fresh_cached_result_still_reads_up_to_date(
+    session_manager: DatabaseSessionManager, temp_storage_root
+) -> None:
+    from textual.widgets import Static
+
+    from trace_core.updates.cache import write_check_cache
+
+    write_check_cache({"manifest_path": "m", "channel": "stable", "payload": {"current": "0.3.2", "available": False}})
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await _goto_settings_updates(pilot, app)
+        detail = _text(app.query_one("#settings-detail", Static))
+        assert "You're up to date" in detail
+        assert "No recent check result" not in detail
+
+
+async def test_refresh_drops_a_removed_check_cache(session_manager: DatabaseSessionManager, temp_storage_root) -> None:
+    from textual.widgets import Static
+
+    from trace_core.tui.screens.settings import SettingsView
+    from trace_core.updates.cache import cache_path, write_check_cache
+
+    write_check_cache({"manifest_path": "m", "channel": "stable", "payload": {"current": "0.3.2", "available": False}})
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await _goto_settings_updates(pilot, app)
+        assert "You're up to date" in _text(app.query_one("#settings-detail", Static))
+        cache_path().unlink()
+        app.query_one(SettingsView).refresh_data()
+        await pilot.pause()
+        detail = _text(app.query_one("#settings-detail", Static))
+        assert "You're up to date" not in detail
+        assert "No recent check result" in detail
+
+
+async def test_a_failing_section_renderer_names_itself(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from textual.widgets import ListView, Static
+
+    from trace_core.tui.screens.settings import SettingsView
+
+    def _boom(self, body, width):  # type: ignore[no-untyped-def]
+        raise ValueError("renderer exploded")
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await pilot.press("4")
+        await pilot.pause()
+        monkeypatch.setattr(SettingsView, "_updates_body", _boom)
+        app.query_one("#settings-sections", ListView).focus()
+        await pilot.press("down")
+        detail = _text(app.query_one("#settings-detail", Static))
+        for _ in range(5):
+            await pilot.pause()
+            detail = _text(app.query_one("#settings-detail", Static))
+            if "Could not render" in detail:
+                break
+    assert "Could not render this section (renderer exploded)" in detail
+    assert "Version unavailable" not in detail
+
+
+async def test_a_second_check_press_while_running_is_ignored(
+    session_manager: DatabaseSessionManager, monkeypatch
+) -> None:
+    from trace_core.tui.screens.settings import SettingsView
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await _goto_settings_updates(pilot, app)
+        view = app.query_one(SettingsView)
+        calls = 0
+
+        def fake_live_check():  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            return ("1.0", "1.0", "current", "")
+
+        monkeypatch.setattr(view, "_live_check", fake_live_check)
+        view.action_check()
+        view.action_check()
+        for _ in range(60):
+            await pilot.pause(0.05)
+            if not view._checking:
+                break
+        assert not view._checking, "the check worker never finished"
+        assert calls == 1, f"a double press ran {calls} live checks"
+
+
+async def test_integrity_names_a_key_problem_and_not_tampering(
+    session_manager: DatabaseSessionManager, monkeypatch
+) -> None:
+    """F-03: a ledger that cannot be authenticated must not read as an edited one."""
+    from textual.widgets import Static
+
+    from trace_core.audit.dto import VerifyResultDto
+    from trace_core.audit.service import AuditService
+
+    for mismatch_type in ("signing_key", "insecure_key"):
+        monkeypatch.setattr(
+            AuditService,
+            "verify",
+            lambda self, mt=mismatch_type: VerifyResultDto(
+                is_valid=False, events_verified=1, first_mismatch_seq=1, mismatch_type=mt
+            ),
+        )
+        app = TraceApp(session_manager)
+        async with app.run_test() as pilot:
+            await _goto_settings_updates(pilot, app)
+            detail = app.query_one("#settings-detail", Static)
+            for _ in range(20):
+                if "SIGNING KEY PROBLEM" in _text(detail):
+                    break
+                await pilot.press("down")
+                await pilot.pause()
+            text = _text(detail)
+            assert "SIGNING KEY PROBLEM" in text, text
+            assert "TAMPER DETECTED" not in text, text
+            if mismatch_type == "insecure_key":
+                assert "shipped development key" in text, text

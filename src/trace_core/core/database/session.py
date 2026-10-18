@@ -25,11 +25,14 @@ def create_db_engine(database_url: str | None = None) -> Engine:
         connect_args["check_same_thread"] = False
         engine = create_engine(url, connect_args=connect_args, **engine_kwargs)
 
-        # Enable WAL mode and foreign keys for SQLite
+        # SQLite connection settings: WAL journaling, busy timeout, transaction
+        # isolation, and foreign keys.
         @event.listens_for(engine, "connect")
         def set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:
+            dbapi_connection.isolation_level = "IMMEDIATE"
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=30000")
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
 

@@ -14,7 +14,7 @@ from trace_core.audit import signing as audit_signing
 from trace_core.audit import verifier as audit_verifier
 from trace_core.cases import domain as cases_domain
 from trace_core.cases import service as cases_service
-from trace_core.core.cli.exit_codes import EXIT_ERROR
+from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_SUCCESS
 from trace_core.core.domain import InvariantViolationError
 from trace_core.core.ui.renderers import console
 from trace_core.tui import widgets as tui_widgets
@@ -79,7 +79,7 @@ def test_update_lifecycle_record_fills_the_invariant_fields() -> None:
 
 def test_case_service_audit_hooks_are_built_by_one_factory() -> None:
     src = _source(cases_service)
-    assert src.count("_audit_hook(") == 8, "5 builder sites plus 3 uses inside the two factories"
+    assert src.count("_audit_hook(") == 9, "6 builder sites plus 3 uses inside the two factories"
     assert src.count("def _audit_hook(") == 1, "exactly one factory definition"
     assert src.count("def _close_audit_hook(") == 1, "the close hook factory is defined once"
     built: tuple[Any, Any, dict[str, Any], Any] = ("ACTION", object(), {}, object())
@@ -395,3 +395,76 @@ def test_uninstall_reports_a_failure_instead_of_printing_nothing(tmp_path, monke
     assert code == EXIT_ERROR
     assert "Couldn't remove" in out, out
     assert "install" in out, out
+
+
+def test_purge_data_removes_storage_and_trust_not_just_the_app(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.cli import uninstall
+
+    home = tmp_path / "home"
+    for target in ("app", "install", "releases", "backups", "storage", "trust"):
+        (home / ".trace" / target).mkdir(parents=True)
+    monkeypatch.setattr(uninstall, "_trace_root", lambda: home / ".trace")
+    monkeypatch.setattr(uninstall, "_shim_paths", lambda: [])
+
+    code = uninstall.run_uninstall(purge_data=True)
+
+    assert code == EXIT_SUCCESS
+    root = home / ".trace"
+    assert not (root / "storage").exists(), "purge must delete the evidence tree"
+    assert not (root / "trust").exists(), "purge must delete the signing keys"
+    assert not (root / "app").exists()
+
+
+def test_plain_uninstall_keeps_storage_and_trust(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.cli import uninstall
+
+    home = tmp_path / "home"
+    for target in ("app", "install", "storage", "trust"):
+        (home / ".trace" / target).mkdir(parents=True)
+    monkeypatch.setattr(uninstall, "_trace_root", lambda: home / ".trace")
+    monkeypatch.setattr(uninstall, "_shim_paths", lambda: [])
+
+    code = uninstall.run_uninstall(purge_data=False)
+
+    assert code == EXIT_SUCCESS
+    root = home / ".trace"
+    assert (root / "storage").is_dir(), "a plain uninstall must keep the evidence tree"
+    assert (root / "trust").is_dir(), "a plain uninstall must keep the signing keys"
+    assert not (root / "app").exists()
+
+
+def test_a_blocked_purge_target_is_reported_and_keeps_the_launcher(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Partial failure during a purge must be loud, keep the launcher, and still attempt the rest."""
+    from trace_core.core.cli import uninstall
+
+    home = tmp_path / "home"
+    storage = home / ".trace" / "storage"
+    storage.mkdir(parents=True)
+    trust = home / ".trace" / "trust"
+    trust.mkdir(parents=True)
+    (home / ".trace" / "app").mkdir(parents=True)
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    shim = bin_dir / "trace"
+    shim.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(uninstall, "_trace_root", lambda: home / ".trace")
+    monkeypatch.setattr(uninstall, "_shim_paths", lambda: [shim])
+
+    real_remove = uninstall._remove
+
+    def _locked_storage(path):
+        if path.name == "storage":
+            return False
+        return real_remove(path)
+
+    monkeypatch.setattr(uninstall, "_remove", _locked_storage)
+    with console.capture() as capture:
+        code = uninstall.run_uninstall(purge_data=True)
+    out = capture.get()
+
+    assert code == EXIT_ERROR
+    assert "Couldn't remove" in out, out
+    assert "storage" in out, out
+    assert shim.exists(), "the launcher must survive a partial purge"
+    assert storage.exists()
+    assert not trust.exists(), "a blocked storage must not skip the remaining purge target"

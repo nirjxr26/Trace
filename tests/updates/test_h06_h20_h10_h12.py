@@ -185,6 +185,20 @@ def test_h21_root_is_not_resolved_before_comparison(tmp_path) -> None:  # type: 
     assert "Path(root).resolve()" not in src
 
 
+def test_check_contained_refuses_a_symlinked_root(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.fs import check_contained
+
+    trust = tmp_path / "trust"
+    trust.mkdir()
+    shim = tmp_path / "shim"
+    try:
+        shim.symlink_to(trust, target_is_directory=True)
+    except OSError:
+        pytest.skip("host cannot create symlinks (Windows: needs elevation or Developer Mode)")
+    with pytest.raises(ValueError, match="escaping storage root"):
+        check_contained(shim / "key.pub", shim)
+
+
 def test_h52_lock_open_refuses_symlinks() -> None:
     import inspect
 

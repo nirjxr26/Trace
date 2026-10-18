@@ -117,6 +117,18 @@ def test_inspect_reads_nothing_but_calls_smartctl_once(monkeypatch: pytest.Monke
     assert seen[0][:3] == ["smartctl", "-d", "sat"]
 
 
+def test_a_synthesized_serial_is_never_reported_as_an_os_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = linux.LinuxDevice(dev_root=str(Path("/nonexistent-root")))
+    monkeypatch.setattr(adapter, "_exists", lambda name: True)
+    monkeypatch.setattr(linux, "_sysfs_value", lambda name, key: {"transport": "sata"}.get(key))
+    monkeypatch.setattr(linux, "lsblk_json", lambda: {})
+    monkeypatch.setattr(linux, "smartctl_readiness", lambda: UnknownCause.TOOL_MISSING)
+
+    inspection = adapter.inspect(_device("sda"))
+    assert inspection.fingerprint.serial.value.startswith("SYNTH-")
+    assert inspection.fingerprint.source == "synthetic"
+
+
 def test_smartctl_device_type_comes_only_from_a_closed_map(monkeypatch: pytest.MonkeyPatch) -> None:
     """[D20] `-d` is derived from transport, never from serial or model bytes."""
     adapter = linux.LinuxDevice()
@@ -180,7 +192,10 @@ def test_native_serial_falls_back_through_sysfs_then_marks_absence(monkeypatch: 
     assert adapter.inspect(_device("sda")).fingerprint.serial.value == "SYSFS1"
 
     monkeypatch.setattr(linux, "_sysfs_value", lambda name, key: None)
-    assert adapter.inspect(_device("sda")).fingerprint.serial.value == absent_serial("/dev/sda")
+    device = _device("sda")
+    assert adapter.inspect(device).fingerprint.serial.value == absent_serial(
+        "/dev/sda", size_bytes=device.size_bytes, model=device.model_hint
+    )
 
 
 def test_two_serialless_disks_at_different_nodes_do_not_collide() -> None:
@@ -189,6 +204,19 @@ def test_two_serialless_disks_at_different_nodes_do_not_collide() -> None:
     second = absent_serial("/dev/sdc")
     assert first != second
     assert first.startswith("SYNTH-")
+
+
+def test_a_swapped_serialless_disk_at_the_same_node_changes_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = linux.LinuxDevice()
+    monkeypatch.setattr(adapter, "_exists", lambda name: True)
+    monkeypatch.setattr(linux.LinuxDevice, "_entry", lambda self, name: {})
+    monkeypatch.setattr(linux, "_sysfs_value", lambda name, key: None)
+    monkeypatch.setattr(linux, "smartctl_readiness", lambda: UnknownCause.TOOL_MISSING)
+
+    first = adapter.inspect(_device("sda", size_bytes=1024)).fingerprint.serial.value
+    second = adapter.inspect(_device("sda", size_bytes=2048)).fingerprint.serial.value
+    assert first != second
+    assert first == absent_serial("/dev/sda", size_bytes=1024)
 
 
 def test_sysfs_fallback_points_at_a_real_kernel_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -221,10 +249,11 @@ def test_missing_lsblk_row_degrades_without_guessing(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(linux.LinuxDevice, "_entry", lambda self, name: {})
     monkeypatch.setattr(linux, "_sysfs_value", lambda name, key: None)
     monkeypatch.setattr(linux, "smartctl_readiness", lambda: UnknownCause.TOOL_MISSING)
-    fingerprint = adapter.inspect(_device("sda")).fingerprint
-    assert fingerprint.serial.value == absent_serial("/dev/sda")
+    device = _device("sda")
+    fingerprint = adapter.inspect(device).fingerprint
+    assert fingerprint.serial.value == absent_serial("/dev/sda", size_bytes=device.size_bytes, model=device.model_hint)
     assert fingerprint.interface is linux.DeviceInterface.UNKNOWN
-    assert fingerprint.source == "os"
+    assert fingerprint.source == "synthetic"
 
 
 def test_inspect_reuses_the_enumerated_rows_instead_of_re_running_lsblk(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -653,3 +682,28 @@ def test_an_unknown_verdict_is_not_rendered_as_success(monkeypatch: pytest.Monke
         else:
             assert successes, "a confirmed verdict must reach the success branch"
             assert "READ_ONLY" in successes[0], successes
+
+
+def test_a_failed_blkroget_call_is_recorded_as_ioctl_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    import types
+
+    adapter = linux.LinuxDevice()
+    monkeypatch.setattr(linux.sys, "platform", "linux")
+    monkeypatch.setattr(linux.os, "open", lambda *args, **kwargs: 7)
+    monkeypatch.setattr(linux.os, "close", lambda fd: None)
+
+    fake_fcntl = types.ModuleType("fcntl")
+
+    def _refused(*args: object) -> None:
+        raise OSError(linux.errno.ENOTTY, "Inappropriate ioctl for device")
+
+    setattr(fake_fcntl, "ioctl", _refused)
+    monkeypatch.setitem(sys.modules, "fcntl", fake_fcntl)
+
+    outcome = adapter._blkroget(Path("/dev/sda"))
+    assert isinstance(outcome, OSError), "a failed ioctl is an OSError, not 'unsupported'"
+
+    row = linux._ioctl_check(outcome)
+    assert row.result == UnknownCause.IOCTL_FAILURE.value
+    assert row.detail == "Inappropriate ioctl for device"

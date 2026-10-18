@@ -114,8 +114,6 @@ def verify_compatibility(manager: DatabaseSessionManager, schema_min: int | None
     current = current_schema_version(manager)
     if schema_min is not None and current < schema_min:
         raise MigrationCompatibilityError(f"schema {current} below minimum {schema_min}")
-    if schema_target is not None and current > schema_target:
-        raise MigrationCompatibilityError(f"schema {current} above target {schema_target}")
 
 
 def _confine_backup_path(backup_path: str | Path) -> Path:
@@ -261,7 +259,7 @@ def restore_backup(backup_path: str | Path, manager: DatabaseSessionManager) -> 
             env = _pg_env(password)
             with src.open("rb") as handle:
                 subprocess.run(
-                    ["psql", clean_url, "-f", "-"],
+                    ["psql", "-v", "ON_ERROR_STOP=1", clean_url, "-f", "-"],
                     stdin=handle,
                     stderr=subprocess.DEVNULL,
                     timeout=_PG_RESTORE_TIMEOUT_SECONDS,
@@ -274,12 +272,21 @@ def restore_backup(backup_path: str | Path, manager: DatabaseSessionManager) -> 
     raise RecoveryError(f"restore unsupported for {url.split(':', 1)[0]}")
 
 
-def rollback_release(base: str | Path, manager: DatabaseSessionManager, backup_path: str | Path | None) -> str:
+def rollback_release(
+    base: str | Path,
+    manager: DatabaseSessionManager,
+    backup_path: str | Path | None,
+    *,
+    target: str | None = None,
+) -> str:
+    from trace_core.updates.verifier import is_safe_filename
     from trace_updater import updater as updater_mod
 
-    previous = updater_mod.read_previous(base)
+    previous = target or updater_mod.read_previous(base)
     if not previous:
         raise RecoveryError("no previous release to restore")
+    if not isinstance(previous, str) or not is_safe_filename(previous):
+        raise RecoveryError("previous release name is not safe to restore; manual inspection required")
     meta = updater_mod.read_release_meta(base, previous)
     if meta is None:
         raise RecoveryError(f"previous release {previous} carries no compatibility metadata")
@@ -300,9 +307,9 @@ def rollback_release(base: str | Path, manager: DatabaseSessionManager, backup_p
     except UpdateError as e:
         raise RecoveryError(f"previous release {previous} found but its code could not be reinstalled: {e}") from e
     failed = updater_mod.read_active(base)
-    restored = updater_mod.rollback(base)
-    _advance_previous(base, restored, failed)
-    return restored
+    updater_mod.activate(base, previous)
+    _advance_previous(base, previous, failed)
+    return previous
 
 
 def _advance_previous(base: str | Path, restored: str | None, failed: str | None) -> None:

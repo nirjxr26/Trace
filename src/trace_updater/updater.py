@@ -157,9 +157,11 @@ def stage_release(
     version: str,
     expected: list[str] | None = None,
     release_meta: dict | None = None,
+    *,
+    reuse_existing: bool = False,
 ) -> Path:
     with update_lock():
-        return _stage_release_locked(src_dir, base, version, expected, release_meta)
+        return _stage_release_locked(src_dir, base, version, expected, release_meta, reuse_existing)
 
 
 def _stage_release_locked(
@@ -168,12 +170,24 @@ def _stage_release_locked(
     version: str,
     expected: list[str] | None,
     release_meta: dict | None,
+    reuse_existing: bool = False,
 ) -> Path:
     root = releases_root(base)
     target = root / version
     check_contained(target, root)
     if target.exists():
-        raise FileExistsError(f"release {version} already staged; releases are immutable")
+        if not reuse_existing:
+            raise FileExistsError(f"release {version} already staged; releases are immutable")
+        existing = read_release_meta(base, version)
+        stale = bool(release_meta and existing and release_meta.get("release_id") != existing.get("release_id"))
+        incomplete = (
+            not target.is_dir()
+            or not any(target.iterdir())
+            or bool(expected and any(not (target / f).exists() for f in expected))
+        )
+        if incomplete or stale:
+            raise FileNotFoundError(f"staged release {version} cannot be reused; remove it and stage a fresh copy")
+        return target
     tmp = check_contained(root / f".staging-{version}", root)
     if tmp.exists():
         shutil.rmtree(tmp)

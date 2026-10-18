@@ -29,12 +29,17 @@ def setup_test_environment(tmp_path_factory: pytest.TempPathFactory) -> None:
     an object that was already constructed, so this rebinds it.
     """
     from trace_core.core import service as core_service
+    from trace_core.core.database import session as session_mod
 
     os.environ["TRACE_DATABASE_URL"] = "sqlite:///:memory:"
     storage_root = tmp_path_factory.mktemp("trace-test-storage") / "storage"
     storage_root.mkdir(parents=True, exist_ok=True)
     os.environ["TRACE_STORAGE_ROOT"] = str(storage_root)
+    from trace_core.core.settings import settings
+
+    settings.storage_root = storage_root
     core_service.db_manager = DatabaseSessionManager("sqlite:///:memory:")
+    session_mod.db_manager = core_service.db_manager
     # A fixed non-placeholder signing key for the whole session. Without this the suite
     # inherits whatever the machine has: the repo `.env` or a real TRACE_SECRET_KEY
     # locally, and the shipped placeholder on CI. `is_default_key()` then differs per
@@ -55,9 +60,12 @@ def setup_test_environment(tmp_path_factory: pytest.TempPathFactory) -> None:
 @pytest.fixture
 def temp_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Provide an isolated temporary evidence storage directory."""
+    from trace_core.core.settings import settings
+
     storage_dir = tmp_path / "evidence_store"
     storage_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("TRACE_STORAGE_ROOT", str(storage_dir))
+    monkeypatch.setattr(settings, "storage_root", storage_dir)
     return storage_dir
 
 

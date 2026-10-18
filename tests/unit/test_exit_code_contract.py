@@ -84,3 +84,29 @@ def test_a_real_input_violation_is_still_a_usage_error() -> None:
     from trace_core.core.domain import DomainError
 
     assert _code(DomainError("tag exceeds maximum length of 50 characters.")) == EXIT_USAGE
+
+
+def test_a_tampered_ledger_exits_with_the_ledger_code_end_to_end(
+    session_manager, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """L21: `audit verify` on a broken ledger and an untrusted download are distinguishable
+    to a script by exit number alone, through the real CLI, not just the mapping."""
+    from sqlalchemy import text
+    from typer.testing import CliRunner
+
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+    from trace_core.cli.main import app
+    from trace_core.core.cli.exit_codes import EXIT_LEDGER_BROKEN, EXIT_VERIFY_FAILED
+
+    CaseService(session_manager).create_case(CaseCreateDto(title="Exit contract", lead_examiner="Ex"))
+    with session_manager.engine.begin() as conn:
+        last = conn.execute(text("SELECT max(seq) FROM audit_events")).scalar()
+        conn.execute(text("DROP TRIGGER IF EXISTS audit_events_no_update"))
+        conn.execute(text("UPDATE audit_events SET chain_hash = :h WHERE seq = :s"), {"h": "0" * 64, "s": last})
+    monkeypatch.setattr("trace_core.core.service.db_manager", session_manager)
+
+    res = CliRunner().invoke(app, ["audit", "verify"])
+
+    assert res.exit_code == EXIT_LEDGER_BROKEN
+    assert res.exit_code != EXIT_VERIFY_FAILED

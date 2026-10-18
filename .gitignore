@@ -17,7 +17,6 @@ FORENSIC-GAP-ASSESSMENT.md
 
 # --- Local Developer Scripts (never committed) ---
 /check-pr.ps1
-/tests/updates/test_update_e2e_local.py
 /scripts
 
 # --- Environment, Secrets & Credentials ---

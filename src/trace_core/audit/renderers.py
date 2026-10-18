@@ -177,7 +177,7 @@ def _activity_phrase(action: Any) -> str:
     return _ACTIVITY_PHRASES.get(str(value), short_action_label(action))
 
 
-def _activity_summary(e: AuditEventDto, details: dict, term_w: int) -> str:
+def _activity_summary(e: AuditEventDto, details: dict | None, term_w: int) -> str:
     """The third line of an activity entry: what actually changed, labelled by field name.
 
     Field names are title-cased because they are read as prose here (`Changed: Title, Lead
@@ -187,6 +187,8 @@ def _activity_summary(e: AuditEventDto, details: dict, term_w: int) -> str:
     """
     from trace_core.core.ui.renderers import fit_text, format_field_name
 
+    if details is None:
+        return "└─ payload unreadable"
     action = e.action.value
     if action == "CASE_CREATED":
         title = details.get("title", "")
@@ -354,7 +356,7 @@ def render_audit_detail(e: AuditEventDto) -> None:
 
     details = parse_details(e.payload_json)
     utc_display = format_utc_zulu(e.ts)
-    bp, term_w = breakpoint_width()
+    bp, _ = breakpoint_width()
 
     render_detail_header(
         "AUDIT",
@@ -368,6 +370,8 @@ def render_audit_detail(e: AuditEventDto) -> None:
         )
     )
 
+    if details is None:
+        details = {}
     changed = details.get("changed", [])
     before = details.get("before", {})
     after = details.get("after", {})
@@ -415,14 +419,22 @@ def render_audit_detail(e: AuditEventDto) -> None:
         e.payload_json, e.payload_hash, e.prev_chain, e.chain_hash, e.seq, signature=e.signature, key_id=e.key_id
     )
     seal = "✓ VERIFIED" if intact else "✗ MISMATCH"
-    render_section_title(f"INTEGRITY · {seal}", style=TOK["accent"] if intact else TOK["danger"])
+    render_section_title(f"SELF-CHECK · {seal}", style=TOK["accent"] if intact else TOK["danger"])
     console.print("")
     if not intact:
         console.print("[dim]Row failed its self-check — run `audit verify` for the full chain.[/dim]")
     render_raw_tip(f"audit show --seq {e.seq} --output json for the raw payload")
 
 
-def _detail_fields(e: AuditEventDto, details: dict, utc_display: str) -> list[tuple[str, Any]]:
+def _detail_fields(e: AuditEventDto, details: dict | None, utc_display: str) -> list[tuple[str, Any]]:
+    if details is None:
+        return [
+            ("Actor", sanitize_terminal(e.actor)),
+            ("Timestamp", f"{format_india_datetime(e.ts)} ({utc_display})"),
+            ("", ""),
+            ("Event", e.action.value),
+            ("Payload", "unreadable — details cannot be shown"),
+        ]
     host = details.get("host") or "-"
     reason = (details.get("reason") or "").strip()
     rows: list[tuple[str, Any]] = [
@@ -443,8 +455,17 @@ def _what_text(mismatch_type: str | None) -> str:
         return "prev_chain linkage broken"
     if mismatch_type == "signing_key":
         return "verification key is the shipped default, not this ledger's signing key"
+    if mismatch_type == "insecure_key":
+        return "signature matches the shipped development key, which is public"
     if mismatch_type == "signature":
         return "signature mismatch (event not signed by trusted key)"
+    if mismatch_type == "chain_state":
+        return "the recorded chain head does not match the ledger's own last record"
+    if mismatch_type == "tip_signature":
+        return "the signed chain head cannot be verified - the head row was altered"
+    if mismatch_type and mismatch_type.startswith("column:"):
+        name = mismatch_type.split(":", 1)[1]
+        return f"{name} column edited — the signed payload holds the original value"
     return "chain_hash mismatch"
 
 
@@ -498,7 +519,10 @@ def _render_valid(res: VerifyResultDto, anchor: str | None = None) -> None:
         rows.append(
             (
                 "Anchor",
-                Text("No anchor checked — tail truncation is undetectable without one.", style=THEME_TOKENS["warning"]),
+                Text(
+                    "No anchor checked — a rewritten chain head is undetectable without one.",
+                    style=THEME_TOKENS["warning"],
+                ),
             )
         )
     rows.append(
@@ -515,7 +539,7 @@ def _render_valid(res: VerifyResultDto, anchor: str | None = None) -> None:
     console.print("[dim]Tip: export with `audit export --out bundle.jsonl` to preserve chain.[/dim]")
     if res.events_verified > 0 and not res.sequence_gaps:
         console.print(
-            "[dim]Note: Tail truncation (deleting last seq) is not detectable without external anchor — export header stores last_seq/last_chain for manual compare.[/dim]"
+            "[dim]Note: A deleted tail shows as a chain-head mismatch unless the head was rewritten with it; the export header stores last_seq/last_chain for manual compare.[/dim]"
         )
         console.print("")
     else:
@@ -523,6 +547,33 @@ def _render_valid(res: VerifyResultDto, anchor: str | None = None) -> None:
 
 
 def _render_tamper(res: VerifyResultDto) -> None:
+    if res.mismatch_type == "insecure_key":
+        render_key_value_grid(
+            "Audit Verify — ⚠ SIGNED WITH THE DEVELOPMENT KEY",
+            [
+                ("Where", f"Seq {res.first_mismatch_seq} · signature"),
+                ("What", _what_text(res.mismatch_type)),
+                (
+                    "Chain",
+                    f"payload_hash and chain_hash matched through seq {res.first_mismatch_seq}; the signature "
+                    "matches the shipped development key, which is public",
+                ),
+                ("Gaps", ", ".join(str(g) for g in res.sequence_gaps) if res.sequence_gaps else "None"),
+                (
+                    "Result",
+                    Text(
+                        "⚠ These signatures prove nothing. This is a key problem, NOT evidence of tampering.",
+                        style=THEME_TOKENS["warning"],
+                    ),
+                ),
+                (
+                    "Action",
+                    "→ Set TRACE_SECRET_KEY to a private value so new records can be authenticated. "
+                    "Do not restore from backup on the strength of this message alone.",
+                ),
+            ],
+        )
+        return
     if res.mismatch_type == "signing_key":
         render_key_value_grid(
             "Audit Verify — ⚠ SIGNING KEY UNAVAILABLE",
@@ -556,12 +607,15 @@ def _render_tamper(res: VerifyResultDto) -> None:
             ("Where", where),
             ("What", _what_text(res.mismatch_type)),
             ("Type", res.mismatch_type or "-"),
-            ("Checked", f"{res.events_verified} events OK, failing at {res.first_mismatch_seq}"),
+            (
+                "Checked",
+                f"{res.events_verified + 1} checked · {res.events_verified} OK, failing at {res.first_mismatch_seq}",
+            ),
             ("Gaps", ", ".join(str(g) for g in res.sequence_gaps) if res.sequence_gaps else "None"),
             ("Result", Text("✗ Ledger broken. Do NOT trust events ≥ mismatch.", style=THEME_TOKENS["danger"])),
             (
                 "Action",
-                "→ Restore audit_events from backup. Run `audit export --out evidence.jsonl` to preserve chain.",
+                "→ Restore audit_events from backup. Preserve the raw database first; export refuses a ledger that fails verification.",
             ),
         ],
     )

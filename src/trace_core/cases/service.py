@@ -22,7 +22,7 @@ from trace_core.cases.dto import (
 )
 from trace_core.cases.repository import SqlAlchemyCaseRepository
 from trace_core.core.database.session import DatabaseSessionManager
-from trace_core.core.domain import InvariantViolationError, strip_controls
+from trace_core.core.domain import InvariantViolationError, bound_actor, strip_controls
 from trace_core.core.errors import (
     ApplicationError,
     ConflictError,
@@ -74,9 +74,17 @@ class InvalidCaseStateError(StateTransitionError, CaseError):
 
 
 def _resolve_actor(actor: str | None, fallback: str = "system") -> str:
-    """Resolve audit actor, defaulting to fallback examiner or system."""
+    """Resolve the claimed display name kept in case metadata, defaulting to fallback or system."""
     cleaned = strip_controls(actor).strip() if actor else ""
     return cleaned or strip_controls(fallback).strip() or "system"
+
+
+def _os_actor() -> str:
+    """Accountable OS identity (user@host) recorded as the ledger actor for case mutations."""
+    from trace_core.core.operators import current_identity
+
+    user, host = current_identity()
+    return bound_actor(f"{user}@{host}")
 
 
 def _require_case(repo: SqlAlchemyCaseRepository, identifier: str) -> Case:
@@ -120,7 +128,7 @@ def _close_audit_hook(updated: Any, examiner: str, claimed: str | None, pinned: 
         dto = _record_audit(
             s,
             for_case_closed(updated.number, updated.id, updated.closure_reason or "", examiner),
-            examiner,
+            _os_actor(),
             claimed=claimed,
         )
         if dto is None or dto.seq is None:
@@ -150,7 +158,6 @@ class CaseService(BaseService):
 
     def create_case(self, dto: CaseCreateDto, actor: str | None = None) -> CaseResponseDto:
         """Create and persist a new forensic case."""
-        resolved_actor = _resolve_actor(actor, dto.lead_examiner)
         with self.transaction() as uow:
             require_mutator(uow.session, action="create cases")
             repo = SqlAlchemyCaseRepository(uow.session)
@@ -191,7 +198,7 @@ class CaseService(BaseService):
                             created.lead_examiner,
                             number_source="manual" if dto.number else "auto",
                         ),
-                        resolved_actor,
+                        _os_actor(),
                         claimed=actor,
                     )
                 )
@@ -213,6 +220,11 @@ class CaseService(BaseService):
         with self.session_manager.session() as session:
             repo = SqlAlchemyCaseRepository(session)
             return CaseResponseDto.from_domain(_require_case(repo, identifier))
+
+    def is_purged(self, number: str) -> bool:
+        """Whether a case number is permanently retired by a purge."""
+        with self.session_manager.session() as session:
+            return SqlAlchemyCaseRepository(session).is_purged(number)
 
     def list_cases(self, filter_dto: CaseFilterDto | None = None) -> list[CaseResponseDto]:
         """List cases according to filter criteria."""
@@ -238,8 +250,6 @@ class CaseService(BaseService):
             require_mutator(uow.session, action="update cases")
             repo = SqlAlchemyCaseRepository(uow.session)
             case = _require_case(repo, identifier)
-            resolved_actor = _resolve_actor(actor, case.lead_examiner)
-
             if case.is_deleted:
                 raise InvalidCaseStateError(f"Cannot update soft-deleted or archived case '{identifier}'.")
 
@@ -287,7 +297,46 @@ class CaseService(BaseService):
             uow.before_commit(
                 _audit_hook(
                     lambda: for_case_updated(updated.number, updated.id, changed, before, after, reason=reason),
-                    resolved_actor,
+                    _os_actor(),
+                    claimed=actor,
+                )
+            )
+            return CaseResponseDto.from_domain(updated)
+
+    def review_case(
+        self, identifier: str, resume: bool = False, reason: str = "", actor: str | None = None
+    ) -> CaseResponseDto:
+        """Transition an open case under review, or an under-review case back to open."""
+        target = CaseStatus.OPEN if resume else CaseStatus.UNDER_REVIEW
+        with self.transaction() as uow:
+            require_mutator(uow.session, action="review cases")
+            repo = SqlAlchemyCaseRepository(uow.session)
+            case = _require_case(repo, identifier)
+
+            if case.is_deleted:
+                raise InvalidCaseStateError(f"Cannot review soft-deleted or archived case '{identifier}'.")
+
+            if case.status == CaseStatus.CLOSED:
+                raise InvalidCaseStateError(f"Cannot review permanently closed case '{identifier}'.")
+
+            before = {"status": case.status.value}
+            try:
+                transition_case(case, target)
+            except TransitionError as e:
+                raise InvalidCaseStateError(str(e)) from e
+
+            updated = repo.update(case)
+            after = {"status": updated.status.value}
+
+            from trace_core.audit.builder import for_case_updated
+
+            command = f"case review {updated.number}" + (" --resume" if resume else "")
+            uow.before_commit(
+                _audit_hook(
+                    lambda: for_case_updated(
+                        updated.number, updated.id, ["status"], before, after, reason=reason, command=command
+                    ),
+                    _os_actor(),
                     claimed=actor,
                 )
             )
@@ -364,7 +413,7 @@ class CaseService(BaseService):
                 uow.before_commit(
                     _audit_hook(
                         lambda: for_case_purged(purged_number, purged_id),
-                        resolved_actor,
+                        _os_actor(),
                         claimed=actor,
                     )
                 )
@@ -376,7 +425,7 @@ class CaseService(BaseService):
             uow.before_commit(
                 _audit_hook(
                     lambda: for_case_archived(case.number, case.id),
-                    resolved_actor,
+                    _os_actor(),
                     claimed=actor,
                 )
             )
@@ -388,8 +437,6 @@ class CaseService(BaseService):
             require_mutator(uow.session, action="restore cases")
             repo = SqlAlchemyCaseRepository(uow.session)
             case = _require_case(repo, identifier)
-            resolved_actor = _resolve_actor(actor, case.lead_examiner)
-
             if not case.is_deleted:
                 raise InvalidCaseStateError(f"Case '{identifier}' is not archived.")
 
@@ -403,7 +450,7 @@ class CaseService(BaseService):
             uow.before_commit(
                 _audit_hook(
                     lambda: for_case_restored(restored.number, restored.id),
-                    resolved_actor,
+                    _os_actor(),
                     claimed=actor,
                 )
             )

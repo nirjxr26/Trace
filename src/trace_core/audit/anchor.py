@@ -53,10 +53,7 @@ def latest_anchor_for(case_number: str) -> Path | None:
             return False
         return True
 
-    try:
-        matches = [p for p in base.glob(f"anchor-{name}-*.json") if _kept(p)]
-    except Exception:
-        return None
+    matches = [p for p in base.glob(f"anchor-{name}-*.json") if _kept(p)]
     return max(matches, key=_seq_of) if matches else None
 
 
@@ -72,29 +69,35 @@ def check_anchor_match(res, data: dict, anchored_chain: str | None) -> None:  # 
     AnchorVerificationError: the ledger may be perfectly intact, and prescribing a restore
     would destroy newer valid records.
     """
-    from trace_core.core.errors import AnchorVerificationError, AuditTamperError
+    from trace_core.core.errors import AnchorOutrunsLedgerError, AnchorVerificationError, AuditTamperError
 
     if not res.is_valid:
         return
-    exp_seq = data.get("last_seq")
-    exp_chain = data.get("last_chain")
-    tip = res.last_seq or 0
-    if exp_seq is not None and exp_seq > tip:
-        raise AnchorVerificationError(
-            f"anchor is for record {exp_seq}, but this ledger stops at {tip} - another ledger"
-        )
-    if exp_chain and anchored_chain and exp_chain != anchored_chain:
-        raise AuditTamperError(f"record {exp_seq} no longer matches the point this anchor saved")
     signature = data.get("signature")
     key_id = data.get("key_id")
     if not (signature and key_id):
         raise AnchorVerificationError("Anchor is unsigned; refusing to trust an unverifiable envelope")
-    from trace_core.audit.signing import verify_bytes
+    from trace_core.audit.signing import HMAC_KEY_ID, is_default_key, verify_bytes
     from trace_core.core.canonical import canonical_json
 
+    if key_id == HMAC_KEY_ID and is_default_key():
+        raise AnchorVerificationError(
+            "Anchor cannot be authenticated while the signing key is the shipped development key, "
+            "which is public. Set TRACE_SECRET_KEY to the key this anchor was signed with."
+        )
     unsigned = {k: v for k, v in data.items() if k not in ("key_id", "signature")}
     if not verify_bytes(key_id, canonical_json(unsigned), signature):
         raise AnchorVerificationError("Anchor signature invalid - the file was altered, or signed with a different key")
+    exp_seq = data.get("last_seq")
+    exp_chain = data.get("last_chain")
+    tip = res.last_seq or 0
+    if exp_seq is not None and exp_seq > tip:
+        raise AnchorOutrunsLedgerError(
+            f"anchor is for record {exp_seq}, but this ledger stops at {tip}: the anchor is either from "
+            "another ledger or records were deleted from the end of this one"
+        )
+    if exp_chain and anchored_chain and exp_chain != anchored_chain:
+        raise AuditTamperError(f"record {exp_seq} no longer matches the point this anchor saved")
 
 
 def verify_against_anchor(svc, res, anchor: str | None) -> None:  # type: ignore[no-untyped-def]
@@ -121,8 +124,15 @@ def verify_against_anchor(svc, res, anchor: str | None) -> None:  # type: ignore
 
 def record_anchor_intent(session, case_number: str, case_id, seq: int, chain_hash: str) -> None:  # type: ignore[no-untyped-def]
     """Durable outbox row in the caller's transaction. The publisher confirms later."""
+    from sqlalchemy import select
+
     from trace_core.audit.models import INTENT_PENDING, AnchorIntentModel
 
+    existing = session.scalar(
+        select(AnchorIntentModel.id).where(AnchorIntentModel.case_number == case_number, AnchorIntentModel.seq == seq)
+    )
+    if existing is not None:
+        return
     session.add(
         AnchorIntentModel(
             case_id=case_id, case_number=case_number, seq=seq, chain_hash=chain_hash, status=INTENT_PENDING
@@ -135,7 +145,10 @@ def describe_anchor(manager, case_number: str) -> str | None:  # type: ignore[no
     """One-line anchor state for close outputs. Single source for Typer/shell surfaces."""
     with manager.session() as session:
         state = latest_intent_status(session, case_number)
-    anchor = latest_anchor_for(case_number)
+    try:
+        anchor = latest_anchor_for(case_number)
+    except OSError as exc:
+        return f"Anchor: lookup failed ({exc.strerror}) [{state or 'UNKNOWN'}] — verify manually."
     if anchor is not None:
         return f"Anchor: {anchor} [{state}] (copy off-host; verify with `audit verify --anchor FILE`)"
     if state != "CONFIRMED":

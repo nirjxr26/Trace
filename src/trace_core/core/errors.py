@@ -83,5 +83,11 @@ class AnchorVerificationError(AuditTamperError):
     pass
 
 
+class AnchorOutrunsLedgerError(AnchorVerificationError):
+    """Raised when a trusted anchor names records beyond this ledger's end."""
+
+    pass
+
+
 class AuthorizationError(ApplicationError):
     """Raised when an operator lacks the role for an action."""

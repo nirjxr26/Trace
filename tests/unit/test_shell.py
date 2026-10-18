@@ -9,7 +9,9 @@ from trace_core.cli.shell import InteractiveShell
 pytestmark = pytest.mark.unit
 
 
-def test_shell_line_execution_and_aliases(service: CaseService) -> None:
+def test_shell_line_execution_and_aliases(service: CaseService, capsys: pytest.CaptureFixture[str]) -> None:
+    import json
+
     shell = InteractiveShell()
     shell.service = service
 
@@ -24,6 +26,7 @@ def test_shell_line_execution_and_aliases(service: CaseService) -> None:
 
     # Test 'list cases' natural alias
     shell.execute_line("list cases")
+    assert "2026-SH-0001" in capsys.readouterr().out
 
     # Test 'case select' context setting
     shell.execute_line("case select 2026-SH-0001")
@@ -33,15 +36,21 @@ def test_shell_line_execution_and_aliases(service: CaseService) -> None:
 
     # Test 'show case' with active case context
     shell.execute_line("show case")
+    assert "Shell Test Case" in capsys.readouterr().out
 
     # Test 'status' command
     shell.execute_line("status")
+    assert "Active Case" in capsys.readouterr().out
 
     # Test 'case list --output json'
     shell.execute_line("case list --output json")
+    listed = json.loads(capsys.readouterr().out)
+    assert [row["number"] for row in listed] == ["2026-SH-0001"]
 
     # Test 'case show 2026-SH-0001 --output json'
     shell.execute_line("case show 2026-SH-0001 --output json")
+    shown = json.loads(capsys.readouterr().out)
+    assert shown["number"] == "2026-SH-0001"
 
     # Test 'case deselect'
     shell.execute_line("case deselect")
@@ -224,6 +233,27 @@ def test_shell_edit_clear_rules(service: CaseService, monkeypatch: pytest.Monkey
     assert updated.tags == []
 
 
+def test_shell_review_toggles_the_case_status(
+    service: CaseService, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trace_core.cases.domain import CaseStatus
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cli.shell import InteractiveShell
+
+    service.create_case(CaseCreateDto(number="2026-RV-0001", title="Review Shell", lead_examiner="Inv"))
+    shell = InteractiveShell()
+    shell.service = service
+    monkeypatch.setattr("trace_core.cases.shell_handler.prompt_confirm", lambda *a, **k: True)
+
+    shell.execute_line("case review 2026-RV-0001")
+    assert "moved under review." in capsys.readouterr().out
+    assert service.get_case("2026-RV-0001").status is CaseStatus.UNDER_REVIEW
+
+    shell.execute_line("case review --resume 2026-RV-0001")
+    assert "returned to active work." in capsys.readouterr().out
+    assert service.get_case("2026-RV-0001").status is CaseStatus.OPEN
+
+
 def test_shell_list_limit_offset_recent_parity(service: CaseService, capsys: pytest.CaptureFixture[str]) -> None:
     """Verify shell list honors --limit/--offset/--recent like the Typer CLI."""
     from datetime import UTC, datetime, timedelta
@@ -397,19 +427,14 @@ def test_a_handler_ignores_a_line_it_does_not_own() -> None:
     assert handler.get_completions("auditor something", ShellContext()) == []
 
 
-def test_the_anchor_notice_names_a_command_that_exists() -> None:
-    """It pointed at an Integrity tab that was merged into Settings, so nobody could act on it."""
-    import inspect as py_inspect
-    import re
-
-    from trace_core.cli.shell import InteractiveShell
+def test_the_palette_anchor_command_runs_the_check_instead_of_a_notice(monkeypatch: pytest.MonkeyPatch) -> None:
     from trace_core.tui.screens.audit import AuditView
 
-    source = py_inspect.getsource(AuditView.run_command)
-    suggestions = re.findall(r"`([^`]+)`", source)
-    assert suggestions, "the notice must name the real command"
-    root, _, _ = suggestions[0].partition(" ")
-    assert root in {h.command_name for h in InteractiveShell().registry.all_handlers()}
+    calls: list[str] = []
+    view = AuditView.__new__(AuditView)
+    monkeypatch.setattr(AuditView, "action_anchor", lambda self: calls.append("anchor"))
+    AuditView.run_command(view, "audit-anchor")
+    assert calls == ["anchor"], "the anchor entry must run the check, not describe it"
 
 
 def test_repl_keeps_windows_device_nodes_verbatim() -> None:

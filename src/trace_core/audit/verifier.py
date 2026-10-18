@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from trace_core.audit.domain import GENESIS_CHAIN, chain_hash, payload_hash
 from trace_core.audit.dto import VerifyResultDto
 from trace_core.audit.models import AuditEventModel
+from trace_core.core.canonical import _coerce_utc_required, canonical_ts
 
 
 def _expected_payload_hash(payload_json: str) -> str:
@@ -44,6 +45,7 @@ def _mismatch(
 ) -> VerifyResultDto:
     is_payload = mismatch_type == "payload_hash"
     is_signature = mismatch_type == "signature"
+    is_column = mismatch_type.startswith("column:")
     return VerifyResultDto(
         is_valid=False,
         events_verified=events_verified,
@@ -53,8 +55,8 @@ def _mismatch(
         mismatch_type=mismatch_type,
         expected_payload_hash=expected if is_payload else None,
         actual_payload_hash=actual if is_payload else None,
-        expected_chain_hash=None if (is_payload or is_signature) else expected,
-        actual_chain_hash=None if (is_payload or is_signature) else actual,
+        expected_chain_hash=None if (is_payload or is_signature or is_column) else expected,
+        actual_chain_hash=None if (is_payload or is_signature or is_column) else actual,
         expected_signature=expected if is_signature else None,
         actual_signature=actual if is_signature else None,
         sequence_gaps=list(gaps),
@@ -90,14 +92,36 @@ def verify_event(
 def _signature_mismatch(m: AuditEventModel) -> tuple[str, str] | None:
     if m.signature is None:
         return None
-    from trace_core.audit.signing import expected_signature, is_default_key, verify_bytes
+    from trace_core.audit.signing import HMAC_KEY_ID, expected_signature, is_default_key, verify_bytes
 
     raw = m.payload_json.encode("utf-8")
     if verify_bytes(m.key_id, raw, m.signature):
+        if is_default_key() and m.key_id == HMAC_KEY_ID:
+            return "insecure_key", m.signature
         return None
     if is_default_key():
         return "signing_key", m.signature
     return expected_signature(m.key_id, raw) or f"key:{m.key_id}", m.signature
+
+
+_COLUMN_MIRRORS = ("action", "actor", "subject_case_number", "subject_device_serial")
+
+
+def _column_mismatch(m: AuditEventModel) -> tuple[str, str, str] | None:
+    try:
+        payload = json.loads(m.payload_json)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for name in _COLUMN_MIRRORS:
+        if name in payload and payload[name] != getattr(m, name):
+            return f"column:{name}", str(payload[name]), str(getattr(m, name))
+    if "ts" in payload:
+        column_ts = canonical_ts(_coerce_utc_required(m.ts))
+        if payload["ts"] != column_ts:
+            return "column:ts", str(payload["ts"]), column_ts
+    return None
 
 
 def _row_mismatch(m: AuditEventModel, prev_chain: str) -> tuple[str, str, str] | None:
@@ -112,9 +136,12 @@ def _row_mismatch(m: AuditEventModel, prev_chain: str) -> tuple[str, str, str] |
     signature = _signature_mismatch(m)
     if signature is not None:
         expected_s, actual_s = signature
-        if expected_s == "signing_key":
-            return "signing_key", "", actual_s
+        if expected_s in ("signing_key", "insecure_key"):
+            return expected_s, "", actual_s
         return "signature", expected_s, actual_s
+    column = _column_mismatch(m)
+    if column is not None:
+        return column
     return None
 
 
@@ -122,7 +149,7 @@ def verify_rows(rows: Iterable[AuditEventModel]) -> VerifyResultDto:
     """Recompute every link from stored payloads. Policy: hash/prev_chain mismatch =
     tamper (fail fast at first seq); missing seqs = gaps (warning — a middle delete
     already fails as prev_chain mismatch at the next row, while a pure tail delete
-    is invisible here and needs an external anchor)."""
+    is caught by the head-to-tail binding in `helpers.bind_head_to_tail`)."""
     first_seq: int | None = None
     last_seq: int | None = None
     gaps: list[int] = []

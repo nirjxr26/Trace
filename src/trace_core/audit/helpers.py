@@ -176,30 +176,80 @@ def do_show_list(
     render_events(events, output)
 
 
-def do_verify(svc: AuditService, output: str, anchor: str | None):  # type: ignore[no-untyped-def]
-    """Verify + anchor + render core shared by Typer and shell. Enforces the Tamper policy itself.
+def enforce_verify_policy(res) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.errors import ApplicationError, AuditTamperError
 
-    The policy lives here rather than in each surface because a caller that forgets to
-    inspect the result reports a broken chain as valid, which is the one answer the
-    ledger must never give.
-    """
-    from trace_core.audit.anchor import verify_against_anchor
-    from trace_core.audit.renderers import render_verify
-    from trace_core.core.errors import AuditTamperError
-
-    res = svc.verify()
-    verify_against_anchor(svc, res, anchor)
-    render_verify(res, output, anchor)
-    if res.mismatch_type == "signing_key":
+    if res.mismatch_type in ("signing_key", "insecure_key"):
         # The renderer already said this is a key problem, not tampering, and told the
         # operator not to restore from backup. Raising AuditTamperError here printed a
         # second card directly beneath it saying "Tamper detected... restore from
         # backup" — two adjacent conclusions, opposite advice, the destructive one last.
-        from trace_core.core.errors import ApplicationError
-
+        if res.mismatch_type == "insecure_key":
+            raise ApplicationError(
+                "this ledger was signed with the shipped development key, so nothing can prove it was not edited"
+            )
         raise ApplicationError("the signing key for this ledger isn't available, so signatures couldn't be checked")
     if not res.is_valid:
         raise AuditTamperError(f"Tamper detected at seq {res.first_mismatch_seq} ({res.mismatch_type})")
+
+
+def _first_divergent_seq(head_seq: int, last_seq: int) -> int:
+    if head_seq == last_seq:
+        return head_seq
+    return min(head_seq, last_seq) + 1
+
+
+def bind_head_to_tail(session, res):  # type: ignore[no-untyped-def]
+    """Cross-check the recorded chain head against the ledger tail and its signed tip."""
+    if not res.is_valid:
+        return res
+    from sqlalchemy import select
+
+    from trace_core.audit.domain import GENESIS_CHAIN
+    from trace_core.audit.models import AuditChainStateModel, AuditEventModel
+    from trace_core.audit.signing import verify_bytes
+    from trace_core.core.canonical import canonical_json
+
+    head = session.scalar(select(AuditChainStateModel).where(AuditChainStateModel.id == 1))
+    head_seq = head.last_seq if head else 0
+    head_chain = head.last_chain_hash if head else GENESIS_CHAIN
+    last_seq = res.last_seq or 0
+    tail_chain = GENESIS_CHAIN
+    if last_seq:
+        tail = session.get(AuditEventModel, last_seq)
+        if tail is None:
+            return res.model_copy(
+                update={"is_valid": False, "mismatch_type": "chain_state", "first_mismatch_seq": last_seq}
+            )
+        tail_chain = tail.chain_hash
+    if head_seq != last_seq or head_chain != tail_chain:
+        first_bad = _first_divergent_seq(head_seq, last_seq)
+        return res.model_copy(
+            update={"is_valid": False, "mismatch_type": "chain_state", "first_mismatch_seq": first_bad}
+        )
+    if head is not None and head.tip_signature:
+        message = canonical_json({"last_seq": head_seq, "last_chain": head_chain})
+        if not verify_bytes(head.tip_key_id, message, head.tip_signature):
+            return res.model_copy(
+                update={"is_valid": False, "mismatch_type": "tip_signature", "first_mismatch_seq": head_seq}
+            )
+    return res
+
+
+def do_verify(svc: AuditService, output: str, anchor: str | None):  # type: ignore[no-untyped-def]
+    """Verify + anchor + render core shared by Typer and shell.
+
+    The policy lives in `enforce_verify_policy` rather than in each surface because a
+    caller that forgets to inspect the result reports a broken chain as valid, which is
+    the one answer the ledger must never give.
+    """
+    from trace_core.audit.anchor import verify_against_anchor
+    from trace_core.audit.renderers import render_verify
+
+    res = svc.verify()
+    verify_against_anchor(svc, res, anchor)
+    render_verify(res, output, anchor)
+    enforce_verify_policy(res)
     return res
 
 

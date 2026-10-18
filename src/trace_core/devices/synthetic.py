@@ -34,11 +34,30 @@ def write_disk(path: str | Path, seed: bytes = DEFAULT_SEED, size: int = DEFAULT
     return target
 
 
+SYNTHETIC_SERIAL_WIDTH = 32
+LEGACY_SYNTHETIC_SERIAL_WIDTH = 16
+
+
 def synthetic_serial(content_hash: str) -> str:
     """Serial derived from content, never from hardware [D13]."""
-    return f"SYNTH-{content_hash[:16]}"
+    return f"SYNTH-{content_hash[:SYNTHETIC_SERIAL_WIDTH]}"
 
 
-def absent_serial(node: str) -> str:
+def synthetic_serial_variants(serial: str) -> tuple[str, ...]:
+    """Stored forms of a synthetic serial: the current width plus its legacy truncation."""
+    variants = [serial]
+    if is_synthetic_serial(serial):
+        hexdigest = serial.removeprefix("SYNTH-")
+        if len(hexdigest) == SYNTHETIC_SERIAL_WIDTH:
+            variants.append(f"SYNTH-{hexdigest[:LEGACY_SYNTHETIC_SERIAL_WIDTH]}")
+    return tuple(variants)
+
+
+def absent_serial(node: str, *, size_bytes: int | None = None, model: str | None = None) -> str:
     """Serial for a device that vanished: deterministic, never content-derived [D13]."""
-    return synthetic_serial(hashlib.sha256(f"absent:{node}".encode()).hexdigest())
+    observed = f"absent:{node}:{size_bytes if size_bytes is not None else '?'}:{model or '?'}"
+    return synthetic_serial(hashlib.sha256(observed.encode()).hexdigest())
+
+
+def is_synthetic_serial(serial: str) -> bool:
+    return serial.startswith("SYNTH-")

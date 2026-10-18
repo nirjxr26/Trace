@@ -1,5 +1,6 @@
 """Application configuration using Pydantic Settings."""
 
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -15,13 +16,31 @@ DEV_SECRET_SENTINEL = "trace-local-dev-key-change-in-production"
 DEV_DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/trace"
 
 _TRACE_HOME = Path.home() / ".trace"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_ENV_FILES = (str(_REPO_ROOT / ".env"), str(_TRACE_HOME / ".env"))
+
+
+def _unknown_trace_settings(known: set[str]) -> set[str]:
+    unknown = {name for name in os.environ if name.upper().startswith("TRACE_") and name.upper() not in known}
+    for path in _ENV_FILES:
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if "=" not in line:
+                continue
+            name = line.partition("=")[0].strip()
+            if name.upper().startswith("TRACE_") and name.upper() not in known:
+                unknown.add(name)
+    return unknown
 
 
 class Settings(BaseSettings):
     """Trace runtime settings."""
 
     app_name: str = "Trace"
-    version: str = "0.3.2"
+    version: str = "0.3.3"
     # Alias-only binding: the documented TRACE_DEBUG name wins, and a stray
     # bare DEBUG in the environment can no longer crash startup with a bool error.
     debug: bool = Field(default=False, alias="TRACE_DEBUG")
@@ -69,7 +88,7 @@ class Settings(BaseSettings):
     device_adapter: Literal["file", "linux", "win32"] = Field(default="file", alias="TRACE_DEVICE_ADAPTER")
 
     model_config = SettingsConfigDict(
-        env_file=(".env", str(_TRACE_HOME / ".env")),
+        env_file=_ENV_FILES,
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -77,6 +96,9 @@ class Settings(BaseSettings):
     def model_post_init(self, __context: Any) -> None:
         from trace_core.core.fs import ensure_dir
 
+        known = {str(field.alias).upper() for field in type(self).model_fields.values() if field.alias}
+        for name in sorted(_unknown_trace_settings(known)):
+            logger.warning("Unknown TRACE_ setting ignored", setting=name)
         try:
             ensure_dir(self.storage_root)
         except OSError as exc:

@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text
+from sqlalchemy import Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from trace_core.core.clock import now_utc
@@ -18,6 +18,8 @@ class AuditChainStateModel(Base):
     id: Mapped[int] = mapped_column(primary_key=True, default=1)
     last_seq: Mapped[int] = mapped_column(default=0, nullable=False)
     last_chain_hash: Mapped[str] = mapped_column(String(64), default="0" * 64, nullable=False)
+    tip_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tip_signature: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
 INTENT_PENDING = "pending"
@@ -29,6 +31,7 @@ class AnchorIntentModel(Base):
     """Durable anchor outbox. Written in-transaction; publisher confirms later."""
 
     __tablename__ = "anchor_intents"
+    __table_args__ = (Index("uq_anchor_intents_case_seq", "case_number", "seq", unique=True),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     case_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)

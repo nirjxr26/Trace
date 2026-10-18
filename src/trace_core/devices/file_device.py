@@ -114,10 +114,13 @@ class FileDevice:
             # mapped it to a generic EXIT_ERROR and the ledger recorded no cause at all,
             # instead of the DEVICE_DISAPPEARED an operator needs to see.
             raise DeviceGoneError(device.node) from exc
+        serial_value = (
+            synthetic_serial(content_hash)
+            if content_hash is not None
+            else absent_serial(device.node, size_bytes=device.size_bytes, model=device.model_hint)
+        )
         fingerprint = DeviceFingerprint(
-            serial=ObservedSerial(
-                value=synthetic_serial(content_hash) if content_hash is not None else absent_serial(device.node)
-            ),
+            serial=ObservedSerial(value=serial_value),
             model=device.model_hint or "synthetic",
             capacity_bytes=device.size_bytes or 0,
             firmware=None,

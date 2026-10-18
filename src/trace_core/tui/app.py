@@ -10,7 +10,7 @@ from trace_core.tui.theme import TRACE_THEME
 
 TAB_HINTS: dict[str, str] = {
     "cases": "↑↓ Navigate   / Search   r Recent   q Quit",
-    "devices": "↑↓ Navigate   i Inspect   c Check   l Link   k Kind   / Search   q Quit",
+    "devices": "↑↓ Navigate   i Inspect   c Check   a Acknowledge   l Link   k Kind   / Search   q Quit",
     "audit": "↑↓ Navigate   Enter Open   / Search   r Refresh   q Quit",
     "settings": "↑↓ Sections   Enter Run   m Migrate   c Check updates   q Quit",
 }

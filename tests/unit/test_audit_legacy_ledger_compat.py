@@ -126,10 +126,12 @@ def test_the_frozen_anchor_is_actually_compared(session_manager: DatabaseSession
         _load(session, frozen)
     svc = AuditService(session_manager)
     res = svc.verify()
+    broken_chain = _write_anchor(tmp_path, frozen, last_chain="f" * 64)
     with pytest.raises(AuditTamperError):
-        verify_against_anchor(svc, res, str(_write_anchor(tmp_path, frozen, last_chain="f" * 64)))
+        verify_against_anchor(svc, res, str(broken_chain))
+    bad_signature = _write_anchor(tmp_path, frozen, signature="0" * 128)
     with pytest.raises(AnchorVerificationError):
-        verify_against_anchor(svc, res, str(_write_anchor(tmp_path, frozen, signature="0" * 128)))
+        verify_against_anchor(svc, res, str(bad_signature))
 
 
 def test_migrating_a_frozen_ledger_to_022_leaves_every_row_byte_identical(

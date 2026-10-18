@@ -1,5 +1,7 @@
 """Unit tests for trace doctor preflight diagnostics."""
 
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
@@ -38,7 +40,7 @@ def test_doctor_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_doctor_fails_when_the_signing_key_is_the_default(
-    monkeypatch: pytest.MonkeyPatch, session_manager: DatabaseSessionManager
+    monkeypatch: pytest.MonkeyPatch, session_manager: DatabaseSessionManager, temp_storage: Path
 ) -> None:
     """The gate that certifies an install must not pass when records cannot be checked.
 
@@ -48,11 +50,13 @@ def test_doctor_fails_when_the_signing_key_is_the_default(
     """
     from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
 
+    (temp_storage / "keys").write_text("not a directory", encoding="utf-8")
     monkeypatch.setattr("trace_core.core.cli.doctor.db_manager", session_manager)
     monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
     res = CliRunner().invoke(app, ["doctor"])
     assert res.exit_code == EXIT_ERROR, res.output
     assert "Signing key" in res.output
+    assert "not set — your records can't be verified" in res.output
     assert "FAIL" in res.output
 
 
@@ -217,3 +221,35 @@ def test_masking_does_not_rewrite_a_sqlite_url() -> None:
     masked = sanitized_db_url("sqlite:///trace.db?password=hunter2")
     assert masked.startswith("sqlite:///trace.db")
     assert "hunter2" not in masked
+
+
+def test_doctor_surfaces_sequence_gaps(
+    monkeypatch: pytest.MonkeyPatch, session_manager: DatabaseSessionManager
+) -> None:
+    from trace_core.audit.dto import VerifyResultDto
+    from trace_core.audit.service import AuditService
+    from trace_core.core.cli.doctor import _ledger_check
+
+    monkeypatch.setattr(
+        AuditService,
+        "verify",
+        lambda self: VerifyResultDto(is_valid=True, events_verified=4, first_seq=1, last_seq=6, sequence_gaps=[3, 5]),
+    )
+    name, detail, ok = _ledger_check(session_manager)
+    assert ok is True, "the verifier's own verdict stays the authority"
+    assert name == "Records"
+    assert "sequence gaps at 3, 5" in detail
+
+
+def test_doctor_generates_a_first_run_key_so_the_gate_can_pass(
+    monkeypatch: pytest.MonkeyPatch, session_manager: DatabaseSessionManager, temp_storage: Path
+) -> None:
+    from trace_core.audit import signing
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    monkeypatch.setattr("trace_core.core.cli.doctor.db_manager", session_manager)
+    monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+    res = CliRunner().invoke(app, ["doctor"])
+    assert res.exit_code == 0, res.output
+    assert (temp_storage / "keys").is_dir(), "the key must land in the test storage, not the operator's"
+    assert signing.active_key_id().startswith(signing.ED25519_PREFIX)

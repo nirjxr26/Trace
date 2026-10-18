@@ -29,6 +29,7 @@ from trace_core.devices.domain import (
     WpVerdict,
 )
 from trace_core.devices.models import CaseDeviceModel, DeviceFingerprintModel
+from trace_core.devices.synthetic import synthetic_serial_variants
 
 
 class DeviceRepository(Protocol):
@@ -139,7 +140,7 @@ class SqlAlchemyDeviceRepository(
         """Newest-first rows for one identity. Single source for latest and history reads."""
         return (
             select(DeviceFingerprintModel)
-            .where(DeviceFingerprintModel.serial == serial)
+            .where(DeviceFingerprintModel.serial.in_(synthetic_serial_variants(serial)))
             .order_by(DeviceFingerprintModel.inspected_at.desc())
             .limit(limit)
         )

@@ -33,6 +33,7 @@ CASE_ACTIONS = [
     ("list", "List all cases"),
     ("show", "Display case dossier"),
     ("edit", "Update case metadata"),
+    ("review", "Move under review or return to active work"),
     ("close", "Seal & close case"),
     ("delete", "Archive or purge case"),
     ("restore", "Restore archived case"),
@@ -53,6 +54,8 @@ CASE_FLAGS = [
     ("-o", "table|json"),
     ("-a", "Include deleted cases"),
 ]
+
+RESUME_LABEL = "Return to active work"
 
 STATUS_CHOICES = [
     ("OPEN", "Active case"),
@@ -142,6 +145,7 @@ class CaseShellCommandHandler(BaseShellHandler):
             "create case",
             "show case",
             "edit case",
+            "review case",
             "close case",
             "delete case",
             "restore case",
@@ -159,6 +163,7 @@ class CaseShellCommandHandler(BaseShellHandler):
             ("case select <ID|NUM>", "use case", "Set active case context"),
             ("case deselect", "unuse case", "Clear active case context"),
             ("case edit [<ID|NUM>]", "edit case", "Update case metadata (title, examiner, notes, tags)"),
+            ("case review [<ID|NUM>] [--resume]", "review case", "Move under review or return to active work"),
             ("case close [<ID|NUM>]", "close case", "Seal & close (type number to confirm)"),
             ("case delete [<ID|NUM>] [--purge]", "delete case", "Archive (y/N) or purge (type number)"),
             ("case restore [<ID|NUM>]", "restore case", "Restore an archived case"),
@@ -186,7 +191,7 @@ class CaseShellCommandHandler(BaseShellHandler):
     def _complete_action_args(self, act: str, parts: list[str], text: str, ctx: ShellContext) -> list[Any]:
         if act == "list":
             return self._complete_list_args(parts, text, ctx)
-        if act in ("show", "select", "use", "edit", "close", "delete", "restore"):
+        if act in ("show", "select", "use", "edit", "review", "close", "delete", "restore"):
             return self._complete_case_targets(act, parts, text, ctx)
         return []
 
@@ -226,6 +231,8 @@ class CaseShellCommandHandler(BaseShellHandler):
         case_nums = self._get_candidate_case_numbers(ctx)
         if act == "delete":
             case_nums.append(("--purge", "Permanently erase record"))
+        if act == "review":
+            case_nums.append(("--resume", RESUME_LABEL))
         # keep forensic hashes out — only case numbers + preview, show up to 15 grouped
         return filter_completions(case_nums, curr, limit=15)
 
@@ -235,11 +242,13 @@ class CaseShellCommandHandler(BaseShellHandler):
             return [("cases", "List all forensic cases")]
         if first_word == "create" and (len(parts) == 1 or text.endswith(" ")):
             return [("case", "Guided case creation wizard")]
-        if first_word in ("show", "select", "use", "edit", "close", "delete", "restore"):
+        if first_word in ("show", "select", "use", "edit", "review", "close", "delete", "restore"):
             curr = parts[-1] if not text.endswith(" ") else ""
             res = [("case", "Case action")] + self._get_candidate_case_numbers(ctx)
             if first_word == "delete":
                 res.append(("--purge", "Permanently erase record"))
+            if first_word == "review":
+                res.append(("--resume", RESUME_LABEL))
             return [(r, m) for r, m in res if r.startswith(curr)]
         return []
 
@@ -295,6 +304,9 @@ class CaseShellCommandHandler(BaseShellHandler):
             return True
         if act == "edit":
             self._interactive_edit_case(service, args, ctx)
+            return True
+        if act == "review":
+            self._interactive_review_case(service, args, ctx)
             return True
         if act == "close":
             self._interactive_close_case(service, args, ctx)
@@ -475,6 +487,28 @@ class CaseShellCommandHandler(BaseShellHandler):
             console.print("")
             return False
         return True
+
+    def _interactive_review_case(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:
+        resume = has_flag(sub_args, "--resume")
+        ident_args = [a for a in sub_args if a != "--resume"]
+        ident = self._resolve_or_prompt_identifier(ident_args, ctx, "to review")
+
+        console.print("")
+        verb = RESUME_LABEL if resume else "Move under review"
+        if not prompt_confirm(f"{verb}: case '{ident}'?"):
+            print_cancelled("Review")
+            return
+
+        with capture_cli_errors("Review Case", exit_on_error=False):
+            updated = service.review_case(ident, resume=resume)
+            _sync_active_case(ctx, updated)
+            message = (
+                f"Case '{updated.number}' returned to active work."
+                if resume
+                else f"Case '{updated.number}' moved under review."
+            )
+            render_success(message)
+            render_case_detail(updated)
 
     def _interactive_close_case(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:
         ident = self._resolve_or_prompt_identifier(sub_args, ctx, "to close")

@@ -20,6 +20,16 @@ def test_ensure_ready_blocked_during_update(session_manager, temp_storage_root):
     session_manager.ensure_ready()
 
 
+def test_the_blocked_boot_names_the_recovery_command(session_manager, temp_storage_root):
+    begin_update_migration("tx-h9-pin")
+    try:
+        with pytest.raises(UpdateInProgressError) as excinfo:
+            session_manager.ensure_ready()
+    finally:
+        finish_update_migration("tx-h9-pin")
+    assert "trace recovery" in str(excinfo.value)
+
+
 def test_updater_migration_clears_marker(session_manager, temp_storage_root):
     result = run_updater_migration(session_manager, "tx-mig-1")
     assert result["schema"] == current_schema_version(session_manager)
@@ -61,7 +71,12 @@ def test_recovery_clears_stale_marker(session_manager, temp_storage_root):
 def test_compat_rejects_below_minimum(session_manager, temp_storage_root):
     current = current_schema_version(session_manager)
     with pytest.raises(MigrationCompatibilityError):
-        verify_compatibility(session_manager, current + 100, None)
+        verify_compatibility(session_manager, current + 1, current + 2)
+
+
+def test_compat_accepts_a_schema_ahead_of_the_target(session_manager, temp_storage_root):
+    current = current_schema_version(session_manager)
+    verify_compatibility(session_manager, 1, current - 1)
 
 
 def test_backup_failure_blocks_migration(session_manager, temp_storage_root, tmp_path):
@@ -106,6 +121,15 @@ def test_rollback_refuses_incompatible_schema(session_manager, temp_storage_root
         updater_mod.activate(base, version)
     with pytest.raises(RecoveryError):
         rollback_release(base, session_manager, None)
+
+
+def test_rollback_refuses_an_unsafe_release_name(session_manager, temp_storage_root, tmp_path):
+    from trace_core.updates.errors import RecoveryError
+    from trace_core.updates.migration import rollback_release
+
+    base = tmp_path / "install"
+    with pytest.raises(RecoveryError):
+        rollback_release(base, session_manager, None, target="../0.1.0")
 
 
 def test_noncontiguous_schema_rejected(session_manager, temp_storage_root):
