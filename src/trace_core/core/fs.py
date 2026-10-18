@@ -20,23 +20,27 @@ def ensure_dir(path: str | Path, mode: int = 0o700) -> Path:
 def check_contained(path: str | Path, root: str | Path, *, what: str = "path") -> Path:
     """Refuse paths escaping root. Backstop behind input validation.
 
-    The root is NOT resolved before comparison. Resolving both sides made a symlinked
-    root vacuously safe — base became the link target, so every candidate beneath it
-    compared as contained and the check could never fire. The root is the trust boundary,
-    so it is used literally and only the candidate is resolved; a candidate that is itself
+    The root must resolve to its literal absolute form (H-21). Comparing against a
+    resolved boundary made a symlinked root vacuously safe, because base became the
+    link target, so every candidate beneath it compared as contained and the check
+    could never fire. A root whose resolution differs is a symlinked root and is
+    refused outright; only the candidate is resolved, so a candidate that is itself
     a symlink is resolved to its target and must still land inside the boundary.
     """
     base = Path(root)
+    try:
+        base_abs = base.absolute()
+        base_real = base.resolve()
+    except OSError:
+        raise ValueError(f"Refusing {what} escaping storage root")
+    if base_real != base_abs:
+        raise ValueError(f"Refusing {what} escaping storage root")
     try:
         resolved = Path(path).resolve()
     except OSError:
         raise ValueError(f"Refusing {what} escaping storage root")
     try:
-        base_abs = base.absolute()
-    except OSError:
-        raise ValueError(f"Refusing {what} escaping storage root")
-    try:
-        resolved.relative_to(base_abs)
+        resolved.relative_to(base_real)
     except ValueError:
         raise ValueError(f"Refusing {what} escaping storage root")
     return resolved
