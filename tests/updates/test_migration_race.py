@@ -123,6 +123,15 @@ def test_rollback_refuses_incompatible_schema(session_manager, temp_storage_root
         rollback_release(base, session_manager, None)
 
 
+def test_rollback_refuses_an_unsafe_release_name(session_manager, temp_storage_root, tmp_path):
+    from trace_core.updates.errors import RecoveryError
+    from trace_core.updates.migration import rollback_release
+
+    base = tmp_path / "install"
+    with pytest.raises(RecoveryError):
+        rollback_release(base, session_manager, None, target="../0.1.0")
+
+
 def test_noncontiguous_schema_rejected(session_manager, temp_storage_root):
     from sqlalchemy import text
 

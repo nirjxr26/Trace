@@ -13,6 +13,7 @@ from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import DBAPIError
 
 from trace_core.audit.domain import GENESIS_CHAIN, chain_hash, payload_hash
+from trace_core.audit.service import AuditService
 from trace_core.cases.domain import CaseStatus
 from trace_core.cases.dto import CaseCreateDto, CaseFilterDto, CaseUpdateDto
 from trace_core.cases.service import CaseService
@@ -327,7 +328,6 @@ def test_postgres_chain_state_only_advances(pg_session_manager: DatabaseSessionM
         with pg_session_manager.session() as session:
             for stmt in (
                 "UPDATE audit_chain_state SET last_seq = last_seq - 1 WHERE id = 1",
-                "UPDATE audit_chain_state SET last_chain_hash = repeat('0', 64) WHERE id = 1",
                 "DELETE FROM audit_chain_state WHERE id = 1",
                 "TRUNCATE audit_chain_state",
             ):
@@ -335,6 +335,33 @@ def test_postgres_chain_state_only_advances(pg_session_manager: DatabaseSessionM
                     _attempt_tamper_write(session, stmt)
                 session.rollback()
     finally:
+        service.delete_case(created, purge=False)
+        service.delete_case(created, purge=True)
+
+
+def test_postgres_chain_head_rewrite_is_caught_by_the_tail_binding(
+    pg_session_manager: DatabaseSessionManager,
+) -> None:
+    service = CaseService(pg_session_manager)
+    created = _seed_ledger_row(pg_session_manager, "ChainRewrite")
+    with pg_session_manager.engine.connect() as conn:
+        original_hash = conn.execute(text("SELECT last_chain_hash FROM audit_chain_state WHERE id = 1")).scalar()
+    try:
+        assert AuditService(pg_session_manager).verify().is_valid is True
+        with pg_session_manager.session() as session:
+            _attempt_tamper_write(
+                session, "UPDATE audit_chain_state SET last_chain_hash = repeat('0', 64) WHERE id = 1"
+            )
+            session.commit()
+        result = AuditService(pg_session_manager).verify()
+        assert result.is_valid is False
+        assert result.mismatch_type == "chain_state"
+    finally:
+        with pg_session_manager.session() as session:
+            session.execute(
+                text("UPDATE audit_chain_state SET last_chain_hash = :h WHERE id = 1"), {"h": original_hash}
+            )
+            session.commit()
         service.delete_case(created, purge=False)
         service.delete_case(created, purge=True)
 

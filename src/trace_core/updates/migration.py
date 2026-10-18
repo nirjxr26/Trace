@@ -279,11 +279,14 @@ def rollback_release(
     *,
     target: str | None = None,
 ) -> str:
+    from trace_core.updates.verifier import is_safe_filename
     from trace_updater import updater as updater_mod
 
     previous = target or updater_mod.read_previous(base)
     if not previous:
         raise RecoveryError("no previous release to restore")
+    if not isinstance(previous, str) or not is_safe_filename(previous):
+        raise RecoveryError("previous release name is not safe to restore; manual inspection required")
     meta = updater_mod.read_release_meta(base, previous)
     if meta is None:
         raise RecoveryError(f"previous release {previous} carries no compatibility metadata")
