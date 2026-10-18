@@ -213,15 +213,15 @@ jobs:
           pip install --require-hashes --only-binary :all: -r requirements.txt
           pip install --no-deps -e .
 
-      - name: Build old release wheels from their tags
+      - name: Build old release wheels from pinned commits
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/e2e-wheels" "$RUNNER_TEMP/old"
-          for tag in v0.2.3 v0.2.4; do
-            git worktree add "$RUNNER_TEMP/old/$tag" "$tag"
-            python -m build --wheel --outdir "$RUNNER_TEMP/e2e-wheels" "$RUNNER_TEMP/old/$tag"
-            git worktree remove --force "$RUNNER_TEMP/old/$tag"
+          for sha in 03fb7ece42ff3cb74fa979ba8e164b0c06025949 169a8a4d48326ca7eabb8b7faa1d8324fd1639d1; do
+            git worktree add "$RUNNER_TEMP/old/$sha" "$sha"
+            python -m build --wheel --outdir "$RUNNER_TEMP/e2e-wheels" "$RUNNER_TEMP/old/$sha"
+            git worktree remove --force "$RUNNER_TEMP/old/$sha"
           done
           ls "$RUNNER_TEMP/e2e-wheels"
 

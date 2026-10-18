@@ -1224,12 +1224,6 @@ ANCHOR_INTENT_UNIQUE_INDEX = "uq_anchor_intents_case_seq"
 ANCHOR_INTENT_UNIQUE_ADD = (
     f"CREATE UNIQUE INDEX IF NOT EXISTS {ANCHOR_INTENT_UNIQUE_INDEX} ON anchor_intents (case_number, seq)"
 )
-ANCHOR_INTENT_DEDUPE = (
-    "DELETE FROM anchor_intents WHERE id NOT IN ("
-    "SELECT id FROM (SELECT id, ROW_NUMBER() OVER ("
-    "PARTITION BY case_number, seq ORDER BY created_at DESC, id DESC) AS rn FROM anchor_intents"
-    ") ranked WHERE rn = 1)"
-)
 
 
 def _verify_023_anchor_intents_unique(conn: Connection) -> bool:
@@ -1241,24 +1235,36 @@ def _verify_023_anchor_intents_unique(conn: Connection) -> bool:
             "GROUP BY case_number, seq HAVING count(*) > 1) dupes"
         )
     ).scalar()
-    return (duplicates or 0) == 0 and _index_exists(conn, "anchor_intents", ANCHOR_INTENT_UNIQUE_INDEX)
+    unique = {idx["name"]: idx.get("unique") for idx in inspect(conn).get_indexes("anchor_intents")}
+    return (duplicates or 0) == 0 and bool(unique.get(ANCHOR_INTENT_UNIQUE_INDEX))
 
 
 def _run_migration_023(conn: Connection) -> None:
     if "anchor_intents" not in inspect(conn).get_table_names():
         return
-    conn.execute(text(ANCHOR_INTENT_DEDUPE))
+    duplicates = conn.execute(
+        text(
+            "SELECT case_number, seq, count(*) FROM anchor_intents "
+            "GROUP BY case_number, seq HAVING count(*) > 1 ORDER BY case_number, seq"
+        )
+    ).all()
+    if duplicates:
+        detail = "; ".join(f"{row[0]} seq {row[1]} x{row[2]}" for row in duplicates)
+        raise RuntimeError(
+            f"anchor_intents holds {len(duplicates)} duplicated (case_number, seq) position(s): {detail}. "
+            "Nothing was deleted; resolve the duplicates by hand, then re-run."
+        )
     conn.execute(text(ANCHOR_INTENT_UNIQUE_ADD))
 
 
 @register_migration(
     23,
     "023_anchor_intents_unique_position",
-    operations=(ANCHOR_INTENT_DEDUPE, ANCHOR_INTENT_UNIQUE_ADD),
+    operations=(ANCHOR_INTENT_UNIQUE_ADD,),
     verify=lambda conn: _verify_023_anchor_intents_unique(conn),
 )
 def _migration_023_anchor_intents_unique(bind: Engine | Connection) -> None:
-    """One anchor intent per (case, seq); the newest duplicate survives the upgrade."""
+    """One anchor intent per (case, seq); duplicates refuse the upgrade instead of being deleted."""
     if isinstance(bind, Connection):
         _run_migration_023(bind)
     else:
@@ -1308,8 +1314,21 @@ def _migration_024_chain_state_tip(bind: Engine | Connection) -> None:
             _run_migration_024(conn)
 
 
+def _can_create_roles(conn: Connection) -> bool:
+    row = conn.execute(text("SELECT rolsuper OR rolcreaterole FROM pg_roles WHERE rolname = current_user")).scalar()
+    return bool(row)
+
+
 def _run_migration_025(conn: Connection) -> None:
     if conn.dialect.name != "postgresql":
+        return
+    if not _can_create_roles(conn):
+        import structlog
+
+        structlog.get_logger().warning(
+            "Skipping least-privilege role setup: the connecting role cannot create roles",
+            hint="create trace_app, trace_reader and trace_migrator manually; see docs/findings/LEDGER.md",
+        )
         return
     failures: list[str] = []
     for stmt in ROLE_DDL:

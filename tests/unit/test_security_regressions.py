@@ -1718,7 +1718,16 @@ def test_a_failed_directory_fsync_raises(tmp_path, monkeypatch) -> None:  # type
     def _io_error(fd: int) -> None:
         raise OSError(5, "Input/output error")
 
+    def _fake_open(*_args: object, **_kwargs: object) -> int:
+        return 0
+
+    def _fake_close(_fd: int) -> None:
+        return None
+
     monkeypatch.setattr(fs_mod.os, "fsync", _io_error)
+    if sys.platform == "win32":
+        monkeypatch.setattr(fs_mod.os, "open", _fake_open)
+        monkeypatch.setattr(fs_mod.os, "close", _fake_close)
     with pytest.raises(OSError, match="Input/output error"):
         fs_mod.fsync_dir(tmp_path)
 

@@ -314,12 +314,11 @@ def test_postgres_migration_017_accepts_a_null_case_row(
 
 
 def test_postgres_chain_state_only_advances(pg_session_manager: DatabaseSessionManager) -> None:
-    """Verify the 023 trigger rejects chain-head rewinds, deletions and truncation (H-39)."""
+    """Verify the 024 trigger rejects chain-head rewinds, deletions and truncation (H-39)."""
     from trace_core.core.database.migrations import get_applied_migrations
 
     assert any(
-        m["name"] == "023_audit_chain_state_protection_and_tip"
-        for m in get_applied_migrations(pg_session_manager.engine)
+        m["name"] == "024_audit_chain_state_tip_protection" for m in get_applied_migrations(pg_session_manager.engine)
     )
 
     service = CaseService(pg_session_manager)
@@ -341,11 +340,11 @@ def test_postgres_chain_state_only_advances(pg_session_manager: DatabaseSessionM
 
 
 def test_postgres_anchor_intents_refuse_a_duplicate_case_seq(pg_session_manager: DatabaseSessionManager) -> None:
-    """Verify the 024 unique index holds on PostgreSQL (H-40)."""
+    """Verify the 023 unique index holds on PostgreSQL (H-40)."""
     from trace_core.core.database.migrations import get_applied_migrations
 
     assert any(
-        m["name"] == "024_anchor_intents_case_seq_unique" for m in get_applied_migrations(pg_session_manager.engine)
+        m["name"] == "023_anchor_intents_unique_position" for m in get_applied_migrations(pg_session_manager.engine)
     )
 
     with pytest.raises(DBAPIError):
@@ -388,7 +387,7 @@ def test_postgres_fresh_install_succeeds_without_createrole() -> None:
         mgr.init_schema()
         applied = {m["name"] for m in get_applied_migrations(mgr.engine)}
         assert "011_create_least_privilege_roles" in applied
-        assert "025_least_privilege_roles_replacement" in applied
+        assert "025_least_privilege_roles_resilient" in applied
         with mgr.engine.connect() as conn:
             assert _verify_008_audit_protection(conn) is True
     finally:

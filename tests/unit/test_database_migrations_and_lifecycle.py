@@ -399,7 +399,7 @@ def test_the_case_check_verifier_reads_the_rows_on_sqlite(session_manager, verif
         assert _verify_006_case_checks(conn) is False
 
 
-def test_migration_023_deduplicates_anchor_intents_and_adds_the_unique_index(tmp_path) -> None:
+def test_migration_023_refuses_duplicates_then_adds_the_unique_index_after_cleanup(tmp_path) -> None:
     mgr = DatabaseSessionManager(f"sqlite:///{(tmp_path / 'dup.db').as_posix()}")
     apply_migrations(mgr.engine)
     with mgr.engine.begin() as conn:
@@ -416,6 +416,17 @@ def test_migration_023_deduplicates_anchor_intents_and_adds_the_unique_index(tmp
                 ),
                 {"id": row_id, "chain": chain, "created": created},
             )
+    with pytest.raises(RuntimeError, match=r"2026-DUP-0001 seq 7 x2"):
+        apply_migrations(mgr.engine)
+    with mgr.engine.connect() as conn:
+        kept = conn.execute(
+            sqlalchemy.text("SELECT chain_hash, status FROM anchor_intents WHERE case_number = '2026-DUP-0001'")
+        ).fetchall()
+        recorded = conn.execute(sqlalchemy.text("SELECT count(*) FROM schema_migrations WHERE version = 23")).scalar()
+    assert sorted(kept) == [("a", "pending"), ("b", "pending")]
+    assert recorded == 0
+    with mgr.engine.begin() as conn:
+        conn.execute(sqlalchemy.text("DELETE FROM anchor_intents WHERE id = '00000000000000000000000000000001'"))
     applied = apply_migrations(mgr.engine)
     assert "023_anchor_intents_unique_position" in applied
     with mgr.engine.connect() as conn:

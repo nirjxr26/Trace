@@ -67,17 +67,6 @@ def _enable_audit_triggers(conn) -> None:  # type: ignore[no-untyped-def]
             pass
 
 
-def _disable_chain_state_triggers(conn) -> None:  # type: ignore[no-untyped-def]
-    for ddl in (
-        "DROP TRIGGER IF EXISTS audit_chain_state_no_delete",
-        "DROP TRIGGER IF EXISTS audit_chain_state_no_rollback",
-    ):
-        try:
-            conn.execute(sqlalchemy.text(ddl))
-        except Exception:
-            pass
-
-
 def _tamper_seq_one(session_manager: DatabaseSessionManager) -> None:
     """Break the chain hash of seq 1 behind the append-only triggers.
 

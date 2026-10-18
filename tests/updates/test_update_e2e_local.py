@@ -203,6 +203,7 @@ def _make_e2e_manifest(artifact_path, version, priv, key_id, **over):
 def _install_box(monkeypatch, tmp_path, *, venv_python, old_wheel, pointer_version, prev_wheel=None):
     from trace_core.cases.dto import CaseCreateDto
     from trace_core.cases.service import CaseService
+    from trace_core.core.database import session as session_mod
     from trace_core.core.database.session import DatabaseSessionManager
     from trace_core.core.settings import settings
     from trace_updater import updater as updater_mod
@@ -215,10 +216,19 @@ def _install_box(monkeypatch, tmp_path, *, venv_python, old_wheel, pointer_versi
     manager = DatabaseSessionManager(f"sqlite:///{box / 'e2e.db'}")
     with manager.session():
         pass
+    monkeypatch.setattr(session_mod, "db_manager", manager)
     _pip_install(venv_python, old_wheel)
     base = updater_mod.install_root()
     base.mkdir(parents=True, exist_ok=True)
     (base / "active-version").write_text(pointer_version, encoding="utf-8")
+    active_version = _wheel_version(old_wheel)
+    activedir = base / "releases" / active_version
+    activedir.mkdir(parents=True)
+    shutil.copy(old_wheel, activedir / old_wheel.name)
+    (activedir / "release.json").write_text(
+        json.dumps({"version": active_version, "release_id": "seed", "schema_min": None, "schema_target": None}),
+        encoding="utf-8",
+    )
     if prev_wheel is not None:
         prev_version = _wheel_version(prev_wheel)
         (base / "previous-version").write_text(prev_version, encoding="utf-8")
@@ -399,5 +409,5 @@ def test_e2e_rollback_restores_running_version(monkeypatch, tmp_path, box_venv, 
     res = _install_cli("--manifest", target, "--yes")
     assert "The update was rolled back." in res.output
     assert _result_marker()["state"] == "ROLLED_BACK"
-    assert (machine.base / "active-version").read_text(encoding="utf-8").strip() == "0.2.3"
-    assert _venv_version(box_venv) == "0.2.3"
+    assert (machine.base / "active-version").read_text(encoding="utf-8").strip() == "0.2.4"
+    assert _venv_version(box_venv) == "0.2.4"
