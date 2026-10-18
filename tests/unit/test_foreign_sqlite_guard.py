@@ -43,8 +43,9 @@ def test_the_refused_file_is_left_byte_identical(tmp_path: Path) -> None:
     _foreign_database(db)
     before = hashlib.sha256(db.read_bytes()).hexdigest()
 
+    engine = create_engine(f"sqlite:///{db}")
     with pytest.raises(ApplicationError):
-        apply_migrations(create_engine(f"sqlite:///{db}"))
+        apply_migrations(engine)
 
     assert hashlib.sha256(db.read_bytes()).hexdigest() == before
     assert _table_names(db) == {"invoices"}
@@ -56,8 +57,9 @@ def test_a_database_with_tables_but_no_migration_table_is_refused(tmp_path: Path
     db = tmp_path / "half.db"
     _foreign_database(db, table="cases")
 
+    engine = create_engine(f"sqlite:///{db}")
     with pytest.raises(ApplicationError, match="Refusing to initialize this database"):
-        apply_migrations(create_engine(f"sqlite:///{db}"))
+        apply_migrations(engine)
 
 
 def test_an_empty_sqlite_file_is_migrated_normally(tmp_path: Path) -> None:

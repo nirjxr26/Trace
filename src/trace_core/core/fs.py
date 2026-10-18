@@ -35,7 +35,9 @@ def check_contained(path: str | Path, root: str | Path, *, what: str = "path") -
         base_abs = base.absolute()
     except OSError:
         raise ValueError(f"Refusing {what} escaping storage root")
-    if not resolved.is_relative_to(base_abs):
+    try:
+        resolved.relative_to(base_abs)
+    except ValueError:
         raise ValueError(f"Refusing {what} escaping storage root")
     return resolved
 
@@ -73,7 +75,9 @@ def check_device_contained(path: str | Path, root: str | Path = "/dev", *, what:
         raise ValueError(f"Refusing {what} that does not exist")
     if resolved == base_real:
         raise ValueError(f"Refusing {what} that is the device root itself")
-    if not resolved.is_relative_to(base_real):
+    try:
+        resolved.relative_to(base_real)
+    except ValueError:
         raise ValueError(f"Refusing {what} escaping the trusted device root")
     return resolved
 
