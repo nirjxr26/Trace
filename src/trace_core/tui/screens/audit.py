@@ -117,7 +117,7 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         if self._exhausted or not self._items:
             return
         at_last_row = table.cursor_row is not None and table.cursor_row >= len(self._items) - 1
-        near_end = table.max_scroll_y - table.scroll_offset.y <= PREFETCH_LINES
+        near_end = table.max_scroll_y > 0 and table.max_scroll_y - table.scroll_offset.y <= PREFETCH_LINES
         if not (at_last_row or near_end):
             return
         oldest = self._items[-1].seq
