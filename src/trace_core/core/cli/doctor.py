@@ -18,6 +18,7 @@ MIN_PYTHON = (3, 12)
 NO_CONNECTION = "no connection"
 RECORDS_NAME = "Records"
 PROTECTED_NAME = "Records protected"
+SIGNING_KEY_NAME = "Signing key"
 DATABASE_CHECKS = ("Migrations", RECORDS_NAME, PROTECTED_NAME)
 
 
@@ -69,9 +70,9 @@ def _signing_key_check() -> tuple[str, str, bool]:
     if active_key_id() == HMAC_KEY_ID and is_default_key():
         generated = ensure_first_run_key()
         if generated is None:
-            return ("Signing key", "not set — your records can't be verified", False)
-        return ("Signing key", f"set — generated {generated}", True)
-    return ("Signing key", "set", True)
+            return (SIGNING_KEY_NAME, "not set — your records can't be verified", False)
+        return (SIGNING_KEY_NAME, f"set — generated {generated}", True)
+    return (SIGNING_KEY_NAME, "set", True)
 
 
 def _ledger_check(manager: DatabaseSessionManager) -> tuple[str, str, bool]:

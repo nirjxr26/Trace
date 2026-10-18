@@ -193,6 +193,12 @@ def enforce_verify_policy(res) -> None:  # type: ignore[no-untyped-def]
         raise AuditTamperError(f"Tamper detected at seq {res.first_mismatch_seq} ({res.mismatch_type})")
 
 
+def _first_divergent_seq(head_seq: int, last_seq: int) -> int:
+    if head_seq == last_seq:
+        return head_seq
+    return min(head_seq, last_seq) + 1
+
+
 def bind_head_to_tail(session, res):  # type: ignore[no-untyped-def]
     """Cross-check the recorded chain head against the ledger tail and its signed tip."""
     if not res.is_valid:
@@ -217,12 +223,7 @@ def bind_head_to_tail(session, res):  # type: ignore[no-untyped-def]
             )
         tail_chain = tail.chain_hash
     if head_seq != last_seq or head_chain != tail_chain:
-        if head_seq > last_seq:
-            first_bad = last_seq + 1
-        elif head_seq < last_seq:
-            first_bad = head_seq + 1
-        else:
-            first_bad = head_seq
+        first_bad = _first_divergent_seq(head_seq, last_seq)
         return res.model_copy(
             update={"is_valid": False, "mismatch_type": "chain_state", "first_mismatch_seq": first_bad}
         )

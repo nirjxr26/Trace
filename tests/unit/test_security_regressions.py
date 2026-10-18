@@ -635,8 +635,9 @@ def test_a_case_mutation_refuses_when_the_identity_cannot_be_resolved(
         raise OSError("no user available")
 
     monkeypatch.setattr("getpass.getuser", _no_user)
+    second = CaseCreateDto(title="Second", lead_examiner="Ex")
     with pytest.raises(ApplicationError, match="accountable identity"):
-        service.create_case(CaseCreateDto(title="Second", lead_examiner="Ex"))
+        service.create_case(second)
     assert [c.title for c in service.list_cases()] == ["First"]
 
 

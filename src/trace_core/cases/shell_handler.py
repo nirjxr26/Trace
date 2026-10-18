@@ -55,6 +55,8 @@ CASE_FLAGS = [
     ("-a", "Include deleted cases"),
 ]
 
+RESUME_LABEL = "Return to active work"
+
 STATUS_CHOICES = [
     ("OPEN", "Active case"),
     ("UNDER_REVIEW", "Case under review"),
@@ -230,7 +232,7 @@ class CaseShellCommandHandler(BaseShellHandler):
         if act == "delete":
             case_nums.append(("--purge", "Permanently erase record"))
         if act == "review":
-            case_nums.append(("--resume", "Return to active work"))
+            case_nums.append(("--resume", RESUME_LABEL))
         # keep forensic hashes out — only case numbers + preview, show up to 15 grouped
         return filter_completions(case_nums, curr, limit=15)
 
@@ -246,7 +248,7 @@ class CaseShellCommandHandler(BaseShellHandler):
             if first_word == "delete":
                 res.append(("--purge", "Permanently erase record"))
             if first_word == "review":
-                res.append(("--resume", "Return to active work"))
+                res.append(("--resume", RESUME_LABEL))
             return [(r, m) for r, m in res if r.startswith(curr)]
         return []
 
@@ -492,7 +494,7 @@ class CaseShellCommandHandler(BaseShellHandler):
         ident = self._resolve_or_prompt_identifier(ident_args, ctx, "to review")
 
         console.print("")
-        verb = "Return to active work" if resume else "Move under review"
+        verb = RESUME_LABEL if resume else "Move under review"
         if not prompt_confirm(f"{verb}: case '{ident}'?"):
             print_cancelled("Review")
             return

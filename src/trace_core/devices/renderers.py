@@ -26,7 +26,7 @@ VERDICT_STYLES: dict[str, tuple[str, str]] = {
 }
 
 
-_PART_NUMBER = re.compile(r"(?<!-)[ _]{1,64}(?=[A-Z]{0,64}[0-9])[A-Z0-9]{4,64}(?:_[A-Z0-9]{2,64}){0,16}$")
+_PART_NUMBER = re.compile(r"(?<!-)[ _]{1,64}(?=[A-Z]{0,64}\d)[A-Z0-9]{4,64}(?:_[A-Z0-9]{2,64}){0,16}$")
 _CAPACITY_SUFFIX = re.compile(r"\s{1,64}\d{1,64}(?:\.\d{1,64})?\s?[TGM]B\b", re.IGNORECASE)
 _TAG_SUFFIX = re.compile(r"\s{1,64}(?:USB\s?3\.0|External)\b", re.IGNORECASE)
 

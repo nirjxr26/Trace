@@ -45,12 +45,12 @@ def synthetic_serial(content_hash: str) -> str:
 
 def synthetic_serial_variants(serial: str) -> tuple[str, ...]:
     """Stored forms of a synthetic serial: the current width plus its legacy truncation."""
-    if not is_synthetic_serial(serial):
-        return (serial,)
-    hexdigest = serial.removeprefix("SYNTH-")
-    if len(hexdigest) != SYNTHETIC_SERIAL_WIDTH:
-        return (serial,)
-    return (serial, f"SYNTH-{hexdigest[:LEGACY_SYNTHETIC_SERIAL_WIDTH]}")
+    variants = [serial]
+    if is_synthetic_serial(serial):
+        hexdigest = serial.removeprefix("SYNTH-")
+        if len(hexdigest) == SYNTHETIC_SERIAL_WIDTH:
+            variants.append(f"SYNTH-{hexdigest[:LEGACY_SYNTHETIC_SERIAL_WIDTH]}")
+    return tuple(variants)
 
 
 def absent_serial(node: str, *, size_bytes: int | None = None, model: str | None = None) -> str:

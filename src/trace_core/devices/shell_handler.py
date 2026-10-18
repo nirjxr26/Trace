@@ -134,19 +134,18 @@ class DeviceShellCommandHandler(BaseShellHandler):
 
         real = any(flag in args for flag in _PHYSICAL_FLAGS)
         acknowledged = any(flag in args for flag in _ACK_FLAGS)
-        if acknowledged and "--yes" not in args and "-y" not in args:
-            if not confirm_override():
-                return True
-        render_gate(
-            do_check(
-                None,
-                node,
-                allow_real_hardware=real,
-                acknowledge_unverified_source=acknowledged,
-                override_reason=_flag(args, "--reason") or "",
-            ),
-            output=output,
-        )
+        needs_consent = acknowledged and "--yes" not in args and "-y" not in args
+        if not needs_consent or confirm_override():
+            render_gate(
+                do_check(
+                    None,
+                    node,
+                    allow_real_hardware=real,
+                    acknowledge_unverified_source=acknowledged,
+                    override_reason=_flag(args, "--reason") or "",
+                ),
+                output=output,
+            )
         return True
 
     def _export(self, args: list[str]) -> bool:

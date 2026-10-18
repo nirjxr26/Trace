@@ -16,7 +16,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from trace_core.core.clock import now_utc
 from trace_core.devices._subprocess import (
@@ -110,6 +110,13 @@ class LinuxDevice:
         native = self._native(device, name, entry)
         cause, firmware, enriched_wwn = self._enrich(name, native.interface)
         enriched = cause is None and (firmware or enriched_wwn)
+        source: Literal["os", "smartctl", "synthetic"]
+        if is_synthetic_serial(native.serial):
+            source = "synthetic"
+        elif enriched:
+            source = "smartctl"
+        else:
+            source = "os"
         fingerprint = DeviceFingerprint(
             serial=ObservedSerial(value=native.serial),
             model=native.model,
@@ -117,7 +124,7 @@ class LinuxDevice:
             firmware=firmware,
             interface=native.interface,
             wwn=native.wwn or enriched_wwn,
-            source="synthetic" if is_synthetic_serial(native.serial) else ("smartctl" if enriched else "os"),
+            source=source,
         )
         return DeviceInspection(device=device, fingerprint=fingerprint, inspected_at=now_utc())
 

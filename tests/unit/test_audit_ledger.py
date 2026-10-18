@@ -338,10 +338,12 @@ def test_tail_deletion_is_detected_by_the_chain_head_binding(session_manager: Da
 def test_the_chain_head_cannot_be_deleted_or_rolled_back(session_manager: DatabaseSessionManager) -> None:
     CaseService(session_manager).create_case(CaseCreateDto(title="A", lead_examiner="Ex"))
     with session_manager.engine.begin() as conn:
+        delete_head = sqlalchemy.text("DELETE FROM audit_chain_state")
+        rollback_head = sqlalchemy.text("UPDATE audit_chain_state SET last_seq = last_seq - 1")
         with pytest.raises(sqlalchemy.exc.IntegrityError):
-            conn.execute(sqlalchemy.text("DELETE FROM audit_chain_state"))
+            conn.execute(delete_head)
         with pytest.raises(sqlalchemy.exc.IntegrityError):
-            conn.execute(sqlalchemy.text("UPDATE audit_chain_state SET last_seq = last_seq - 1"))
+            conn.execute(rollback_head)
         conn.execute(sqlalchemy.text("UPDATE audit_chain_state SET last_seq = last_seq + 1"))
 
 
@@ -426,8 +428,9 @@ def test_export_refuses_a_ledger_whose_head_does_not_match_the_tail(
     with session_manager.engine.begin() as conn:
         conn.execute(sqlalchemy.text("UPDATE audit_chain_state SET last_chain_hash = :h"), {"h": "f" * 64})
     out = tmp_path / "bundle.jsonl"
+    audit_svc = AuditService(session_manager)
     with pytest.raises(AuditTamperError, match="chain_state"):
-        AuditService(session_manager).export(out)
+        audit_svc.export(out)
     assert not out.exists()
 
 
@@ -824,8 +827,9 @@ def test_do_verify_treats_a_public_key_ledger_as_a_key_problem(
     CaseService(session_manager).create_case(CaseCreateDto(title="T1", lead_examiner="Ex"))
     _resign_seq_one_with_default_key(session_manager)
     monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+    audit_svc = AuditService(session_manager)
     with pytest.raises(ApplicationError) as exc:
-        do_verify(AuditService(session_manager), "json", None)
+        do_verify(audit_svc, "json", None)
     assert not isinstance(exc.value, AuditTamperError)
     assert "tamper" not in str(exc.value).lower()
     assert "restore" not in str(exc.value).lower()
@@ -997,8 +1001,9 @@ def test_export_refuses_a_ledger_that_fails_verification(tmp_path, session_manag
         conn.execute(sqlalchemy.text("UPDATE audit_events SET actor='Mallory' WHERE seq=1"))
         _enable_audit_triggers(conn)
     out = tmp_path / "refused.jsonl"
+    audit_svc = AuditService(session_manager)
     with pytest.raises(AuditTamperError, match="column:actor"):
-        AuditService(session_manager).export(out)
+        audit_svc.export(out)
     assert not out.exists()
 
 

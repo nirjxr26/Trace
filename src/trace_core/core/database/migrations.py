@@ -639,6 +639,26 @@ def _reassert_audit_protection(engine: Engine) -> None:
                 )
 
 
+def _apply_one_migration(engine: Engine, version: int, name: str, action: MigrationAction) -> None:
+    with engine.begin() as conn:
+        if version not in DECOMMISSIONED_MIGRATIONS:
+            action(conn)
+            verifier = MIGRATION_VERIFIERS.get(version)
+            if verifier is not None and not verifier(conn):
+                raise RuntimeError(f"Migration {name} failed verification; rolled back, not recorded.")
+        cols = _column_names(conn, "schema_migrations")
+        values: dict[str, Any] = {
+            "version": version,
+            "name": name,
+            "applied_at": now_utc(),
+        }
+        if "checksum" in cols:
+            values["checksum"] = _migration_checksum(version, name)
+        if "checksum_scheme" in cols:
+            values["checksum_scheme"] = CHECKSUM_SCHEME
+        conn.execute(schema_migrations.insert().values(**values))
+
+
 def apply_migrations(engine: Engine) -> list[str]:
     """Apply all pending migrations sequentially within transaction boundaries."""
     with _migration_lock(engine):
@@ -648,23 +668,7 @@ def apply_migrations(engine: Engine) -> list[str]:
 
         for version, name, action in MIGRATIONS:
             if version not in applied_versions:
-                with engine.begin() as conn:
-                    if version not in DECOMMISSIONED_MIGRATIONS:
-                        action(conn)
-                        verifier = MIGRATION_VERIFIERS.get(version)
-                        if verifier is not None and not verifier(conn):
-                            raise RuntimeError(f"Migration {name} failed verification; rolled back, not recorded.")
-                    cols = _column_names(conn, "schema_migrations")
-                    values: dict[str, Any] = {
-                        "version": version,
-                        "name": name,
-                        "applied_at": now_utc(),
-                    }
-                    if "checksum" in cols:
-                        values["checksum"] = _migration_checksum(version, name)
-                    if "checksum_scheme" in cols:
-                        values["checksum_scheme"] = CHECKSUM_SCHEME
-                    conn.execute(schema_migrations.insert().values(**values))
+                _apply_one_migration(engine, version, name, action)
                 applied_names.append(name)
 
         _reassert_audit_protection(engine)
