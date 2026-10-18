@@ -64,35 +64,55 @@ def _device_error(e: Exception, operation_title: str | None, default_remediation
     unexpected exception must never be laundered into it, so the mapping keys on the
     verdict the error carries, not on the exception class alone.
     """
-    from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SOURCE_WRITABLE, EXIT_UNKNOWN
+    from trace_core.core.cli.exit_codes import (
+        EXIT_BOOT_DISK,
+        EXIT_ERROR,
+        EXIT_NOT_FOUND,
+        EXIT_SOURCE_WRITABLE,
+        EXIT_UNKNOWN,
+    )
     from trace_core.devices.domain import (
+        BootDiskRefusalError,
         DeviceAccessDeniedError,
         DeviceEnumerationError,
         DeviceNotFoundError,
         WriteProtectionError,
     )
 
-    if isinstance(e, DeviceEnumerationError):
-        return (
-            operation_title or "Couldn't List Devices",
-            str(e),
-            default_remediation or "Nothing was changed. Check the device tooling is installed, then retry.",
+    specs = (
+        (
+            DeviceEnumerationError,
+            "Couldn't List Devices",
+            "Nothing was changed. Check the device tooling is installed, then retry.",
             EXIT_ERROR,
-        )
-    if isinstance(e, DeviceNotFoundError):
-        return (
-            operation_title or "Device Not Found",
-            str(e),
-            default_remediation or "Run 'device list' and use a node exactly as reported.",
+        ),
+        (
+            DeviceNotFoundError,
+            "Device Not Found",
+            "Run 'device list' and use a node exactly as reported.",
             EXIT_NOT_FOUND,
-        )
-    if isinstance(e, DeviceAccessDeniedError):
-        return (
-            operation_title or "Device Access Denied",
-            str(e),
-            default_remediation or "Re-run from an elevated Administrator shell.",
+        ),
+        (
+            DeviceAccessDeniedError,
+            "Device Access Denied",
+            "Re-run from an elevated Administrator shell.",
             EXIT_ERROR,
-        )
+        ),
+        (
+            BootDiskRefusalError,
+            "Boot Disk Refused",
+            "This is the disk running this system. Run 'device list' and target the evidence device's node.",
+            EXIT_BOOT_DISK,
+        ),
+    )
+    for err_cls, title, remed, code in specs:
+        if isinstance(e, err_cls):
+            return (
+                operation_title or title,
+                str(e),
+                default_remediation or remed,
+                code,
+            )
     if not isinstance(e, WriteProtectionError):
         return None
     if e.verdict.value == "WRITABLE":

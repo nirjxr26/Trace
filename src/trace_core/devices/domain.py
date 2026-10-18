@@ -327,8 +327,15 @@ class WriteProtectionError(DeviceError):
         self.evidence = evidence
 
 
+class BootDiskRefusalError(DeviceError):
+    def __init__(self, message: str, evidence: ProtectionEvidence) -> None:
+        super().__init__(message)
+        self.evidence = evidence
+
+
 RESULT_TRUE = "True"
 RESULT_FALSE = "False"
+CHECK_BOOT_DISK = "boot_disk"
 
 
 def verdict_for(

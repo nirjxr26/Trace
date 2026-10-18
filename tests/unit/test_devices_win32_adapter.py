@@ -59,6 +59,21 @@ def test_physical_drive_index_parsing(node: str, expected: int | None) -> None:
     assert win32._index_of(node) is expected
 
 
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("C:\\Windows", "C:"),
+        ("c:\\windows", "C:"),
+        ("D:/Windows", "D:"),
+        ("", None),
+        ("\\Windows", None),
+        ("C", None),
+    ],
+)
+def test_the_system_drive_letter_is_read_from_a_windows_path(path: str, expected: str | None) -> None:
+    assert win32._drive_of(path) == expected
+
+
 def test_enumerated_drives_are_real_hardware_needing_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         win32.Win32Device,
@@ -67,6 +82,7 @@ def test_enumerated_drives_are_real_hardware_needing_opt_in(monkeypatch: pytest.
             None if index > 2 else win32._Drive(index, 500, "S1", "M1", "F1", win32.DeviceInterface.SATA)
         ),
     )
+    monkeypatch.setattr(win32, "_windll", lambda: object())
     devices = win32.Win32Device().list_block_devices()
     assert [d.node for d in devices] == [_node(0), _node(1), _node(2)]
     assert all(d.requires_real_hardware_opt_in for d in devices)
@@ -74,6 +90,7 @@ def test_enumerated_drives_are_real_hardware_needing_opt_in(monkeypatch: pytest.
 
 
 def test_enumeration_is_empty_when_no_handle_opens(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(win32, "_windll", lambda: object())
     monkeypatch.setattr(win32, "_try_open", lambda node: (None, 2))
     assert win32.Win32Device().list_block_devices() == []
 
@@ -90,11 +107,13 @@ def test_enumeration_never_shells_out(monkeypatch: pytest.MonkeyPatch) -> None:
         "run_capped",
         lambda argv, **k: pytest.fail(f"list reached for enrichment: {argv}") if argv[0] == "smartctl" else b"[]",
     )
+    monkeypatch.setattr(win32, "_windll", lambda: object())
     assert len(win32.Win32Device().list_block_devices()) == 1
 
 
 def test_absent_drive_gates_unknown_never_writable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win32, "_try_open", lambda node: (None, 2))
+    monkeypatch.setattr(win32, "_system_volume_numbers", lambda: {})
     gate = win32.Win32Device().verify(_info())
     assert gate.verdict is WpVerdict.UNKNOWN
     assert gate.evidence.unknown_cause is UnknownCause.DEVICE_DISAPPEARED
@@ -136,6 +155,7 @@ def test_inspect_of_an_unparseable_node_raises_device_gone(monkeypatch: pytest.M
 def test_probe_reports_writable_when_the_ioctl_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win32, "_try_open", lambda node: (7, 0))
     monkeypatch.setattr(win32, "_close", lambda handle: None)
+    monkeypatch.setattr(win32, "_system_volume_numbers", lambda: {})
     monkeypatch.setattr(win32, "_is_writable", lambda handle: True)
     gate = win32.Win32Device().verify(_info())
     assert gate.verdict is WpVerdict.WRITABLE
@@ -153,6 +173,7 @@ def test_probe_reports_read_only_when_the_ioctl_says_so(monkeypatch: pytest.Monk
     """
     monkeypatch.setattr(win32, "_try_open", lambda node: (7, 0))
     monkeypatch.setattr(win32, "_close", lambda handle: None)
+    monkeypatch.setattr(win32, "_system_volume_numbers", lambda: {})
     monkeypatch.setattr(win32, "_is_writable", lambda handle: False)
     gate = win32.Win32Device().verify(_info())
     assert gate.verdict is WpVerdict.READ_ONLY
@@ -200,6 +221,27 @@ def test_a_serialless_drive_is_marked_absent_not_named_by_its_node(monkeypatch: 
     node = r"\\.\PhysicalDrive0"
     assert fingerprint.serial.value == absent_serial(node, size_bytes=500)
     assert fingerprint.serial.value != node
+    assert fingerprint.source == "synthetic"
+
+
+def test_a_different_serialless_drive_at_the_same_node_is_a_different_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(win32, "_try_open", lambda node: (7, 0))
+    monkeypatch.setattr(win32, "_close", lambda handle: None)
+    monkeypatch.setattr(
+        win32.Win32Device,
+        "_drive",
+        lambda self, index: win32._Drive(index, 500, None, None, None, win32.DeviceInterface.USB),
+    )
+    first = win32.Win32Device().inspect(_info()).fingerprint.serial.value
+    monkeypatch.setattr(
+        win32.Win32Device,
+        "_drive",
+        lambda self, index: win32._Drive(index, 999, None, None, None, win32.DeviceInterface.USB),
+    )
+    second = win32.Win32Device().inspect(_info()).fingerprint.serial.value
+    assert first != second
 
 
 def test_no_bus_type_outside_the_sdk_enum() -> None:
@@ -278,6 +320,7 @@ def test_an_unsupported_ioctl_is_unknown_not_a_false_read_only(monkeypatch: pyte
     """Off-platform the ioctl cannot answer; claiming access denied would misstate why."""
     monkeypatch.setattr(win32, "_try_open", lambda node: (7, 0))
     monkeypatch.setattr(win32, "_close", lambda handle: None)
+    monkeypatch.setattr(win32, "_system_volume_numbers", lambda: {})
     monkeypatch.setattr(win32, "_is_writable", lambda handle: None)
     gate = win32.Win32Device().verify(_info())
     assert gate.verdict is WpVerdict.UNKNOWN
@@ -291,9 +334,24 @@ def test_is_writable_reports_none_when_there_is_no_kernel32(monkeypatch: pytest.
     assert win32._try_open(r"\\.\PhysicalDrive0") == (None, 0)
 
 
+def test_a_write_protected_disk_is_read_only_not_an_ioctl_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Kernel:
+        @staticmethod
+        def DeviceIoControl(*_args: object) -> int:
+            return 0
+
+        @staticmethod
+        def GetLastError() -> int:
+            return win32.ERROR_WRITE_PROTECT
+
+    monkeypatch.setattr(win32, "_windll", lambda: _Kernel())
+    assert win32._is_writable(5) is False
+
+
 def test_access_denied_names_eacces_with_elevation_text(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win32, "_try_open", lambda node: (7, 0))
     monkeypatch.setattr(win32, "_close", lambda handle: None)
+    monkeypatch.setattr(win32, "_system_volume_numbers", lambda: {})
     monkeypatch.setattr(win32, "_is_writable", lambda handle: win32.ERROR_ACCESS_DENIED)
     gate = win32.Win32Device().verify(_info())
     assert gate.verdict is WpVerdict.UNKNOWN
@@ -304,6 +362,7 @@ def test_access_denied_names_eacces_with_elevation_text(monkeypatch: pytest.Monk
 def test_an_ioctl_failure_is_never_guessed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win32, "_try_open", lambda node: (7, 0))
     monkeypatch.setattr(win32, "_close", lambda handle: None)
+    monkeypatch.setattr(win32, "_system_volume_numbers", lambda: {})
     monkeypatch.setattr(win32, "_is_writable", lambda handle: 1117)
     gate = win32.Win32Device().verify(_info())
     assert gate.verdict is WpVerdict.UNKNOWN
@@ -314,6 +373,7 @@ def test_the_probe_closes_its_handle_on_every_path(monkeypatch: pytest.MonkeyPat
     closed: list[int] = []
     monkeypatch.setattr(win32, "_try_open", lambda node: (42, 0))
     monkeypatch.setattr(win32, "_close", closed.append)
+    monkeypatch.setattr(win32, "_system_volume_numbers", lambda: {})
     monkeypatch.setattr(win32, "_is_writable", lambda handle: True)
     win32.Win32Device().verify(_info())
     assert closed == [42]
@@ -424,6 +484,7 @@ def test_evidence_shape_is_identical_across_all_three_adapters(monkeypatch: pyte
 
     monkeypatch.setattr(win32, "_try_open", lambda node: (5, 0))
     monkeypatch.setattr(win32, "_close", lambda handle: None)
+    monkeypatch.setattr(win32, "_system_volume_numbers", lambda: {})
     monkeypatch.setattr(win32, "_is_writable", lambda handle: True)
     win_gate = win32.Win32Device().verify(_info())
 
@@ -560,6 +621,7 @@ def test_enumeration_queries_cim_when_a_handle_is_refused(monkeypatch: pytest.Mo
 
 
 def test_enumeration_lists_denied_drives_instead_of_hiding_them(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(win32, "_windll", lambda: object())
     monkeypatch.setattr(win32, "_try_open", lambda node: (None, 5))
     monkeypatch.setattr(win32.Win32Device, "_wmi", lambda self: {})
     devices = win32.Win32Device().list_block_devices()
@@ -569,6 +631,7 @@ def test_enumeration_lists_denied_drives_instead_of_hiding_them(monkeypatch: pyt
 
 
 def test_enumeration_still_skips_genuinely_absent_drives(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(win32, "_windll", lambda: object())
     monkeypatch.setattr(win32, "_try_open", lambda node: (None, 2))
     assert win32.Win32Device().list_block_devices() == []
 
@@ -585,10 +648,43 @@ def test_inspect_of_a_denied_drive_names_access_not_absence(monkeypatch: pytest.
 
 def test_probe_of_a_denied_drive_is_eacces_without_opening(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win32, "_try_open", lambda node: (None, 5))
+    monkeypatch.setattr(win32, "_system_volume_numbers", lambda: {})
     monkeypatch.setattr(win32, "_is_writable", lambda handle: pytest.fail("the probe must not open a denied drive"))
     checks, cause = win32.Win32Device()._probe(0)
     assert cause is UnknownCause.EACCES
     assert "elevated" in " ".join(c.detail or "" for c in checks)
+
+
+def test_the_running_system_disk_is_pinned_in_the_boot_disk_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(win32, "_system_volume_numbers", lambda: {"C:": 0})
+    monkeypatch.setattr(win32, "_try_open", lambda node: (7, 0))
+    monkeypatch.setattr(win32, "_close", lambda handle: None)
+    monkeypatch.setattr(win32, "_is_writable", lambda handle: False)
+    gate = win32.Win32Device().verify(_info())
+    row = next(c for c in gate.evidence.checks if c.name == win32.CHECK_BOOT_DISK)
+    assert row.result == "True"
+    assert "C:" in (row.detail or "")
+
+
+def test_a_disk_that_hosts_nothing_of_the_running_system_is_marked_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(win32, "_system_volume_numbers", lambda: {"C:": 0})
+    monkeypatch.setattr(win32, "_try_open", lambda node: (7, 0))
+    monkeypatch.setattr(win32, "_close", lambda handle: None)
+    monkeypatch.setattr(win32, "_is_writable", lambda handle: False)
+    gate = win32.Win32Device().verify(_info(1))
+    row = next(c for c in gate.evidence.checks if c.name == win32.CHECK_BOOT_DISK)
+    assert row.result == "False"
+
+
+def test_an_unmappable_system_volume_is_unknown_never_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(win32, "_try_open", lambda node: (7, 0))
+    monkeypatch.setattr(win32, "_close", lambda handle: None)
+    monkeypatch.setattr(win32, "_is_writable", lambda handle: False)
+    for mapping in ({"C:": None}, {}):
+        monkeypatch.setattr(win32, "_system_volume_numbers", lambda m=mapping: m)
+        gate = win32.Win32Device().verify(_info())
+        row = next(c for c in gate.evidence.checks if c.name == win32.CHECK_BOOT_DISK)
+        assert row.result == "unknown"
 
 
 def test_wmi_enrichment_names_a_drive_without_opening_it(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -664,6 +760,7 @@ def test_wmi_enrichment_is_skipped_off_platform(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_a_denied_drive_lists_under_its_real_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(win32, "_windll", lambda: object())
     monkeypatch.setattr(win32, "_try_open", lambda node: (None, 5))
     monkeypatch.setattr(
         win32.Win32Device,
@@ -676,6 +773,7 @@ def test_a_denied_drive_lists_under_its_real_name(monkeypatch: pytest.MonkeyPatc
 
 
 def test_a_denied_drive_without_cim_data_lists_blank(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(win32, "_windll", lambda: object())
     monkeypatch.setattr(win32, "_try_open", lambda node: (None, 5))
     monkeypatch.setattr(win32.Win32Device, "_wmi", lambda self: {})
     devices = win32.Win32Device().list_block_devices()

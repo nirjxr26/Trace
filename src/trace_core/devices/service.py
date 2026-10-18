@@ -22,6 +22,9 @@ from trace_core.core.errors import AuthorizationError, ValidationError
 from trace_core.core.operators import current_identity, require_mutator
 from trace_core.core.service import BaseService, UnitOfWork
 from trace_core.devices.domain import (
+    CHECK_BOOT_DISK,
+    RESULT_TRUE,
+    BootDiskRefusalError,
     CaseDeviceLink,
     DeviceInfo,
     DeviceInspection,
@@ -323,7 +326,9 @@ class DeviceService(BaseService):
         return AuditService().record_hook(build, actor)
 
 
-def _refusal_for(gate: GateCheck, acknowledge_unverified_source: bool, node: str = "") -> WriteProtectionError | None:
+def _refusal_for(
+    gate: GateCheck, acknowledge_unverified_source: bool, node: str = ""
+) -> WriteProtectionError | BootDiskRefusalError | None:
     """The error this gate must raise, or None when it may proceed.
 
     Returned rather than raised so the caller can ledger the refusal before propagating
@@ -333,6 +338,15 @@ def _refusal_for(gate: GateCheck, acknowledge_unverified_source: bool, node: str
     An UNKNOWN refusal names the command that proceeds past it. The operator otherwise has
     to re-derive the whole invocation from `--help` to find out how to continue.
     """
+    boot = next(
+        (check for check in gate.evidence.checks if check.name == CHECK_BOOT_DISK and check.result == RESULT_TRUE),
+        None,
+    )
+    if boot is not None:
+        return BootDiskRefusalError(
+            f"source is the running system's boot disk ({boot.detail or 'a system volume'}); never overridable",
+            gate.evidence,
+        )
     if gate.verdict is WpVerdict.WRITABLE:
         return WriteProtectionError("source is writable; this is never overridable", gate.verdict, gate.evidence)
     if gate.verdict is WpVerdict.UNKNOWN and not acknowledge_unverified_source:

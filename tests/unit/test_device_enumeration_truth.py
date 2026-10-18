@@ -59,3 +59,15 @@ def test_the_empty_message_says_empty_not_broken(session_manager, capsys) -> Non
         render_devices([])
     out = cap.get()
     assert "No block devices visible" in out, out
+
+
+def test_the_windows_adapter_refuses_off_platform_instead_of_reporting_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trace_core.devices import win32
+    from trace_core.devices._subprocess import HelperFailure
+
+    monkeypatch.setattr(win32, "_windll", lambda: None)
+    with pytest.raises(HelperFailure) as caught:
+        win32.Win32Device().list_block_devices()
+    assert "Windows" in caught.value.detail
