@@ -37,8 +37,6 @@ from trace_core.core.service import BaseService
 class CaseError(ApplicationError):
     """Base exception for Case application service errors."""
 
-    pass
-
 
 class CaseNotFoundError(NotFoundError, CaseError):
     """Raised when a case cannot be found by ID or number."""

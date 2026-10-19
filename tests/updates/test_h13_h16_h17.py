@@ -187,3 +187,73 @@ def test_staged_failure_writes_one_history_row(
     lifecycle = UpdateLifecycle("tx-once", session_manager)
     with pytest.raises(UpdateVerificationError):
         lifecycle.run(manifest, art_path)
+
+
+def test_activate_barriers_the_previous_pointer_before_flipping_active(
+    temp_storage_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trace_core.core import fs
+    from trace_updater import updater as updater_mod
+
+    base = tmp_releases_base(temp_storage_root, updater_mod)
+    trace: list[str] = []
+    real_write = updater_mod.atomic_write_lines
+    real_fsync = fs.fsync_dir
+
+    def _write(path: str | Path, lines: list[str]) -> Path:
+        trace.append(f"write:{Path(path).name}")
+        return real_write(path, lines)
+
+    def _fsync(path: str | Path) -> None:
+        trace.append(f"fsync:{Path(path).name}")
+        real_fsync(path)
+
+    monkeypatch.setattr(updater_mod, "atomic_write_lines", _write)
+    monkeypatch.setattr(updater_mod, "fsync_dir", _fsync, raising=False)
+    updater_mod.activate(base, "0.2.8")
+    assert trace == ["write:active-version", f"fsync:{base.name}"], trace
+    trace.clear()
+    updater_mod.activate(base, "0.2.9")
+    assert trace == [
+        "write:previous-version",
+        f"fsync:{base.name}",
+        "write:active-version",
+        f"fsync:{base.name}",
+    ], (
+        "the two pointer writes are separate renames, so the rollback target must be "
+        "written and the directory fsynced before active-version moves; without the "
+        "barrier a crash between them can leave active naming a release whose "
+        "predecessor was never recorded"
+    )
+
+
+def test_activate_stays_recoverable_when_it_dies_between_the_pointer_writes(
+    temp_storage_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trace_updater import updater as updater_mod
+
+    base = tmp_releases_base(temp_storage_root, updater_mod)
+    updater_mod.activate(base, "0.2.8")
+    real_write = updater_mod.atomic_write_lines
+    armed = {"value": True}
+
+    def _write(path: str | Path, lines: list[str]) -> Path:
+        if armed["value"] and Path(path).name == "active-version":
+            raise RuntimeError("power loss")
+        return real_write(path, lines)
+
+    monkeypatch.setattr(updater_mod, "atomic_write_lines", _write)
+    with pytest.raises(RuntimeError, match="power loss"):
+        updater_mod.activate(base, "0.2.9")
+
+    assert updater_mod.read_active(base) == "0.2.8"
+    assert updater_mod.read_previous(base) == "0.2.8", (
+        "a crash before the active pointer flips must still leave the rollback target on "
+        "disk; with it lost, a later rollback silently no-ops while active names the new "
+        "release"
+    )
+    armed["value"] = False
+    updater_mod.activate(base, "0.2.9")
+    assert updater_mod.read_active(base) == "0.2.9"
+    assert updater_mod.rollback(base) == "0.2.8"
+    assert updater_mod.read_active(base) == "0.2.8"

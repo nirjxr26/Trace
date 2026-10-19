@@ -27,6 +27,9 @@ PHASE_DEPENDENCIES="dependencies"
 TRACE_HOME="${HOME}/.trace"
 TRACE_INSTALL_LOG="${TRACE_HOME}/install.log"
 TRACE_DISPLAY_VERSION=""
+WORK_ROOT=""
+STAGE_ROOT=""
+SWAP_PENDING=0
 
 trace_usage() {
   printf "%s\n" "Usage: install.sh [--version <tag>] [--list-versions] [--reinstall] [--uninstall [--purge-data]] [--verbose] [--help]"
@@ -101,12 +104,19 @@ trace_run() {
 }
 
 trace_fail() {
+  TRACE_FAIL_CODE="${2:-$?}"
   TRACE_STEP="$1"
+  if [ -n "$STAGE_ROOT" ] && [ -d "$STAGE_ROOT" ]; then
+    rm -rf "$STAGE_ROOT" 2>/dev/null || true
+  fi
   printf "Install failed at '%s' - see %s\n" "$TRACE_STEP" "$TRACE_INSTALL_LOG" >&2
   if [ -f "$TRACE_INSTALL_LOG" ]; then
     tail -n 12 "$TRACE_INSTALL_LOG" >&2 2>/dev/null || true
   fi
-  exit 1
+  if [ "$TRACE_FAIL_CODE" -eq 0 ] 2>/dev/null; then
+    TRACE_FAIL_CODE=1
+  fi
+  exit "$TRACE_FAIL_CODE"
 }
 
 trace_success() {
@@ -124,7 +134,7 @@ trace_success() {
   # Installed and on PATH. A failing doctor is reported separately and must not be
   # reported as a completed install.
   if [ "${DOCTOR_FAILED:-0}" = "1" ]; then
-    exit 1
+    exit "${DOCTOR_STATUS:-1}"
   fi
 }
 
@@ -173,7 +183,14 @@ trace_list_versions() {
       printf "Invalid selection.\n" >&2
       exit 1
     fi
-    TRACE_REF="$TRACE_SEL" sh "$0" ${TRACE_REINSTALL:+--reinstall} ${VERBOSE:+--verbose}
+    set -- --version "$TRACE_SEL"
+    if [ "$TRACE_REINSTALL" = "1" ]; then
+      set -- "$@" --reinstall
+    fi
+    if [ "$VERBOSE" = "1" ]; then
+      set -- "$@" --verbose
+    fi
+    sh "$0" "$@"
     exit $?
   else
     printf "%s\n" "$TRACE_TAGS"
@@ -299,8 +316,13 @@ else
     fi
     printf "remote install root %s ref %s\n" "$REPO_ROOT" "${TRACE_REF:-main}" >>"$TRACE_INSTALL_LOG" 2>/dev/null || true
 
-    if [ ! -f "$REPO_ROOT/pyproject.toml" ]; then
+    if [ ! -f "$REPO_ROOT/pyproject.toml" ] || [ "$TRACE_REINSTALL" = "1" ] || [ -n "$TRACE_REQ_VERSION" ]; then
         mkdir -p "$TRACE_HOME"
+        WORK_ROOT="${REPO_ROOT}.staging"
+        STAGE_ROOT="$WORK_ROOT"
+        SWAP_PENDING=1
+        rm -rf "$WORK_ROOT" 2>>"$TRACE_INSTALL_LOG" || trace_fail "$PHASE_SOURCE"
+        mkdir -p "$WORK_ROOT"
         TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
         TRACE_REF="${TRACE_REF:-main}"
         case "$TRACE_REF" in
@@ -313,67 +335,73 @@ else
             AUTH_HEADER=""
         fi
 
-        if command -v git >/dev/null 2>&1; then
+        if command -v git >/dev/null 2>&1 && [ -z "${TRACE_RELEASE_SHA256:-}" ] && [ -z "${TRACE_COSIGN_BUNDLE_URL:-}" ]; then
             trace_say "Cloning repository via git (ref: $TRACE_REF)..."
             if [ -n "$TOKEN" ]; then
                 ASKPASS_FILE="$(mktemp)"
                 { echo '#!/usr/bin/env sh'; echo 'exec printf "%s" "$TRACE_GIT_TOKEN"'; } > "$ASKPASS_FILE"
                 chmod 700 "$ASKPASS_FILE"
                 TRACE_GIT_TOKEN="$TOKEN" GIT_ASKPASS="$ASKPASS_FILE" GIT_TERMINAL_PROMPT=0 \
-                    git clone --depth 1 --branch "$TRACE_REF" https://github.com/nirjxr26/Trace.git "$REPO_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
+                    git clone --depth 1 --branch "$TRACE_REF" https://github.com/nirjxr26/Trace.git "$WORK_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
                 rm -f "$ASKPASS_FILE"
                 unset TRACE_GIT_TOKEN
             else
-                git clone --depth 1 --branch "$TRACE_REF" https://github.com/nirjxr26/Trace.git "$REPO_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
+                git clone --depth 1 --branch "$TRACE_REF" https://github.com/nirjxr26/Trace.git "$WORK_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
             fi
         else
             trace_say "Downloading repository archive..."
+            if [ -n "${TRACE_RELEASE_SHA256:-}" ] || [ -n "${TRACE_COSIGN_BUNDLE_URL:-}" ]; then
+                trace_say "  Release pins set: verifying the downloaded archive before extraction."
+            fi
+            if [ -n "${TRACE_RELEASE_SHA256:-}" ] && ! command -v sha256sum >/dev/null 2>&1; then
+                printf "  [!] sha256sum missing: cannot verify pinned release. Aborting.\n" >&2
+                trace_fail "$PHASE_SOURCE"
+            fi
+            if [ -n "${TRACE_COSIGN_BUNDLE_URL:-}" ] && ! command -v cosign >/dev/null 2>&1; then
+                printf "  [!] cosign missing: cannot verify the pinned signature. Aborting.\n" >&2
+                trace_fail "$PHASE_SOURCE"
+            fi
             ARCHIVE_URL="https://github.com/nirjxr26/Trace/archive/refs/${REF_KIND}/${TRACE_REF}.tar.gz"
-            mkdir -p "$REPO_ROOT"
+            ARCHIVE_FILE="$(mktemp)"
+            if [ -n "$AUTH_HEADER" ]; then
+                curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -H "$AUTH_HEADER" -o "$ARCHIVE_FILE" "$ARCHIVE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
+            else
+                curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$ARCHIVE_FILE" "$ARCHIVE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
+            fi
             if [ -n "${TRACE_RELEASE_SHA256:-}" ]; then
-                if ! command -v sha256sum >/dev/null 2>&1; then
-                    printf "  [!] sha256sum missing: cannot verify pinned release. Aborting.\n" >&2
-                    exit 1
-                fi
-                ARCHIVE_FILE="$(mktemp)"
-                if [ -n "$AUTH_HEADER" ]; then
-                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -H "$AUTH_HEADER" -o "$ARCHIVE_FILE" "$ARCHIVE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
-                else
-                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$ARCHIVE_FILE" "$ARCHIVE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
-                fi
                 ACTUAL_SHA="$(sha256sum "$ARCHIVE_FILE" | cut -d' ' -f1)"
                 if [ "$ACTUAL_SHA" != "$TRACE_RELEASE_SHA256" ]; then
                     printf "  [!] Release digest mismatch: refusing to install.\n" >&2
                     rm -f "$ARCHIVE_FILE"
-                    exit 1
-                fi
-                if [ -n "${TRACE_COSIGN_BUNDLE_URL:-}" ] && command -v cosign >/dev/null 2>&1; then
-                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "${ARCHIVE_FILE}.sigstore.json" "$TRACE_COSIGN_BUNDLE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
-                    cosign verify-blob --bundle "${ARCHIVE_FILE}.sigstore.json" \
-                        --certificate-identity "${TRACE_COSIGN_IDENTITY:?set TRACE_COSIGN_IDENTITY}" \
-                        --certificate-oidc-issuer "${TRACE_COSIGN_OIDC_ISSUER:-https://token.actions.githubusercontent.com}" \
-                        "$ARCHIVE_FILE" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
-                    rm -f "${ARCHIVE_FILE}.sigstore.json"
-                fi
-                tar -xz --strip-components=1 -C "$REPO_ROOT" -f "$ARCHIVE_FILE" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
-                rm -f "$ARCHIVE_FILE"
-            else
-                trace_say "  [!] No TRACE_RELEASE_SHA256 pinned: installing unverified $TRACE_REF."
-                if [ -n "$AUTH_HEADER" ]; then
-                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -H "$AUTH_HEADER" "$ARCHIVE_URL" 2>>"$TRACE_INSTALL_LOG" | tar -xz --strip-components=1 -C "$REPO_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
-                else
-                    curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL "$ARCHIVE_URL" 2>>"$TRACE_INSTALL_LOG" | tar -xz --strip-components=1 -C "$REPO_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
+                    trace_fail "$PHASE_SOURCE"
                 fi
             fi
+            if [ -n "${TRACE_COSIGN_BUNDLE_URL:-}" ]; then
+                curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "${ARCHIVE_FILE}.sigstore.json" "$TRACE_COSIGN_BUNDLE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
+                cosign verify-blob --bundle "${ARCHIVE_FILE}.sigstore.json" \
+                    --certificate-identity "${TRACE_COSIGN_IDENTITY:?set TRACE_COSIGN_IDENTITY}" \
+                    --certificate-oidc-issuer "${TRACE_COSIGN_OIDC_ISSUER:-https://token.actions.githubusercontent.com}" \
+                    "$ARCHIVE_FILE" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
+                rm -f "${ARCHIVE_FILE}.sigstore.json"
+            fi
+            if [ -z "${TRACE_RELEASE_SHA256:-}" ] && [ -z "${TRACE_COSIGN_BUNDLE_URL:-}" ]; then
+                trace_say "  [!] No TRACE_RELEASE_SHA256 pinned: installing unverified $TRACE_REF."
+            fi
+            tar -xz --strip-components=1 -C "$WORK_ROOT" -f "$ARCHIVE_FILE" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
+            rm -f "$ARCHIVE_FILE"
         fi
     fi
+fi
+
+if [ -z "$WORK_ROOT" ]; then
+  WORK_ROOT="$REPO_ROOT"
 fi
 
 if [ "$TRACE_UNINSTALL" = "1" ]; then
   trace_do_uninstall
 fi
 
-if [ "$TRACE_REINSTALL" = "1" ]; then
+if [ "$TRACE_REINSTALL" = "1" ] && [ "$SWAP_PENDING" = "0" ]; then
   case "$REPO_ROOT" in
     "${HOME}/.trace/app")
       rm -rf "$REPO_ROOT" 2>>"$TRACE_INSTALL_LOG" || trace_fail "$PHASE_SOURCE"
@@ -393,11 +421,11 @@ if [ "$TRACE_REINSTALL" = "1" ]; then
   fi
 fi
 
-cd "$REPO_ROOT"
-SCRIPT_DIR="$REPO_ROOT"
+cd "$WORK_ROOT"
+SCRIPT_DIR="$WORK_ROOT"
 
-if [ -f "$REPO_ROOT/pyproject.toml" ]; then
-  TRACE_DISPLAY_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO_ROOT/pyproject.toml" | head -n 1)"
+if [ -f "$WORK_ROOT/pyproject.toml" ]; then
+  TRACE_DISPLAY_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$WORK_ROOT/pyproject.toml" | head -n 1)"
 fi
 if [ -z "$TRACE_DISPLAY_VERSION" ]; then
   TRACE_DISPLAY_VERSION="${TRACE_REF:-main}"
@@ -472,11 +500,11 @@ if [ "$VERBOSE" = "1" ]; then
   printf "[3/6] Installing locked dependencies...\n"
   printf "  Using pip with cryptographic hash verification...\n"
 fi
-if ! trace_run "$VENV_PYTHON" -m pip install --quiet "pip==26.2.1"; then
+if ! trace_run "$VENV_PYTHON" -m pip install --quiet --require-hashes --only-binary :all: -r requirements-pip.txt; then
     trace_say "  [i] Could not upgrade pip; continuing with the one bundled in the environment."
 fi
 if ! trace_run "$VENV_PYTHON" -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt; then
-    trace_fail "$PHASE_DEPENDENCIES"
+    trace_fail "$PHASE_DEPENDENCIES" "$TRACE_STATUS"
 fi
 TRACE_ATTEMPT=0
 while [ "$TRACE_ATTEMPT" -lt 3 ]; do
@@ -490,9 +518,38 @@ while [ "$TRACE_ATTEMPT" -lt 3 ]; do
     fi
 done
 if [ "$TRACE_ATTEMPT" -ge 3 ]; then
-    trace_fail "$PHASE_DEPENDENCIES"
+    trace_fail "$PHASE_DEPENDENCIES" "$TRACE_STATUS"
 fi
 trace_say "  [OK] Dependencies installed successfully."
+
+if [ "$SWAP_PENDING" = "1" ]; then
+    if ! trace_run "$TRACE_BIN" --version; then
+        trace_fail "$PHASE_DEPENDENCIES" "$TRACE_STATUS"
+    fi
+    if [ -f "$REPO_ROOT/.env" ] && [ ! -f "$WORK_ROOT/.env" ]; then
+        cp "$REPO_ROOT/.env" "$WORK_ROOT/.env"
+    fi
+    rm -rf "${REPO_ROOT}.old" 2>>"$TRACE_INSTALL_LOG" || trace_fail "$PHASE_SOURCE"
+    if [ -d "$REPO_ROOT" ]; then
+        mv "$REPO_ROOT" "${REPO_ROOT}.old" 2>>"$TRACE_INSTALL_LOG" || trace_fail "$PHASE_SOURCE"
+    fi
+    TRACE_SWAP_STATUS=0
+    mv "$WORK_ROOT" "$REPO_ROOT" 2>>"$TRACE_INSTALL_LOG" || TRACE_SWAP_STATUS=$?
+    if [ "$TRACE_SWAP_STATUS" -ne 0 ]; then
+        if [ -d "${REPO_ROOT}.old" ]; then
+            mv "${REPO_ROOT}.old" "$REPO_ROOT" 2>>"$TRACE_INSTALL_LOG" || true
+        fi
+        trace_fail "$PHASE_SOURCE" "$TRACE_SWAP_STATUS"
+    fi
+    rm -rf "${REPO_ROOT}.old" 2>/dev/null || true
+    STAGE_ROOT=""
+    SWAP_PENDING=0
+    SCRIPT_DIR="$REPO_ROOT"
+    VENV_DIR="$SCRIPT_DIR/.venv"
+    cd "$REPO_ROOT"
+    trace_resolve_venv || trace_fail "venv"
+    trace_say "  [OK] Staged install verified and swapped into place."
+fi
 
 if [ "$VERBOSE" = "1" ]; then
   printf "[4/6] Verifying environment & storage directories...\n"
@@ -585,6 +642,7 @@ if [ "${SKIP_DB_MIGRATION:-0}" != "1" ]; then
         # Reported and carried into the exit status. It used to be swallowed into a log
         # line, so an install onto a host that cannot verify its own records looked clean.
         DOCTOR_FAILED=1
+        DOCTOR_STATUS="$TRACE_STATUS"
         trace_say "  [!] 'trace doctor' did not pass, so this host is not verified."
         trace_say "      Run 'trace doctor' to see which check failed, fix it, then re-run the installer."
     fi

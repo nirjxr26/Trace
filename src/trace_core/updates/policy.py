@@ -80,7 +80,13 @@ def select_artifact(manifest: ReleaseManifest) -> ManifestArtifact:
     if not manifest.artifacts:
         raise UpdateVerificationError("manifest has no artifacts")
     if len(manifest.artifacts) == 1:
-        return next(iter(manifest.artifacts.values()))
+        only = next(iter(manifest.artifacts.values()))
+        if only.platform is None and only.arch is None:
+            return only
+        system, machine = _current_platform()
+        if only.platform == system and only.arch == machine:
+            return only
+        raise UpdateVerificationError(f"single artifact targets {only.platform}-{only.arch}, not {system}-{machine}")
     system, machine = _current_platform()
     matches = [a for a in manifest.artifacts.values() if a.platform == system and a.arch == machine]
     if len(matches) == 1:

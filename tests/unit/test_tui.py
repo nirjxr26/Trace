@@ -598,6 +598,23 @@ async def test_the_audit_pane_marks_an_unreadable_payload(
     assert "unreadable — details cannot be shown" in detail, detail
 
 
+async def test_the_audit_pane_names_a_key_problem_instead_of_a_mismatch_dot(
+    session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    async with _audit_tab_with_one_event(session_manager) as (app, pilot):
+        monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+        detail = await _audit_detail(app, pilot)
+
+    assert "SIGNING KEY UNAVAILABLE" in detail, (
+        "a row whose signature fails only because a different key is active must name the "
+        f"key, not render the bare mismatch dot: {detail}"
+    )
+    assert "Mismatch" not in detail, detail
+    assert "not evidence of tampering" in detail, detail
+
+
 def test_the_palette_and_keys_offer_only_what_the_tui_runs() -> None:
     from trace_core.tui.palette import COMMANDS, KeysModal
 

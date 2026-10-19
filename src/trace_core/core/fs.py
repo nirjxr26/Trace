@@ -8,12 +8,73 @@ from enum import StrEnum
 from pathlib import Path
 from typing import IO, Any
 
+_USER_SID: str | None = None
+_TIGHTENED: dict[str, tuple[int, int]] = {}
+
+
+def _current_user_sid() -> str:
+    global _USER_SID
+    if _USER_SID is None:
+        import csv
+        import subprocess
+
+        result = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            raise OSError("cannot resolve the current user SID")
+        rows = list(csv.reader(result.stdout.splitlines())) if result.stdout.strip() else []
+        row = rows[0] if rows else []
+        if len(row) < 2 or not row[1].startswith("S-"):
+            raise OSError("cannot resolve the current user SID")
+        _USER_SID = row[1].strip()
+    return _USER_SID
+
+
+def _restrict_windows_acl(path: Path, *, directory: bool) -> None:
+    if os.name != "nt":
+        return
+    try:
+        info = path.stat()
+    except OSError:
+        return
+    marker = (info.st_dev, info.st_ino)
+    if _TIGHTENED.get(str(path)) == marker:
+        return
+    import subprocess
+
+    inherit = "(OI)(CI)F" if directory else "F"
+    commands = (
+        ["icacls", str(path), "/reset"],
+        [
+            "icacls",
+            str(path),
+            "/inheritance:r",
+            "/grant:r",
+            f"*{_current_user_sid()}:{inherit}",
+            f"*S-1-5-18:{inherit}",
+            f"*S-1-5-32-544:{inherit}",
+        ],
+    )
+    for argv in commands:
+        result = subprocess.run(argv, capture_output=True, text=True, check=False)
+        _TIGHTENED[str(path)] = marker
+        if result.returncode != 0:
+            from structlog import get_logger
+
+            get_logger().warning("owner-only ACL not applied", path=str(path), error=result.stderr.strip())
+            return
+    if directory and path.is_dir():
+        for entry in path.iterdir():
+            if entry.is_file():
+                _restrict_windows_acl(entry, directory=False)
+
 
 def ensure_dir(path: str | Path, mode: int = 0o700) -> Path:
     """mkdir -p with explicit owner-only mode. Fails loudly instead of inheriting umask."""
     target = Path(path)
     target.mkdir(parents=True, exist_ok=True, mode=mode)
     os.chmod(target, mode)
+    if mode & 0o077 == 0:
+        _restrict_windows_acl(target, directory=True)
     return target
 
 

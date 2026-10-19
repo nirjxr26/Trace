@@ -471,3 +471,21 @@ def test_repl_inspect_reaches_a_backslash_node_verbatim(
     shell = InteractiveShell(service=service)
     shell.execute_line(rf"device inspect {root}\disk-a.dd --allow-real-hardware")
     assert "not in the current enumeration" not in capsys.readouterr().out
+
+
+def test_recent_reports_the_failure_instead_of_claiming_there_are_no_cases(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _BrokenService:
+        def list_cases(self, *_args: object, **_kwargs: object) -> list[object]:
+            raise ConnectionError("connection refused")
+
+    shell = InteractiveShell()
+    shell.service = _BrokenService()  # type: ignore[assignment]
+    shell.execute_line("recent")
+    out = capsys.readouterr().out
+    assert "connection refused" in out, (
+        "`_show_recent` printed 'No recent cases.' for every failure, so a database "
+        f"outage read as an empty caseload: {out}"
+    )
+    assert "No recent cases." not in out

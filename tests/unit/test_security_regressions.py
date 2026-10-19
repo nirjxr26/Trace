@@ -883,6 +883,55 @@ def test_atomic_write_is_owner_only(tmp_path) -> None:  # type: ignore[no-untype
     assert_owner_only(out, "0o600")
 
 
+def _windows_sddl(path: Path) -> str:
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", f"(Get-Acl -LiteralPath '{path}').Sddl"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def test_ensure_dir_strips_broad_principals_on_windows(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.fs import _current_user_sid, ensure_dir
+
+    target = ensure_dir(tmp_path / "sub" / "store")
+    assert_owner_only(target, "0o700")
+    if sys.platform == "win32":
+        sddl = _windows_sddl(target)
+        assert f";;;{_current_user_sid()})" in sddl
+        for broad in ("WD", "BU", "AU"):
+            assert f";;;{broad})" not in sddl, sddl
+
+
+def test_atomic_write_grants_no_broad_principal_a_right(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.fs import atomic_write_lines
+
+    out = atomic_write_lines(tmp_path / "bundle.jsonl", ["a\n"])
+    assert_owner_only(out, "0o600")
+    if sys.platform == "win32":
+        sddl = _windows_sddl(out)
+        for broad in ("WD", "BU", "AU"):
+            assert f";;;{broad})" not in sddl, sddl
+
+
+def test_ensure_dir_repairs_a_loose_existing_acl(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.fs import ensure_dir
+
+    store = tmp_path / "store"
+    store.mkdir()
+    key = store / "key.pem"
+    key.write_text("k")
+    if sys.platform == "win32":
+        subprocess.run(["icacls", str(key), "/grant", "*S-1-5-32-545:R"], check=True, capture_output=True)
+        assert ";;;BU)" in _windows_sddl(key)
+    ensure_dir(store)
+    assert_owner_only(store, "0o700")
+    if sys.platform == "win32":
+        assert ";;;BU)" not in _windows_sddl(key)
+
+
 def test_export_refuses_clobber(tmp_path, service: CaseService) -> None:  # type: ignore[no-untyped-def]
     from trace_core.audit.helpers import check_export_dest
     from trace_core.audit.service import AuditService

@@ -117,7 +117,7 @@ def test_an_event_card_shows_the_seal_without_hash_rows(session_manager, capsys)
         session.commit()
     render_audit_detail(dto)
     text = " ".join(capsys.readouterr().out.split())
-    assert "VERIFIED" in text, text
+    assert "✓ MATCHED" in text, text
     assert "Payload Hash" not in text, text
     assert "Previous Chain" not in text, text
     assert "Chain Hash" not in text, text
@@ -171,5 +171,5 @@ def test_the_event_card_names_a_row_self_check_not_ledger_integrity(session_mana
     render_audit_detail(dto)
     text = " ".join(capsys.readouterr().out.split())
     assert "SELF-CHECK" in text, text
-    assert "✓ VERIFIED" in text, text
+    assert "✓ MATCHED" in text, text
     assert "INTEGRITY" not in text, text

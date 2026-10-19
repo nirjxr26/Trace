@@ -194,12 +194,12 @@ def test_unknown_cause_is_allowed_on_a_non_unknown_verdict() -> None:
     assert gate.evidence.unknown_cause is UnknownCause.EACCES
 
 
-def test_device_adapter_defaults_to_file_and_cannot_bypass_the_opt_in() -> None:
-    """[D27] The env var selects the adapter only; the flag remains required."""
+def test_device_adapter_defaults_to_auto_and_cannot_bypass_the_opt_in() -> None:
+    """[D27] The setting selects the adapter only; the flag remains required."""
     from trace_core.core.settings import Settings
 
     # Fields are alias-driven, so the constructor takes the env alias.
-    assert Settings().device_adapter == "file"
+    assert Settings().device_adapter == "auto"
     assert Settings(TRACE_DEVICE_ADAPTER="linux").device_adapter == "linux"
     with pytest.raises(ValidationError):
         Settings.model_validate({"TRACE_DEVICE_ADAPTER": "root_privileges"})

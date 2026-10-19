@@ -21,6 +21,7 @@ from trace_core.core.domain import bound_actor
 from trace_core.core.errors import AuthorizationError, ValidationError
 from trace_core.core.operators import current_identity, require_mutator
 from trace_core.core.service import BaseService, UnitOfWork
+from trace_core.core.settings import settings
 from trace_core.devices.domain import (
     CHECK_BOOT_DISK,
     RESULT_TRUE,
@@ -463,7 +464,7 @@ def os_adapter() -> DeviceAdapter | None:
     from trace_core.devices.linux import LinuxDevice
     from trace_core.devices.win32 import Win32Device
 
-    chosen = os.environ.get(ENV_ADAPTER, "").strip().lower() or "auto"
+    chosen = os.environ.get(ENV_ADAPTER, "").strip().lower() or settings.device_adapter
     if chosen == "linux":
         return LinuxDevice()
     if chosen == "win32":

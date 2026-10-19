@@ -10,7 +10,7 @@ configure_utf8_streams()
 
 app = typer.Typer(
     name="trace",
-    help="Trace — Forensic Data Imaging & Retrieval Tool.",
+    help="Trace — Forensic Case Management & Device Inspection Tool.",
     no_args_is_help=False,
 )
 

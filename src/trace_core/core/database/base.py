@@ -36,8 +36,6 @@ class UTCDateTime(TypeDecorator[datetime]):
 class Base(DeclarativeBase):
     """Base declarative class for all Trace ORM models."""
 
-    pass
-
 
 class TimestampMixin:
     """Reusable mixin providing timezone-aware opened_at and updated_at columns."""

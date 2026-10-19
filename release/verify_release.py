@@ -128,7 +128,7 @@ def main() -> None:
     verify_manifest_signature(manifest)
     # Selects each artifact by its own manifest key rather than asking the client-side
     # resolver for it, so the update API is not widened for a build-time tool.
-    for key, entry in manifest.artifacts.items():
+    for entry in manifest.artifacts.values():
         verify_one_artifact(check_contained(Path("dist") / _safe_filename(entry.filename), Path.cwd()), entry)
     print(f"release self-verify passed: {manifest.version} ({len(manifest.artifacts)} artifacts, signatures ok)")
 

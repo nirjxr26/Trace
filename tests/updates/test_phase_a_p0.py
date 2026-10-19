@@ -81,3 +81,22 @@ def test_trust_path_traversal_rejected(temp_storage_root):
         trust_key_path(target_path)
     with pytest.raises(UpdateVerificationError):
         revoked_path(target_path)
+
+
+def test_the_default_gate_consults_the_forensic_operation_provider(
+    session_manager, temp_storage_root, signed_release, monkeypatch
+):
+    from trace_core.devices import operation_state
+    from trace_core.updates.lifecycle import UpdateLifecycle
+
+    monkeypatch.setattr(operation_state, "forensic_operation_active", lambda: True)
+    manifest, _, art_path, _ = signed_release()
+    lifecycle = UpdateLifecycle("tx-p0-default-gate", session_manager)
+    with pytest.raises(UpdatePolicyBlockedError, match="forensic operation active"):
+        lifecycle.run(manifest, art_path)
+
+
+def test_the_forensic_operation_provider_reports_idle():
+    from trace_core.devices.operation_state import forensic_operation_active
+
+    assert forensic_operation_active() is False

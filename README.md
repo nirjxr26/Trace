@@ -2,9 +2,9 @@
 
 <h1>Trace</h1>
 
-Local-first forensic case management and data acquisition with a tamper-evident chain of custody.
+Local-first forensic case management and device inspection with a tamper-evident chain of custody.
 
-**v0.3.4 · Python 3.12+ · Windows / Linux / macOS · MIT**
+**v0.3.5 · Python 3.12+ · Windows / Linux / macOS · MIT**
 
 </div>
 
@@ -13,7 +13,7 @@ Local-first forensic case management and data acquisition with a tamper-evident 
 ---
 ## Overview
 
-Trace is a local-first, air-gap-ready forensic case management and data acquisition engine built for digital forensics investigators and incident responders.
+Trace is a local-first, air-gap-ready forensic case management and device inspection engine built for digital forensics investigators and incident responders.
 
 Core design rules:
 
@@ -37,12 +37,12 @@ Core design rules:
 - Purge guardrails: active cases can never be purged and must be archived first; purging requires typing the case number to confirm.
 - Filtered and paginated listing, plus full-text search across titles, numbers, examiners, and notes.
 
-### Device Acquisition and Identity
+### Device Inspection and Identity
 
 - Adapter-based discovery: platform adapters for Linux block devices and Windows disks, plus a `file` adapter for image and evidence files. Real-hardware access is always an explicit opt-in.
 - Identity capture (serial, size, model) recorded in the signed audit ledger, with per-identity history and JSONL export.
 - Serial-less drives are identified by a hash of their observed characteristics, so a swapped disk in the same bay can never inherit the previous identity. Synthetic targets receive unique 128-bit serials.
-- Write-protection gate before imaging: `trace device check` exits `10` when the source is writable and `9` when protection cannot be determined. Overrides require a typed acknowledgement.
+- Write-protection gate: `trace device check` exits `10` when the source is writable and `9` when protection cannot be determined. Overrides require a typed acknowledgement.
 - Case linking and unlinking; purged cases render as `(purged)` tombstones in every dossier.
 
 ### Audit Ledger and Chain of Custody
@@ -98,14 +98,16 @@ Trace requires **Python 3.12+** and runs on Windows, Linux, and macOS.
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/nirjxr26/Trace/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/nirjxr26/Trace/v0.3.4/install.ps1 | iex
 ```
 
 **Linux / macOS (POSIX shell; also works in Git Bash on Windows):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nirjxr26/Trace/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/nirjxr26/Trace/v0.3.4/install.sh | sh
 ```
+
+Both commands are pinned to the `v0.3.4` release tag instead of the moving `main` branch.
 
 The installer runs quietly by default and displays a live four-step progress list (Verifying, Downloading, Installing, Finishing setup). Detailed output is written to `~/.trace/install.log`. On success it prints `Installation complete` and `Trace vX.Y.Z installed successfully.`; on failure it prints `Install failed at '<step>' - see ~/.trace/install.log`.
 
@@ -168,7 +170,7 @@ Trace reads configuration from environment variables, a `.env` file in the repos
 | `TRACE_SQL_ECHO` | SQL statement echo. SQL logs carry case content; keep disabled in production. | `false` |
 | `TRACE_UPDATE_CHANNEL` | Update channel | `stable` |
 | `TRACE_UPDATE_MANIFEST` | Release manifest URL or local path; empty disables update checks | Official GitHub Releases manifest |
-| `TRACE_DEVICE_ADAPTER` | Device adapter selection (`file` / `linux` / `win32`); never bypasses the explicit hardware opt-in | `file` |
+| `TRACE_DEVICE_ADAPTER` | Device adapter selection (`auto` / `file` / `linux` / `win32`); never bypasses the explicit hardware opt-in | `auto` |
 
 ---
 
@@ -199,7 +201,7 @@ Every command supports `--help`.
 | `1` | Application error |
 | `2` | Usage / invalid input |
 | `9` | Device preflight UNKNOWN: write protection could not be determined |
-| `10` | Source is writable: imaging refused |
+| `10` | Source is writable: write protection not confirmed |
 | `11` | Update artifact trust failure |
 | `12` | Record not found |
 | `13` | Conflict |

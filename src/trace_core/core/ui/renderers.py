@@ -676,7 +676,7 @@ def render_detail_header(prefix: str, identifier: str, title: str, meta: str | T
 
 
 def render_section_title(title: str, style: str | None = None) -> None:
-    """Uppercase section header shared by dossier proof blocks (CHANGES/INTEGRITY/…)."""
+    """Uppercase section header shared by dossier proof blocks (CHANGES/SELF-CHECK/…)."""
     console.print(Text(f"  {title}", style=style or THEME_TOKENS["accent"]))
 
 

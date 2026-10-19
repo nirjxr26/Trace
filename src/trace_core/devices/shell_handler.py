@@ -52,7 +52,7 @@ class DeviceShellCommandHandler(BaseShellHandler):
     def aliases(self) -> list[str]:
         return ["devices", "dev"]
 
-    def execute(self, action: str, args: list[str], ctx: object) -> bool:  # noqa: ARG002
+    def execute(self, action: str, args: list[str], ctx: object) -> bool:
         from trace_core.core.cli.error_handler import capture_cli_errors
         from trace_core.core.cli.output import parse_output_format
 

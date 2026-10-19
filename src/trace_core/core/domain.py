@@ -62,13 +62,9 @@ def parse_enum_value[EnumT: Enum](enum_cls: type[EnumT], raw: str | None) -> Enu
 class DomainError(ValueError):
     """Base exception for all domain-level rule violations."""
 
-    pass
-
 
 class InvariantViolationError(DomainError):
     """Raised when a business invariant is violated."""
-
-    pass
 
 
 class BaseEntity(BaseModel):
