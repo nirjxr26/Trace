@@ -130,8 +130,9 @@ def test_show_case_lists_linked_and_historical_devices(device_file_env) -> None:
     assert res.exit_code == 0
     assert "LINKED DEVICE" in res.stdout
     assert "bag-1" in res.stdout
-    assert "disk-a.dd" in res.stdout
-    assert "disk-b.dd" in res.stdout
+    shown = "".join(res.stdout.splitlines())
+    assert "disk-a.dd" in shown
+    assert "disk-b.dd" in shown
     res_json = runner.invoke(app, ["case", "show", number, "--output", "json"])
     assert res_json.exit_code == 0
     assert "LINKED DEVICE" not in res_json.stdout

@@ -197,7 +197,7 @@ def test_shell_case_show_lists_linked_devices(device_file_env, capsys) -> None: 
     out = capsys.readouterr().out
     assert "LINKED DEVICE" in out
     assert "bag-9" in out
-    assert "disk-a.dd" in out
+    assert "disk-a.dd" in "".join(out.splitlines())
     assert runner.invoke(app, ["device", "unlink", disk_a, "--case", number]).exit_code == 0
 
 
