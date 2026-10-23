@@ -98,16 +98,16 @@ Trace requires **Python 3.12+** and runs on Windows, Linux, and macOS.
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/nirjxr26/Trace/v0.3.4/install.ps1 | iex
+irm https://raw.githubusercontent.com/nirjxr26/Trace/v0.3.5/install.ps1 | iex
 ```
 
 **Linux / macOS (POSIX shell; also works in Git Bash on Windows):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nirjxr26/Trace/v0.3.4/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/nirjxr26/Trace/v0.3.5/install.sh | sh
 ```
 
-Both commands are pinned to the `v0.3.4` release tag instead of the moving `main` branch.
+Both commands are pinned to the `v0.3.5` release tag instead of the moving `main` branch.
 
 The installer runs quietly by default and displays a live four-step progress list (Verifying, Downloading, Installing, Finishing setup). Detailed output is written to `~/.trace/install.log`. On success it prints `Installation complete` and `Trace vX.Y.Z installed successfully.`; on failure it prints `Install failed at '<step>' - see ~/.trace/install.log`.
 
