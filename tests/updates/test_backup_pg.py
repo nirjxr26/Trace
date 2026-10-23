@@ -13,6 +13,8 @@ def test_pg_backup_invocation(tmp_path, monkeypatch):
     seen = {}
 
     def _fake_run(argv, **kwargs):
+        if argv[0] == "icacls":
+            return subprocess.CompletedProcess(argv, 0)
         seen["argv"] = argv
         seen["kwargs"] = kwargs
         kwargs["stdout"].write(b"-- fake dump")
@@ -33,7 +35,9 @@ def test_pg_backup_invocation(tmp_path, monkeypatch):
 
 
 def test_pg_backup_missing_binary_fails_closed(tmp_path, monkeypatch):
-    def _boom(*a, **k):
+    def _boom(argv, **kwargs):
+        if argv[0] != "pg_dump":
+            return subprocess.CompletedProcess(argv, 0)
         raise FileNotFoundError("pg_dump not found")
 
     monkeypatch.setattr(subprocess, "run", _boom)

@@ -62,18 +62,6 @@ def dot_line(ok: bool, label: str):  # type: ignore[no-untyped-def]
     return body
 
 
-def update_status_text(kind: str):  # type: ignore[no-untyped-def]
-    """Single source for Updates Previous/Current/Status states. No raw unknown."""
-    if kind == "available":
-        body = Text()
-        body.append("↑ ", style=DOT_INFO)
-        body.append("Update available")
-        return body
-    if kind == "failed":
-        return dot_line(False, "Check failed")
-    return dot_line(True, "Up to date")
-
-
 def download_bar(read: int, total: int, width: int = 28):
     filled = min(width, read * width // total) if total > 0 else 0
     body = Text()

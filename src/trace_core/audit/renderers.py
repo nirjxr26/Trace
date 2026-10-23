@@ -418,7 +418,7 @@ def render_audit_detail(e: AuditEventDto) -> None:
     intact = verify_event(
         e.payload_json, e.payload_hash, e.prev_chain, e.chain_hash, e.seq, signature=e.signature, key_id=e.key_id
     )
-    seal = "✓ VERIFIED" if intact else "✗ MISMATCH"
+    seal = "✓ MATCHED" if intact else "✗ MISMATCH"
     render_section_title(f"SELF-CHECK · {seal}", style=TOK["accent"] if intact else TOK["danger"])
     console.print("")
     if not intact:

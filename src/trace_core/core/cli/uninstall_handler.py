@@ -8,7 +8,7 @@ class UninstallShellCommandHandler(BaseShellHandler):
     def command_name(self) -> str:
         return "uninstall"
 
-    def execute(self, action: str, args: list[str], ctx: object) -> bool:  # noqa: ARG002
+    def execute(self, action: str, args: list[str], ctx: object) -> bool:
         from trace_core.core.cli.error_handler import capture_cli_errors
         from trace_core.core.ui.renderers import console
 

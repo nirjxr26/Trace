@@ -70,8 +70,6 @@ class ValidationError(ApplicationError):
 class AuditTamperError(ApplicationError):
     """Raised when audit chain verification detects tampering."""
 
-    pass
-
 
 class AnchorVerificationError(AuditTamperError):
     """Raised when an anchor file cannot be trusted: unsigned, forged, or for another ledger.
@@ -80,13 +78,9 @@ class AnchorVerificationError(AuditTamperError):
     while the CLI can stop prescribing a ledger restore for what is an anchor problem.
     """
 
-    pass
-
 
 class AnchorOutrunsLedgerError(AnchorVerificationError):
     """Raised when a trusted anchor names records beyond this ledger's end."""
-
-    pass
 
 
 class AuthorizationError(ApplicationError):

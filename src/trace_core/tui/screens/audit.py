@@ -195,7 +195,7 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         self.render_detail()
 
     def render_detail(self) -> None:
-        from trace_core.audit.verifier import verify_event
+        from trace_core.audit.verifier import row_key_problem, verify_event
         from trace_core.tui.theme import DOT_BAD, DOT_OK, integrity_line
 
         e = self._selected_event()
@@ -256,7 +256,35 @@ class AuditView(TablePane[AuditEventSummaryDto]):
                 body.append(f"{sanitize_terminal(format_change_value(after.get(field)))}\n", style=DOT_OK)
         body.append(rule)
         body.append("\nSELF-CHECK\n", style=THEME_TOKENS["accent"])
-        body.append_text(integrity_line(intact, 0 if intact is not True else 1))
+        key_problem = None
+        if intact is not None:
+            try:
+                key_problem = row_key_problem(
+                    e.payload_json,
+                    e.payload_hash,
+                    e.prev_chain,
+                    e.chain_hash,
+                    e.seq,
+                    signature=e.signature,
+                    key_id=e.key_id,
+                )
+            except Exception:
+                key_problem = None
+        if key_problem == "insecure_key":
+            body.append("⚠ ", style=DOT_BAD)
+            body.append("SIGNED WITH THE DEVELOPMENT KEY\n", style="bold")
+            body.append("Signed with the shipped development key, which is public.\n", style="dim")
+            body.append("This is a key problem, not evidence of tampering.\n", style="dim")
+        elif key_problem == "signing_key" or (key_problem is not None and key_problem.startswith("key:")):
+            body.append("⚠ ", style=DOT_BAD)
+            body.append("SIGNING KEY UNAVAILABLE\n", style="bold")
+            if key_problem == "signing_key":
+                body.append("The key this ledger was signed with is not the active key.\n", style="dim")
+            else:
+                body.append("The key this record was signed with is not in the keystore.\n", style="dim")
+            body.append("This is a key problem, not evidence of tampering.\n", style="dim")
+        else:
+            body.append_text(integrity_line(intact, 0 if intact is not True else 1))
         body.append("\n")
         self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(body)
 

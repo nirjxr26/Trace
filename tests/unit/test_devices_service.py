@@ -742,6 +742,29 @@ def test_os_adapter_is_absent_on_an_unsupported_platform(monkeypatch) -> None:
     assert service_module.os_adapter() is None
 
 
+def test_the_dotenv_adapter_reaches_os_adapter(monkeypatch) -> None:
+    import ctypes
+
+    from trace_core.core.settings import Settings, settings
+    from trace_core.devices import service as service_module
+
+    monkeypatch.delenv(service_module.ENV_ADAPTER, raising=False)
+    assert Settings(TRACE_DEVICE_ADAPTER="auto").device_adapter == "auto"
+    monkeypatch.setattr(settings, "device_adapter", "file")
+    assert service_module.os_adapter() is None, (
+        "TRACE_DEVICE_ADAPTER set in .env only ever reached Settings, which os_adapter() "
+        "never read; asking for the synthetic file adapter silently selected the "
+        "real-hardware adapter instead"
+    )
+    monkeypatch.setattr(ctypes, "windll", _WindllMustNotLoad(), raising=False)
+    monkeypatch.setattr(settings, "device_adapter", "linux")
+    assert type(service_module.os_adapter()).__name__ == "LinuxDevice"
+    monkeypatch.setenv(service_module.ENV_ADAPTER, "win32")
+    assert type(service_module.os_adapter()).__name__ == "Win32Device", (
+        "a live environment variable must still win over the settings value"
+    )
+
+
 def test_os_adapter_satisfies_all_three_ports() -> None:
     from trace_core.devices import ports
     from trace_core.devices import service as service_module

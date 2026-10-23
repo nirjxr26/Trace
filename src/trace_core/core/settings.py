@@ -39,8 +39,7 @@ def _unknown_trace_settings(known: set[str]) -> set[str]:
 class Settings(BaseSettings):
     """Trace runtime settings."""
 
-    app_name: str = "Trace"
-    version: str = "0.3.4"
+    version: str = "0.3.5"
     # Alias-only binding: the documented TRACE_DEBUG name wins, and a stray
     # bare DEBUG in the environment can no longer crash startup with a bool error.
     debug: bool = Field(default=False, alias="TRACE_DEBUG")
@@ -85,7 +84,7 @@ class Settings(BaseSettings):
     # --allow-real-hardware opt-in [D27]: asking for `linux` still requires the
     # flag for any non-file target, so an env var can never silently authorise
     # real-device access.
-    device_adapter: Literal["file", "linux", "win32"] = Field(default="file", alias="TRACE_DEVICE_ADAPTER")
+    device_adapter: Literal["auto", "file", "linux", "win32"] = Field(default="auto", alias="TRACE_DEVICE_ADAPTER")
 
     model_config = SettingsConfigDict(
         env_file=_ENV_FILES,

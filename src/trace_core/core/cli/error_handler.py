@@ -135,7 +135,7 @@ def _cause_remediation(evidence: object) -> str:
     from trace_core.devices.domain import ProtectionEvidence, UnknownCause
 
     if not isinstance(evidence, ProtectionEvidence):
-        return "Re-establish write protection before imaging, or acknowledge the unverified source."
+        return "Re-establish write protection on the source, or acknowledge the unverified source."
     cause = evidence.unknown_cause
     if cause is UnknownCause.EACCES:
         return "Access was denied. Re-run from an elevated shell."
@@ -144,12 +144,12 @@ def _cause_remediation(evidence: object) -> str:
     if cause in (UnknownCause.SMARTCTL_MALFORMED, UnknownCause.TOOL_TOO_OLD, UnknownCause.TOOL_MISSING):
         return "The probe tool could not be used. Check its version and availability."
     if cause is UnknownCause.SYSFS_DISAGREEMENT:
-        return "Two sources disagreed about write protection. Resolve the conflict before imaging."
+        return "Two sources disagreed about write protection. Resolve the conflict before proceeding."
     if cause is UnknownCause.IOCTL_FAILURE:
         return "The kernel refused the write-protection query. Check device state and retry."
     if cause is UnknownCause.DEVICE_DISAPPEARED:
         return "The device disconnected during the check. Reconnect it and retry."
-    return "Re-establish write protection before imaging, or acknowledge the unverified source."
+    return "Re-establish write protection on the source, or acknowledge the unverified source."
 
 
 def _update_error(e: Exception, operation_title: str | None, default_remediation: str | None):  # type: ignore[no-untyped-def]
@@ -204,7 +204,7 @@ def _update_error(e: Exception, operation_title: str | None, default_remediation
             (
                 RecoveryError,
                 "Recovery Failed",
-                "Recovery could not restore a bootable release. Inspect diagnostics.",
+                "Recovery stopped without finishing. Follow the message above, then retry.",
                 EXIT_RECOVERY_FAILED,
             ),
         )

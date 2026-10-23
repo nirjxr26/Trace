@@ -57,6 +57,9 @@ $TraceHomeDir = Join-Path $Home ".trace"
 $InstallLog = Join-Path $TraceHomeDir "install.log"
 $script:DisplayVersion = ""
 $script:DoctorFailed = $false
+$script:LastChildExit = 0
+$script:StageRoot = ""
+$script:Staged = $false
 $VerboseMode = [bool]$VerboseOutput
 if ($env:TRACE_VERBOSE -eq "1") {
     $VerboseMode = $true
@@ -106,6 +109,7 @@ function Invoke-LoggedCommand {
             $code = 0
         }
         Write-TempLog $tmp
+        $script:LastChildExit = $code
         if ($code -ne 0) {
             throw "exit code $code"
         }
@@ -116,13 +120,20 @@ function Invoke-LoggedCommand {
 
 function Stop-TraceInstall {
     param([string]$Step)
+    if ($script:StageRoot -and (Test-Path $script:StageRoot)) {
+        Remove-Item -Recurse -Force $script:StageRoot -ErrorAction SilentlyContinue
+    }
     if ((-not [Console]::IsOutputRedirected) -and (-not $VerboseMode)) {
         Write-Output ""
     }
     Write-Progress -Activity "Installing Trace" -Completed -ErrorAction SilentlyContinue
     Write-Host "Install failed at '$Step' - see $InstallLog" -ForegroundColor Red
     Get-Content -Path $InstallLog -Tail 12 -ErrorAction SilentlyContinue | ForEach-Object { Write-Output $_ }
-    exit 1
+    $code = $script:LastChildExit
+    if (-not $code) {
+        $code = 1
+    }
+    exit $code
 }
 
 function Show-Success {
@@ -142,7 +153,11 @@ function Show-Success {
     # Trace is installed and `trace` is on PATH; a failing doctor is reported separately and
     # must not be reported as a completed install.
     if ($script:DoctorFailed) {
-        exit 1
+        $code = $script:LastChildExit
+        if (-not $code) {
+            $code = 1
+        }
+        exit $code
     }
 }
 
@@ -276,10 +291,15 @@ if (-not $RepoRoot -or -not (Test-Path (Join-Path $RepoRoot "pyproject.toml"))) 
             Write-Host "Remote installation detected. Setting up Trace in '$RepoRoot'..." -ForegroundColor Cyan
         }
         Write-TraceLog ("remote install root {0} ref {1}" -f $RepoRoot, ${env:TRACE_REF})
-        if (-not (Test-Path (Join-Path $RepoRoot "pyproject.toml"))) {
+        if ((-not (Test-Path (Join-Path $RepoRoot "pyproject.toml"))) -or [bool]$Reinstall -or ($Version -ne "")) {
             if (-not (Test-Path $TraceHome)) {
                 New-Item -ItemType Directory -Force -Path $TraceHome | Out-Null
             }
+            $FinalRoot = $RepoRoot
+            $script:StageRoot = "$RepoRoot.staging"
+            $script:Staged = $true
+            Remove-Item -Recurse -Force $script:StageRoot -ErrorAction SilentlyContinue
+            $RepoRoot = $script:StageRoot
             $Token = $env:GH_TOKEN
             if (-not $Token) { $Token = $env:GITHUB_TOKEN }
             $TraceRef = if ($env:TRACE_REF) { $env:TRACE_REF } else { "main" }
@@ -288,7 +308,7 @@ if (-not $RepoRoot -or -not (Test-Path (Join-Path $RepoRoot "pyproject.toml"))) 
             $WebHeaders = if ($Token) { @{ Authorization = "Bearer $Token" } } else { @{} }
 
             $GitCmd = Get-Command "git" -ErrorAction SilentlyContinue
-            if ($GitCmd) {
+            if ($GitCmd -and -not $env:TRACE_RELEASE_SHA256 -and -not $env:TRACE_COSIGN_BUNDLE_URL) {
                 Write-Trace ("Cloning repository via git (ref: {0})..." -f $TraceRef)
                 try {
                     if ($Token) {
@@ -315,6 +335,13 @@ if (-not $RepoRoot -or -not (Test-Path (Join-Path $RepoRoot "pyproject.toml"))) 
                 }
             } else {
                 Write-Trace "Downloading repository archive..."
+                if ($env:TRACE_RELEASE_SHA256 -or $env:TRACE_COSIGN_BUNDLE_URL) {
+                    Write-Trace "  Release pins set: verifying the downloaded archive before extraction."
+                }
+                if ($env:TRACE_COSIGN_BUNDLE_URL -and -not (Get-Command "cosign" -ErrorAction SilentlyContinue)) {
+                    Write-Host "  [!] cosign missing: cannot verify the pinned signature. Aborting." -ForegroundColor Red
+                    Stop-TraceInstall "source"
+                }
                 $ZipPath = Join-Path $TraceHome "trace-main.zip"
                 $TempExtract = Join-Path $TraceHome "trace-temp"
                 try {
@@ -327,22 +354,33 @@ if (-not $RepoRoot -or -not (Test-Path (Join-Path $RepoRoot "pyproject.toml"))) 
                     if ($ActualSha -ne $env:TRACE_RELEASE_SHA256.ToLower()) {
                         Write-Host "  [!] Release digest mismatch: refusing to install." -ForegroundColor Red
                         Remove-Item -Force $ZipPath -ErrorAction SilentlyContinue
-                        exit 1
+                        Stop-TraceInstall "source"
                     }
-                    if ($env:TRACE_COSIGN_BUNDLE_URL -and (Get-Command "cosign" -ErrorAction SilentlyContinue)) {
-                        $BundlePath = "$ZipPath.sigstore.json"
+                }
+                if ($env:TRACE_COSIGN_BUNDLE_URL) {
+                    $BundlePath = "$ZipPath.sigstore.json"
+                    try {
                         Invoke-WebRequest -Uri $env:TRACE_COSIGN_BUNDLE_URL -Headers $WebHeaders -OutFile $BundlePath
-                        $OidcIssuer = if ($env:TRACE_COSIGN_OIDC_ISSUER) { $env:TRACE_COSIGN_OIDC_ISSUER } else { "https://token.actions.githubusercontent.com" }
-                        if (-not $env:TRACE_COSIGN_IDENTITY) { Write-Host "  [!] Set TRACE_COSIGN_IDENTITY to verify." -ForegroundColor Red; exit 1 }
-                        & cosign verify-blob --bundle $BundlePath --certificate-identity $env:TRACE_COSIGN_IDENTITY --certificate-oidc-issuer $OidcIssuer $ZipPath
-                        Remove-Item -Force $BundlePath -ErrorAction SilentlyContinue
+                    } catch {
+                        Stop-TraceInstall "source"
                     }
-                } else {
+                    $OidcIssuer = if ($env:TRACE_COSIGN_OIDC_ISSUER) { $env:TRACE_COSIGN_OIDC_ISSUER } else { "https://token.actions.githubusercontent.com" }
+                    if (-not $env:TRACE_COSIGN_IDENTITY) {
+                        Write-Host "  [!] Set TRACE_COSIGN_IDENTITY to verify." -ForegroundColor Red
+                        Stop-TraceInstall "source"
+                    }
+                    try {
+                        Invoke-LoggedCommand -Action { param($bundle, $id, $issuer, $blob) & cosign verify-blob --bundle $bundle --certificate-identity $id --certificate-oidc-issuer $issuer $blob } -ActionArgs @($BundlePath, $env:TRACE_COSIGN_IDENTITY, $OidcIssuer, $ZipPath)
+                    } catch {
+                        Stop-TraceInstall "source"
+                    }
+                    Remove-Item -Force $BundlePath -ErrorAction SilentlyContinue
+                }
+                if (-not $env:TRACE_RELEASE_SHA256 -and -not $env:TRACE_COSIGN_BUNDLE_URL) {
                     Write-Trace ("  [!] No TRACE_RELEASE_SHA256 pinned: installing unverified {0}." -f $TraceRef)
                 }
                 Expand-Archive -Path $ZipPath -DestinationPath $TempExtract -Force
                 $ExtractedFolder = (Get-ChildItem -Directory -Path $TempExtract | Select-Object -First 1).FullName
-                if (Test-Path $RepoRoot) { Remove-Item -Recurse -Force $RepoRoot }
                 Move-Item -Path $ExtractedFolder -Destination $RepoRoot
                 Remove-Item -Force $ZipPath
                 Remove-Item -Recurse -Force $TempExtract
@@ -355,7 +393,7 @@ if ([bool]$Uninstall) {
     Uninstall-TraceApp -RepoRoot $RepoRoot
 }
 
-if ([bool]$Reinstall) {
+if ([bool]$Reinstall -and -not $script:Staged) {
     $defaultApp = Join-Path $Home ".trace\app"
     try {
         if ($RepoRoot -eq $defaultApp) {
@@ -476,7 +514,7 @@ if ($VerboseMode) {
     Write-Host "  Using pip with cryptographic hash verification..."
 }
 try {
-    Invoke-LoggedCommand -Action { param($py) & $py -m pip install --quiet "pip==26.2.1" } -ActionArgs @($VenvPython)
+    Invoke-LoggedCommand -Action { param($py) & $py -m pip install --quiet --require-hashes --only-binary :all: -r requirements-pip.txt } -ActionArgs @($VenvPython)
 } catch {
     Write-Trace "  [i] Could not upgrade pip; continuing with the one bundled in the environment."
 }
@@ -503,6 +541,40 @@ if (-not $EditableInstalled) {
     Stop-TraceInstall "dependencies"
 }
 Write-Trace "  [OK] Dependencies installed successfully."
+
+if ($script:Staged) {
+    $StagedExe = Join-Path $VenvDir "Scripts\trace.exe"
+    try {
+        Invoke-LoggedCommand -Action { param($exe) & $exe --version } -ActionArgs @($StagedExe)
+    } catch {
+        Stop-TraceInstall "dependencies"
+    }
+    $OldEnv = Join-Path $FinalRoot ".env"
+    if ((Test-Path $OldEnv) -and (-not (Test-Path (Join-Path $RepoRoot ".env")))) {
+        Copy-Item $OldEnv (Join-Path $RepoRoot ".env")
+    }
+    $OldRoot = "$FinalRoot.old"
+    Remove-Item -Recurse -Force $OldRoot -ErrorAction SilentlyContinue
+    try {
+        if (Test-Path $FinalRoot) {
+            Move-Item -Path $FinalRoot -Destination $OldRoot
+        }
+        Move-Item -Path $RepoRoot -Destination $FinalRoot
+    } catch {
+        if ((Test-Path $OldRoot) -and (-not (Test-Path $FinalRoot))) {
+            Move-Item -Path $OldRoot -Destination $FinalRoot -ErrorAction SilentlyContinue
+        }
+        Stop-TraceInstall "source"
+    }
+    Remove-Item -Recurse -Force $OldRoot -ErrorAction SilentlyContinue
+    $RepoRoot = $FinalRoot
+    $VenvDir = Join-Path $RepoRoot ".venv"
+    $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
+    Set-Location $RepoRoot
+    $script:StageRoot = ""
+    $script:Staged = $false
+    Write-Trace "  [OK] Staged install verified and swapped into place."
+}
 
 if ($VerboseMode) {
     Write-Host "[4/6] Verifying environment and storage directories..." -ForegroundColor Yellow

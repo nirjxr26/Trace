@@ -161,10 +161,6 @@ class UpdateProgressDisplay(ProgressCallback):
                 label = f"{label} — {format_mb(self.download_read)} of {format_mb(self.download_total)}"
             console.print(step_line(status, label))
 
-    def _show_stage(self, stage: Stage) -> None:
-        if self._spinner is not None:
-            self._spinner.set_message_pinned(text=f"Installing {safe_text(self.product)} v{safe_text(self.target)}")
-
     def finish(self, dto: UpdateResultDto, current: str) -> None:
         # `current` is the version captured before the update ran. After the pointer flips,
         # saying "Still on v<current>" names a release that is no longer active.

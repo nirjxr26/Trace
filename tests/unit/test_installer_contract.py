@@ -59,9 +59,23 @@ def test_a_failing_doctor_reaches_the_exit_status(script: Path, name: str) -> No
     """The flag is set in the doctor block; something must consume it."""
     text = script.read_text(encoding="utf-8")
     assert "DoctorFailed" in text or "DOCTOR_FAILED" in text, f"{name} records no doctor failure"
-    assert re.search(r"if .*(DoctorFailed|DOCTOR_FAILED).*?exit 1", text, re.S), (
+    assert re.search(r'if .*(DoctorFailed|DOCTOR_FAILED).*?exit\s+["$]', text, re.S), (
         f"{name} records the failure but never exits non-zero for it"
     )
+
+
+def test_the_powershell_failure_path_exits_with_the_child_code() -> None:
+    text = PS1.read_text(encoding="utf-8")
+    assert "$script:LastChildExit = $code" in text, "install.ps1 never records the failing child's code"
+    assert re.search(r"function Stop-TraceInstall.*?exit \$code", text, re.S), (
+        "Stop-TraceInstall still flattens every failure to exit 1"
+    )
+
+
+def test_the_shell_failure_path_exits_with_the_child_code() -> None:
+    body = _shell_function_body("trace_fail")
+    assert '"${2:-$?}"' in body, "trace_fail never captures the failing command's code"
+    assert 'exit "$TRACE_FAIL_CODE"' in body, "trace_fail still flattens every failure to exit 1"
 
 
 def test_the_powershell_installer_rejects_unknown_flags() -> None:
@@ -136,8 +150,8 @@ def test_a_virtual_environment_without_pip_is_bootstrapped(script: Path, name: s
 )
 def test_a_failed_pip_self_upgrade_does_not_abort_the_install(script: Path, name: str) -> None:
     text = script.read_text(encoding="utf-8")
-    upgrade = text.index("pip==26.2.1")
-    locked = text.index("--require-hashes")
+    upgrade = text.index("requirements-pip.txt")
+    locked = text.index("-r requirements.txt")
     assert upgrade < locked, f"{name} installs locked dependencies before upgrading pip"
     assert "Could not upgrade pip" in text[upgrade:locked], (
         f"{name} kills the install when the pip self-upgrade cannot reach an index, even "
@@ -199,3 +213,122 @@ def test_the_installing_line_is_not_indented(script: Path, name: str, printed: s
     assert any(line.startswith(printed) for line in text.splitlines()), (
         f"{name} indents the statement that prints the installing line"
     )
+
+
+def test_the_pip_self_upgrade_is_hash_locked() -> None:
+    lock = Path(__file__).resolve().parents[2] / "requirements-pip.txt"
+    text = lock.read_text(encoding="utf-8").strip()
+    assert re.fullmatch(r"pip==26\.2\.1\s+\\\n\s+--hash=sha256:[0-9a-f]{64}", text), (
+        f"the pip bootstrap pin must carry the wheel sha256, not just a version: {text!r}"
+    )
+    for script, name in ((PS1, "install.ps1"), (SH, "install.sh")):
+        body = script.read_text(encoding="utf-8")
+        assert re.search(r"--require-hashes[^\n]*requirements-pip\.txt", body), (
+            f"{name} upgrades pip without --require-hashes against the locked file, so a "
+            "typo'd or renamed pin downloads an unverified wheel"
+        )
+
+
+def test_the_shell_picker_forwards_only_the_flags_that_were_set() -> None:
+    text = SH.read_text(encoding="utf-8")
+    assert "${TRACE_REINSTALL:+" not in text, (
+        "`${VAR:+...}` expands whenever the variable holds any value, so TRACE_REINSTALL='0' "
+        "still appended --reinstall: every pick re-installed into a source the same run had "
+        "just wiped"
+    )
+    assert "${VERBOSE:+" not in text, (
+        "VERBOSE='0' still appended --verbose; a flag must be forwarded because it was set, "
+        "not because the variable exists"
+    )
+    assert 'set -- --version "$TRACE_SEL"' in text
+    assert 'set -- "$@" --reinstall' in text
+    assert 'set -- "$@" --verbose' in text
+    assert 'sh "$0" "$@"' in text
+
+
+def test_the_shell_installer_never_streams_an_archive_into_tar() -> None:
+    text = SH.read_text(encoding="utf-8")
+    assert not re.search(r"curl[^\n|]*\|[^\n|]*tar", text), (
+        "curl | tar extracts whatever the stream happened to contain: a truncation or a "
+        "swapped artifact installs with nothing to compare against"
+    )
+    download = text.index('-o "$ARCHIVE_FILE"')
+    verify = text.index('sha256sum "$ARCHIVE_FILE"')
+    extract = text.index('tar -xz --strip-components=1 -C "$WORK_ROOT" -f "$ARCHIVE_FILE"')
+    assert download < verify < extract, "the archive must be downloaded to a file, verified, and only then extracted"
+
+
+@pytest.mark.parametrize(
+    ("script", "name"),
+    [(PS1, "install.ps1"), (SH, "install.sh")],
+    ids=["ps1", "sh"],
+)
+def test_a_pinned_release_forces_the_verified_path(script: Path, name: str) -> None:
+    text = script.read_text(encoding="utf-8")
+    assert re.search(r"command -v git[^\n]*TRACE_RELEASE_SHA256", text) or re.search(
+        r"\$GitCmd\s+-and\s+-not\s+\$env:TRACE_RELEASE_SHA256", text
+    ), (
+        f"{name} still takes the blind git-clone path when the operator pinned a digest, "
+        "so the pin is silently ignored and the installed tree is unverified"
+    )
+
+
+@pytest.mark.parametrize(
+    ("script", "name"),
+    [(PS1, "install.ps1"), (SH, "install.sh")],
+    ids=["ps1", "sh"],
+)
+def test_a_missing_cosign_aborts_instead_of_skipping_the_signature(script: Path, name: str) -> None:
+    text = script.read_text(encoding="utf-8")
+    assert re.search(r"cosign missing[^\n]*Aborting", text), (
+        f"{name} skips signature verification when cosign is absent; a bundle that is set "
+        "but unverifiable must stop the install, not downgrade it"
+    )
+
+
+def test_the_powershell_installer_checks_the_cosign_result() -> None:
+    text = PS1.read_text(encoding="utf-8")
+    assert re.search(r"Invoke-LoggedCommand[^\n]*cosign verify-blob", text), (
+        "a bare `& cosign verify-blob` never looks at the exit code, so a failed signature "
+        "check prints an error and the install continues"
+    )
+
+
+@pytest.mark.parametrize(
+    ("script", "name", "swap", "smoke", "carry", "restore"),
+    [
+        (
+            PS1,
+            "install.ps1",
+            "Move-Item -Path $RepoRoot -Destination $FinalRoot",
+            "& $exe --version",
+            'Copy-Item $OldEnv (Join-Path $RepoRoot ".env")',
+            "Move-Item -Path $OldRoot -Destination $FinalRoot",
+        ),
+        (
+            SH,
+            "install.sh",
+            'mv "$WORK_ROOT" "$REPO_ROOT"',
+            'trace_run "$TRACE_BIN" --version',
+            'cp "$REPO_ROOT/.env" "$WORK_ROOT/.env"',
+            'mv "${REPO_ROOT}.old" "$REPO_ROOT"',
+        ),
+    ],
+    ids=["ps1", "sh"],
+)
+def test_a_replacement_install_is_staged_and_swapped_only_after_it_runs(
+    script: Path, name: str, swap: str, smoke: str, carry: str, restore: str
+) -> None:
+    text = script.read_text(encoding="utf-8")
+    staged = text.index(".staging")
+    smoke_at = text.index(smoke, staged)
+    swap_at = text.index(swap, staged)
+    assert smoke_at < swap_at, (
+        f"{name} swaps the new tree in before proving it runs; a broken release must not destroy the working install"
+    )
+    assert carry in text, f"{name} carries nothing across the swap: {carry}"
+    assert text.index(carry) < swap_at, (
+        f"{name} replaces the live tree without carrying .env (database credentials and the "
+        "signing secret) across the swap"
+    )
+    assert restore in text[swap_at:], f"{name} has no way back if the swap itself fails halfway"

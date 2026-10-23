@@ -206,7 +206,10 @@ class UpdateLifecycle:
         from trace_core.updates.policy import is_update_available
 
         progress = progress or SILENT
-        gate = gate or ForensicOperationGate()
+        if gate is None:
+            from trace_core.devices.operation_state import forensic_operation_active
+
+            gate = ForensicOperationGate(active_probe=lambda _context: forensic_operation_active())
         current = get_installed_version()
         if not is_update_available(current, manifest):
             raise UpdateNotAvailableError(f"no update available (current {current})")

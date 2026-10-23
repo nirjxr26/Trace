@@ -31,7 +31,7 @@ def confirm_override() -> bool:
 
 device_app = typer.Typer(
     name="device",
-    help="Enumerate devices, capture identity, and verify write protection before imaging.",
+    help="Enumerate devices, capture identity, and check write protection.",
     no_args_is_help=True,
 )
 

@@ -1041,3 +1041,58 @@ def test_export_header_is_signed_by_the_ledger_key(tmp_path, session_manager: Da
     assert verify_bytes(key_id, canonical_json(header), signature)
     header["last_seq"] = header["last_seq"] + 1
     assert not verify_bytes(key_id, canonical_json(header), signature)
+
+
+def test_row_key_problem_rides_the_same_vocabulary_as_full_verify(monkeypatch: pytest.MonkeyPatch) -> None:
+    import hashlib
+    import hmac
+    import json
+
+    from trace_core.audit.domain import GENESIS_CHAIN, chain_hash, payload_hash
+    from trace_core.audit.signing import HMAC_KEY_ID
+    from trace_core.audit.verifier import row_key_problem
+    from trace_core.core.settings import DEV_SECRET_SENTINEL, settings
+
+    payload = {"action": "CASE_CREATED", "actor": "Ex", "ts": "2026-01-01T00:00:00+00:00"}
+    payload_json = json.dumps(payload)
+    payload_digest = payload_hash(payload)
+    chain_digest = chain_hash(GENESIS_CHAIN, payload_digest, 1)
+    raw = payload_json.encode("utf-8")
+
+    def _sign(secret: str) -> str:
+        return hmac.new(secret.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+
+    def _classify(signature: str, key_id: str = HMAC_KEY_ID, digest: str = payload_digest) -> str | None:
+        return row_key_problem(
+            payload_json,
+            digest,
+            GENESIS_CHAIN,
+            chain_digest,
+            1,
+            signature=signature,
+            key_id=key_id,
+        )
+
+    operator_signed = _sign(settings.secret_key.get_secret_value())
+    assert _classify(operator_signed) is None, "a signature that verifies must classify as no problem"
+
+    monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
+    assert _classify(operator_signed) == "signing_key", (
+        "with the placeholder key active, a signature only the previous key can produce is "
+        "a key problem — the same verdict full verify reports"
+    )
+    assert _classify(_sign(DEV_SECRET_SENTINEL)) == "insecure_key"
+    assert _classify(_sign("some-other-secret"), digest="f" * 64) is None, (
+        "a changed payload must stay a tamper verdict even while the placeholder key is "
+        "active; the key story may not mask a content edit"
+    )
+
+    monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)("trace-test-key-operator"))
+    assert _classify(_sign("some-other-secret")) is None, (
+        "with the signing key available locally, a mismatching signature is not a key problem"
+    )
+    unknown = "ed25519:" + "f" * 16
+    assert _classify("ab" * 32, key_id=unknown) == f"key:{unknown}", (
+        "a signature from a key this host does not hold must be reported as the key being "
+        "unavailable, not as a content mismatch"
+    )

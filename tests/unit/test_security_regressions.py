@@ -883,6 +883,74 @@ def test_atomic_write_is_owner_only(tmp_path) -> None:  # type: ignore[no-untype
     assert_owner_only(out, "0o600")
 
 
+def _windows_sddl(path: Path) -> str:
+    shell = shutil.which("pwsh") or "powershell"
+    result = subprocess.run(
+        [shell, "-NoProfile", "-Command", f"(Get-Acl -LiteralPath '{path}').Sddl"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"{shell} could not read the ACL of {path}: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def _windows_acl_sids(path: Path) -> set[str]:
+    shell = shutil.which("pwsh") or "powershell"
+    command = (
+        f"$acl = Get-Acl -LiteralPath '{path}'; "
+        "$acl.Access | ForEach-Object { "
+        "$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }"
+    )
+    result = subprocess.run(
+        [shell, "-NoProfile", "-Command", command],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"{shell} could not read the ACL of {path}: {result.stderr.strip()}")
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
+def test_ensure_dir_strips_broad_principals_on_windows(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.fs import _current_user_sid, ensure_dir
+
+    target = ensure_dir(tmp_path / "sub" / "store")
+    assert_owner_only(target, "0o700")
+    if sys.platform == "win32":
+        sids = _windows_acl_sids(target)
+        assert _current_user_sid() in sids, sids
+        for broad in ("S-1-1-0", "S-1-5-32-545", "S-1-5-11"):
+            assert broad not in sids, sids
+
+
+def test_atomic_write_grants_no_broad_principal_a_right(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.fs import atomic_write_lines
+
+    out = atomic_write_lines(tmp_path / "bundle.jsonl", ["a\n"])
+    assert_owner_only(out, "0o600")
+    if sys.platform == "win32":
+        sddl = _windows_sddl(out)
+        for broad in ("WD", "BU", "AU"):
+            assert f";;;{broad})" not in sddl, sddl
+
+
+def test_ensure_dir_repairs_a_loose_existing_acl(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.fs import ensure_dir
+
+    store = tmp_path / "store"
+    store.mkdir()
+    key = store / "key.pem"
+    key.write_text("k")
+    if sys.platform == "win32":
+        subprocess.run(["icacls", str(key), "/grant", "*S-1-5-32-545:R"], check=True, capture_output=True)
+        assert ";;;BU)" in _windows_sddl(key)
+    ensure_dir(store)
+    assert_owner_only(store, "0o700")
+    if sys.platform == "win32":
+        assert ";;;BU)" not in _windows_sddl(key)
+
+
 def test_export_refuses_clobber(tmp_path, service: CaseService) -> None:  # type: ignore[no-untyped-def]
     from trace_core.audit.helpers import check_export_dest
     from trace_core.audit.service import AuditService

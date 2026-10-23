@@ -5,7 +5,7 @@ import shutil
 import time
 from pathlib import Path
 
-from trace_core.core.fs import atomic_write_lines, check_contained, ensure_dir, read_json_record
+from trace_core.core.fs import atomic_write_lines, check_contained, ensure_dir, fsync_dir, read_json_record
 from trace_core.updates.errors import UpdateVerificationError
 from trace_core.updates.lock import update_lock
 
@@ -30,10 +30,6 @@ def install_root() -> Path:
     from trace_core.core.settings import settings
 
     return Path(settings.storage_root).parent / "install"
-
-
-def staging_root(base: str | Path) -> Path:
-    return ensure_dir(Path(base) / "staging")
 
 
 def active_path(base: str | Path) -> Path:
@@ -234,6 +230,7 @@ def read_release_meta(base: str | Path, version: str) -> dict | None:
 
 def _set_active(base: str | Path, version: str) -> None:
     atomic_write_lines(active_path(base), [version])
+    fsync_dir(Path(base))
 
 
 def activate(base: str | Path, version: str) -> None:
@@ -246,6 +243,7 @@ def activate(base: str | Path, version: str) -> None:
         current = read_active(base)
         if current and current != version:
             atomic_write_lines(previous_path(base), [current])
+            fsync_dir(Path(base))
         _set_active(base, version)
 
 

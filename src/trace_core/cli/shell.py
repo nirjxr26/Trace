@@ -182,7 +182,7 @@ class InteractiveShell:
     |_| |_| \_\/_/   \_\____|_____|"""
             logo_text = Text(logo, style=THEME_TOKENS["accent"])
             sub_text = Text(
-                f"  Forensic Data Imaging & Retrieval Tool · v{settings.version}\n",
+                f"  Forensic Case Management & Device Inspection Tool · v{settings.version}\n",
                 style=THEME_TOKENS["muted"],
             )
             console.print(logo_text)
@@ -252,8 +252,12 @@ class InteractiveShell:
             self._ensure_service()
             cases = self.service.list_cases(CaseFilterDto(limit=5, offset=0, recent=True))  # type: ignore[union-attr]
             render_cases(cases, "table", active_number=self.active_case.number if self.active_case else None)
-        except Exception:
-            console.print("[dim]No recent cases.[/dim]")
+        except Exception as exc:
+            render_error_card(
+                "Recent Cases Unavailable",
+                f"Could not list recent cases: {type(exc).__name__}: {exc}",
+                "Run 'trace doctor' to check the database connection, then try again.",
+            )
 
     def _handle_short_alias(self, line: str) -> bool:
         # ls/sh/ed -> case list/show/edit (comfort aliases)

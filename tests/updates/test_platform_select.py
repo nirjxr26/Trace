@@ -124,3 +124,30 @@ def test_strict_key_parse_rejects_garbage(temp_storage_root):
     trust_key_path(key_id).write_text("ab" * 32 + " extra garbage", encoding="utf-8")
     with pytest.raises(UpdateVerificationError):
         signing.load_release_pubkey(key_id)
+
+
+def test_single_tagged_artifact_matching_the_host_selected(signed_release, monkeypatch):
+    import sys
+
+    manifest, _, _, _ = signed_release()
+    base = manifest.artifacts["default"]
+    manifest.artifacts = {"only": base.model_copy(update={"platform": "windows", "arch": "x64"})}
+    monkeypatch.setattr(sys, "platform", "win32")
+    import platform as _platform
+
+    monkeypatch.setattr(_platform, "machine", lambda: "AMD64")
+    assert select_artifact(manifest).filename == base.filename
+
+
+def test_single_tagged_artifact_mismatching_the_host_rejected(signed_release, monkeypatch):
+    import sys
+
+    manifest, _, _, _ = signed_release()
+    base = manifest.artifacts["default"]
+    manifest.artifacts = {"only": base.model_copy(update={"platform": "windows", "arch": "x64"})}
+    monkeypatch.setattr(sys, "platform", "linux")
+    import platform as _platform
+
+    monkeypatch.setattr(_platform, "machine", lambda: "AMD64")
+    with pytest.raises(UpdateVerificationError, match="single artifact"):
+        select_artifact(manifest)

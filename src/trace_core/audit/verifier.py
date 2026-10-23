@@ -89,6 +89,37 @@ def verify_event(
     return True
 
 
+def row_key_problem(
+    payload_json: str,
+    payload_hash: str,
+    prev_chain: str,
+    chain_hash_str: str,
+    seq: int,
+    *,
+    signature: str | None = None,
+    key_id: str | None = None,
+) -> str | None:
+    if signature is None:
+        return None
+    from trace_core.audit.signing import (
+        HMAC_KEY_ID,
+        expected_signature,
+        is_default_key,
+        verify_bytes,
+    )
+
+    raw = payload_json.encode("utf-8")
+    if verify_bytes(key_id, raw, signature):
+        return "insecure_key" if is_default_key() and key_id == HMAC_KEY_ID else None
+    if _expected_payload_hash(payload_json) != payload_hash:
+        return None
+    if chain_hash(prev_chain, payload_hash, seq) != chain_hash_str:
+        return None
+    if is_default_key():
+        return "signing_key"
+    return None if expected_signature(key_id, raw) else f"key:{key_id}"
+
+
 def _signature_mismatch(m: AuditEventModel) -> tuple[str, str] | None:
     if m.signature is None:
         return None
