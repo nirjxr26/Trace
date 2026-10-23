@@ -884,12 +884,14 @@ def test_atomic_write_is_owner_only(tmp_path) -> None:  # type: ignore[no-untype
 
 
 def _windows_sddl(path: Path) -> str:
+    shell = shutil.which("pwsh") or "powershell"
     result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", f"(Get-Acl -LiteralPath '{path}').Sddl"],
+        [shell, "-NoProfile", "-Command", f"(Get-Acl -LiteralPath '{path}').Sddl"],
         capture_output=True,
         text=True,
-        check=True,
     )
+    if result.returncode != 0:
+        raise RuntimeError(f"{shell} could not read the ACL of {path}: {result.stderr.strip()}")
     return result.stdout.strip()
 
 
