@@ -119,7 +119,7 @@ jobs:
         run: python -m build --wheel --outdir dist
 
       - name: Execute Pytest with Branch Coverage
-        run: pytest --cov=trace_core --cov-report=term-missing --cov-report=xml --cov-fail-under=70
+        run: pytest -n 8 --dist loadfile --cov=trace_core --cov-report=term-missing --cov-report=xml --cov-fail-under=70
 
       - name: Upload Coverage Artifact (Linux)
         if: matrix.os == 'ubuntu-latest'

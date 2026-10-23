@@ -895,16 +895,33 @@ def _windows_sddl(path: Path) -> str:
     return result.stdout.strip()
 
 
+def _windows_acl_sids(path: Path) -> set[str]:
+    shell = shutil.which("pwsh") or "powershell"
+    command = (
+        f"$acl = Get-Acl -LiteralPath '{path}'; "
+        "$acl.Access | ForEach-Object { "
+        "$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }"
+    )
+    result = subprocess.run(
+        [shell, "-NoProfile", "-Command", command],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"{shell} could not read the ACL of {path}: {result.stderr.strip()}")
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
 def test_ensure_dir_strips_broad_principals_on_windows(tmp_path) -> None:  # type: ignore[no-untyped-def]
     from trace_core.core.fs import _current_user_sid, ensure_dir
 
     target = ensure_dir(tmp_path / "sub" / "store")
     assert_owner_only(target, "0o700")
     if sys.platform == "win32":
-        sddl = _windows_sddl(target)
-        assert f";;;{_current_user_sid()})" in sddl
-        for broad in ("WD", "BU", "AU"):
-            assert f";;;{broad})" not in sddl, sddl
+        sids = _windows_acl_sids(target)
+        assert _current_user_sid() in sids, sids
+        for broad in ("S-1-1-0", "S-1-5-32-545", "S-1-5-11"):
+            assert broad not in sids, sids
 
 
 def test_atomic_write_grants_no_broad_principal_a_right(tmp_path) -> None:  # type: ignore[no-untyped-def]
