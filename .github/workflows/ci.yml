@@ -86,7 +86,6 @@ jobs:
 
   test-matrix:
     name: Test Suite (${{ matrix.os }} - Python ${{ matrix.python-version }})
-    needs: [lint-and-types]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -131,7 +130,6 @@ jobs:
 
   postgres-integration:
     name: PostgreSQL 16 Integration (${{ matrix.python-version }})
-    needs: [lint-and-types]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -184,7 +182,6 @@ jobs:
 
   update-e2e:
     name: Real Update E2E (${{ matrix.os }})
-    needs: [lint-and-types]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
