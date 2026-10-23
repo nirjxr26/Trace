@@ -76,6 +76,17 @@ def render_check_card(payload: dict, channel: str) -> None:
     )
 
 
+def render_shell_check_card(payload: dict, channel: str) -> None:
+    if payload.get("version_problem") or not payload["available"] or not payload["installable"]:
+        render_check_card(payload, channel)
+        return
+    if payload["security_update"]:
+        console.print("[bold]Security update[/bold]")
+    console.print(f"[green]Update available[/green]         {safe_text(payload['target'])}")
+    console.print("")
+    console.print("[dim]Run `trace update install` to upgrade.[/dim]")
+
+
 def _active_version() -> str | None:
     """The release the pointer names right now, or None when it cannot be read. An
     unreadable pointer is not the same as the pre-update version."""

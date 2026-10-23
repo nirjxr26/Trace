@@ -27,7 +27,7 @@ def test_check_renders_the_card(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(checker, "resolve_channel", lambda _s: "stable")
     monkeypatch.setattr(checker, "resolve_manifest_target", lambda _s: "https://example.test/stable.json")
     monkeypatch.setattr(checker, "cached_check", lambda target, channel: {"target": "9.9.9"})
-    monkeypatch.setattr(renderers, "render_check_card", lambda payload, channel: seen.append((payload, channel)))
+    monkeypatch.setattr(renderers, "render_shell_check_card", lambda payload, channel: seen.append((payload, channel)))
 
     assert UpdateShellCommandHandler().execute("check", [], ShellContext()) is True
     assert seen == [({"target": "9.9.9"}, "stable")]

@@ -43,11 +43,11 @@ async def _goto_settings_updates(pilot, app) -> None:  # type: ignore[no-untyped
     app.query_one("#settings-sections", ListView).focus()
     for _ in range(5):
         detail = _text(app.query_one("#settings-detail", Static))
-        if "Current version" in detail:
+        if detail.startswith("Updates\n"):
             return
         await pilot.press("down")
         await pilot.pause()
-    assert "Current version" in _text(app.query_one("#settings-detail", Static))
+    assert _text(app.query_one("#settings-detail", Static)).startswith("Updates\n")
 
 
 async def test_updates_tab_check_and_hint(session_manager: DatabaseSessionManager, signed_release, monkeypatch) -> None:
@@ -62,7 +62,10 @@ async def test_updates_tab_check_and_hint(session_manager: DatabaseSessionManage
         await _goto_settings_updates(pilot, app)
         await _press_until(pilot, app, "c", "1.5.0")
         detail = _text(app.query_one("#settings-detail", Static))
-        assert "restart" in detail.lower()
+        assert "Update available         1.5.0" in detail
+        assert "Run `trace update install` to upgrade." in detail
+        assert "restart" not in detail.lower()
+        assert "Minimum supported version" not in detail
         assert "Update 1.5.0 available" in _text(app.query_one("#hint", Static))
 
 
@@ -79,12 +82,13 @@ async def test_updates_card_shows_version_block(
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         await _goto_settings_updates(pilot, app)
+        await _press_until(pilot, app, "c", "Update available         1.5.0")
         detail = _text(app.query_one("#settings-detail", Static))
-        assert "Current version" in detail
-        await _press_until(pilot, app, "c", "trace update install --yes")
-        detail = _text(app.query_one("#settings-detail", Static))
-        assert "Update available with version: v1.5.0" in detail
-        assert "trace update install --yes" in detail
+        assert "Current version" not in detail
+        assert "Update available         1.5.0" in detail
+        assert "Run `trace update install` to upgrade." in detail
+        assert "trace update install --yes" not in detail
+        assert "Minimum supported version" not in detail
         assert not app.query("#update-apply"), "the update affordance is the CLI command, not a button"
 
 
