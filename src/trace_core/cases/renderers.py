@@ -180,7 +180,6 @@ def _render_case_devices(device_rows: list[dict[str, Any]] | None, divider: Text
     from trace_core.core.ui.theme import THEME_TOKENS as TOK
 
     render_section_title("LINKED DEVICE")
-    console.print("")
     for row in device_rows:
         style = "" if row["current"] else TOK["muted"]
         console.print(Text(f"    {sanitize_terminal(str(row['heading']))}", style=style))
@@ -191,7 +190,28 @@ def _render_case_devices(device_rows: list[dict[str, Any]] | None, divider: Text
     console.print(divider)
 
 
-def _render_case_history(case: CaseResponseDto, events: list[Any] | None, divider: Text) -> None:
+def _history_device_name(event: Any, device_names: dict[str, str]) -> str | None:
+    from trace_core.audit.events import parse_details
+    from trace_core.devices.renderers import display_node
+
+    details = parse_details(getattr(event, "payload_json", "") or "")
+    if not details:
+        return None
+    label = details.get("label")
+    if label:
+        return sanitize_terminal(str(label))
+    node = details.get("node")
+    if not node:
+        return None
+    return device_names.get(str(node)) or sanitize_terminal(display_node(str(node)))
+
+
+def _render_case_history(
+    case: CaseResponseDto,
+    events: list[Any] | None,
+    divider: Text,
+    device_names: dict[str, str] | None = None,
+) -> None:
     """HISTORY proof block: newest 5 ledger events with a pointer to the full timeline."""
     if not events:
         return
@@ -199,12 +219,16 @@ def _render_case_history(case: CaseResponseDto, events: list[Any] | None, divide
     from trace_core.core.ui.renderers import console, format_ledger_time, render_section_title
     from trace_core.core.ui.theme import THEME_TOKENS as TOK
 
+    names = device_names or {}
     count = plural(len(events), "event")
     render_section_title(f"HISTORY · {count}")
-    console.print("")
     for e in events[:5]:
+        device = _history_device_name(e, names)
+        suffix = f" · {device}" if device else ""
         console.print(
-            Text(f"    {format_ledger_time(e.ts)}  {short_action_label(e.action)} · {sanitize_terminal(e.actor)}")
+            Text(
+                f"    {format_ledger_time(e.ts)}  {short_action_label(e.action)}{suffix} · {sanitize_terminal(e.actor)}"
+            )
         )
     if len(events) > 5:
         console.print(
@@ -253,12 +277,12 @@ def render_case_detail(
         if not (section_body and section_body.strip()):
             continue
         render_section_title(section_title)
-        console.print("")
         console.print(Text(f"    {sanitize_terminal(section_body.strip())}", style=TOK["value"]))
         console.print(divider)
 
     _render_case_devices(device_rows, divider)
-    _render_case_history(case, events, divider)
+    device_names = {str(row["node"]): str(row["heading"]) for row in device_rows or []}
+    _render_case_history(case, events, divider, device_names)
     _render_case_next(case)
 
 
@@ -286,7 +310,6 @@ def _render_case_next(case: CaseResponseDto) -> None:
     )
 
     render_section_title("NEXT ACTIONS")
-    console.print("")
     for step in steps:
         console.print(Text(f"    → {step}", style=TOK["muted"]))
     console.print("")

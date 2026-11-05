@@ -20,6 +20,15 @@ def case(session_manager):
 SEEN: list[str] = []
 
 
+async def _settle(app, pilot, tries: int = 100) -> None:  # type: ignore[no-untyped-def]
+    for _ in range(tries):
+        await pilot.pause()
+        if not app.workers:
+            return
+        await app.workers.wait_for_complete()
+    raise AssertionError("background refresh did not settle")
+
+
 def _load_cases(term: str) -> list[tuple[str, str]]:
     """Stand-in for the service-backed loader; records what it was asked for."""
     SEEN.append(term)
@@ -117,7 +126,7 @@ async def test_the_devices_tab_files_a_device_under_the_chosen_case(session_mana
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         view = app.query_one(DevicesView)
         node = view._selected_node()
         assert node is not None, "the fixture must yield a device"
@@ -142,7 +151,7 @@ async def test_the_devices_tab_unlinks_and_reports(session_manager, device_file_
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         view = app.query_one(DevicesView)
         node = view._selected_node()
         assert node is not None, "the fixture must yield a device"
@@ -196,7 +205,7 @@ async def test_the_picker_searches_through_the_service_not_its_own_matching(sess
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         view = app.query_one(DevicesView)
 
         assert len(view._open_cases("")) == 2, "the fixture must hold more than one case"

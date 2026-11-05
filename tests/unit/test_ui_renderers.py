@@ -9,7 +9,9 @@ from rich.text import Text
 from trace_core.cases.domain import Case, CaseStatus
 from trace_core.cases.dto import CaseResponseDto
 from trace_core.cases.renderers import render_case_detail, render_case_table
+from trace_core.cases.service import CaseService
 from trace_core.core.cli.error_handler import _resolve_error_details, render_error_card
+from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.errors import ConflictError, NotFoundError, StateTransitionError
 from trace_core.core.ui.renderers import (
     format_status_badge,
@@ -146,6 +148,32 @@ def test_render_case_detail_history_block(sample_case: CaseResponseDto, capsys: 
     assert "HISTORY · 2 events" in out
     assert "Lead Examiner" in out
     assert "DESCRIPTION" in out
+
+
+def test_case_detail_section_titles_sit_against_their_content(
+    service: CaseService, session_manager: DatabaseSessionManager, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from trace_core.audit.dto import AuditFilterDto
+    from trace_core.audit.service import AuditService
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.devices.helpers import do_case_device_rows, do_link
+
+    case = service.create_case(
+        CaseCreateDto(
+            number="2026-SH-0300",
+            title="Section rhythm",
+            lead_examiner="Ex",
+            description="Device was bagged before imaging.",
+        )
+    )
+    do_link(session_manager, r"\\.\PhysicalDrive7", case.number, label="Bag 7")
+    events = AuditService(session_manager).list_events(AuditFilterDto(case_number=case.number))
+    render_case_detail(case, events, do_case_device_rows(session_manager, case.number))
+
+    out = capsys.readouterr().out
+    for title in ("DESCRIPTION", "LINKED DEVICE", "HISTORY", "NEXT ACTIONS"):
+        assert f"{title}\n\n" not in out, f"blank line under {title}"
+    assert "Device Linked · Bag 7" in out
 
 
 def test_render_entity_panel() -> None:

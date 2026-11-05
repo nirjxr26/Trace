@@ -1,5 +1,7 @@
 """Audit tab: live ledger stream + detail + scope + raw drawer."""
 
+from typing import TYPE_CHECKING
+
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
@@ -18,6 +20,9 @@ from trace_core.core.ui.theme import THEME_TOKENS
 from trace_core.tui.actions import confirm_overwrite, run_guarded
 from trace_core.tui.forms import RawModal, TextInputModal
 from trace_core.tui.widgets import DossierScroll, TablePane
+
+if TYPE_CHECKING:
+    from trace_core.audit.helpers import BundleReceipt
 
 TABLE_ID = "audit-table"
 AUDIT_HEADER_ID = "audit-header"
@@ -55,6 +60,7 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         self._detail: AuditEventDto | None = None
         self._observed_cache: dict | None = None
         self._detail_width: int | None = None
+        self._last_sealed: str | None = None
 
     @property
     def _svc(self) -> AuditService:
@@ -343,16 +349,107 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         self.app.push_screen(RawModal(f"seq {e.seq} payload", e.payload_json))
 
     def action_export(self) -> None:
-        self.app.push_screen(TextInputModal("Export bundle to", "bundle.jsonl"), self._exported)
+        from trace_core.tui.forms import ExportHubModal
 
-    def _exported(self, path: str | None) -> None:
+        self.app.push_screen(ExportHubModal("Whole ledger — tab scope and search do not apply."), self._export_chosen)
+
+    def _export_chosen(self, choice: str | None) -> None:
+        from trace_core.audit.helpers import default_export_path
+        from trace_core.tui.forms import TextInputModal
+
+        if choice == "plain":
+            self.app.push_screen(
+                TextInputModal("Export bundle to", str(default_export_path()), required=True),
+                self._plain_chosen,
+            )
+        elif choice == "sealed":
+            self.app.push_screen(
+                TextInputModal("Sealed bundle to", str(default_export_path(sealed=True)), required=True),
+                self._sealed_chosen,
+            )
+        elif choice == "open":
+            self.app.push_screen(
+                TextInputModal("Sealed bundle to open", self._last_sealed or "bundle.jsonl.sealed", required=True),
+                self._open_chosen,
+            )
+
+    def _plain_chosen(self, path: str | None) -> None:
+        if path:
+            confirm_overwrite(self, path, lambda: self._export_to(path, None))
+
+    def _sealed_chosen(self, path: str | None) -> None:
+        from trace_core.tui.forms import TextInputModal
+
         if not path:
             return
-        confirm_overwrite(self, path, lambda: self._do_export(path))
+        self.app.push_screen(
+            TextInputModal("Passphrase", "not stored, never logged", required=True, password=True, confirm=True),
+            lambda value: self._sealed_confirmed(path, value),
+        )
 
-    def _do_export(self, path: str) -> None:
-        def _export() -> str:
-            out = self._svc.export(path)
-            return f"Exported to {out}."
+    def _sealed_confirmed(self, path: str, passphrase: str | None) -> None:
+        from trace_core.audit.helpers import sealed_destination
 
-        run_guarded(self, _export)
+        if not passphrase:
+            return
+        confirm_overwrite(self, str(sealed_destination(path)), lambda: self._export_to(path, passphrase))
+
+    def _open_chosen(self, path: str | None) -> None:
+        from trace_core.audit.helpers import plain_destination
+
+        if not path:
+            return
+        confirm_overwrite(self, str(plain_destination(path)), lambda: self._ask_open_passphrase(path))
+
+    def _ask_open_passphrase(self, path: str) -> None:
+        from trace_core.tui.forms import TextInputModal
+
+        self.app.push_screen(
+            TextInputModal("Passphrase", "exact passphrase used when sealing", required=True, password=True),
+            lambda value: self._decrypt_from(path, value) if value else None,
+        )
+
+    def _export_to(self, path: str, passphrase: str | None) -> None:
+        from trace_core.audit.helpers import do_export
+
+        try:
+            receipt = do_export(self._svc, path, passphrase, force=True)
+        except Exception as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        from trace_core.audit.helpers import next_step_for
+
+        if receipt.sealed:
+            self._last_sealed = str(receipt.path)
+        self._show_receipt(
+            receipt,
+            "Bundle sealed." if receipt.sealed else "Bundle exported.",
+            next_step_for(receipt),
+        )
+
+    def _decrypt_from(self, in_path: str, passphrase: str) -> None:
+        from trace_core.audit.helpers import do_decrypt, plain_destination
+
+        try:
+            receipt = do_decrypt(in_path, str(plain_destination(in_path)), passphrase, force=True)
+        except Exception as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        self._show_receipt(receipt, "Bundle decrypted.")
+
+    def _show_receipt(self, receipt: "BundleReceipt", message: str, next_step: str = "") -> None:
+        from trace_core.audit.helpers import receipt_rows
+
+        rows = receipt_rows(receipt)
+        if next_step:
+            rows.append(("Next", next_step))
+        pane = self.query_one("#audit-right", DossierScroll)
+        rule = pane.divider()
+        body = Text()
+        body.append(message + "\n", style=THEME_TOKENS["accent"])
+        body.append(rule)
+        body.append("\n")
+        for key, value in rows:
+            body.append(f"{key:<10}", style="dim")
+            body.append(f"{sanitize_terminal(value)}\n")
+        self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(body)

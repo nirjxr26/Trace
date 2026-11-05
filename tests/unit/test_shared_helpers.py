@@ -217,12 +217,12 @@ def test_case_entity_fields_use_the_shared_required_text_rule() -> None:
         Case(number="2026-CR-0001", title="T", lead_examiner="  \x07 ")
 
 
-def test_report_written_is_the_only_export_tail() -> None:
-    assert callable(audit_helpers.report_written)
+def test_report_bundle_is_the_only_export_tail() -> None:
+    assert callable(audit_helpers.report_bundle)
     assert audit_commands.__name__.endswith("commands")
     for module in (audit_commands, audit_shell):
         src = _source(module)
-        assert "report_written(path," in src
+        assert "report_bundle(" in src
         assert 'console.print(f"[dim]{path}[/dim]")' not in src
 
 

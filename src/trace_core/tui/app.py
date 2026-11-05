@@ -12,7 +12,7 @@ from trace_core.tui.theme import TRACE_THEME
 TAB_HINTS: dict[str, str] = {
     "cases": "↑↓ Navigate   / Search   r Recent   q Quit",
     "devices": "↑↓ Navigate   i Inspect   c Check   a Acknowledge   l Link   k Kind   / Search   q Quit",
-    "audit": "↑↓ Navigate   Enter Open   / Search   r Refresh   q Quit",
+    "audit": "↑↓ Navigate   Enter Open   s Scope   v Raw   e Export   a Anchor   / Search   r Refresh   q Quit",
     "settings": "↑↓ Sections   Enter Run   m Migrate   c Check updates   q Quit",
 }
 
@@ -33,6 +33,7 @@ class TraceApp(App[None]):
     #hint {
         height: 1;
         color: $muted;
+        text-style: dim;
         background: $surface;
         padding: 0 2;
     }
@@ -206,9 +207,11 @@ class TraceApp(App[None]):
             view = event.pane.query_one("*")
         except NoMatches:
             return  # content mounts lazily; each view refreshes in its own on_mount
-        refresh = getattr(view, "refresh_data", None)
-        if callable(refresh):
-            refresh()
+        enter = getattr(view, "activate", None)
+        if not callable(enter):
+            enter = getattr(view, "refresh_data", None)
+        if callable(enter):
+            enter()
         focus = getattr(view, "focus_default", None)
         if callable(focus):
             focus()

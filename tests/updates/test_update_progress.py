@@ -100,6 +100,14 @@ def test_check_card_available(capsys):
     assert "sha256" not in out.lower()
 
 
+def test_shell_check_card_available(capsys):
+    from trace_core.updates.renderers import render_shell_check_card
+
+    render_shell_check_card(_payload(), "stable")
+    out = capsys.readouterr().out
+    assert out == "Update available         0.2.4\n\nRun `trace update install` to upgrade.\n"
+
+
 def test_check_card_deferred_notes(capsys):
     from trace_core.updates.renderers import render_check_blocked, render_check_card
 

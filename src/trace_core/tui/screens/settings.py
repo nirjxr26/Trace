@@ -224,6 +224,17 @@ class SettingsView(Vertical):
                 prev, current, kind, extra = "", "—", "failed", str(exc)[:MAX_ERROR_DETAIL]
             self._prev, self._current, self._kind, self._extra = prev, current, kind, extra
         current = sanitize_terminal(self._current or "—")
+        if self._kind == "available" and self._current:
+            if self._extra:
+                body.append(f"{sanitize_terminal(self._extra)}\n", style=THEME_HEX["amber"])
+            body.append(f"Update available         {current}\n", style=THEME_HEX["blue"])
+            body.append("\nRun `trace update install` to upgrade.\n", style="dim")
+            return
+        if self._kind == "deferred" and self._current:
+            body.append(f"Update deferred          {current}\n", style=THEME_HEX["amber"])
+            if self._extra:
+                body.append(f"\n{sanitize_terminal(self._extra)}\n", style="dim")
+            return
         body.append("Current version\n\n", style="dim")
         body.append(f"{current}\n\n", style="bold")
         if self._kind == "failed":
@@ -231,10 +242,6 @@ class SettingsView(Vertical):
         elif self._kind == "unchecked":
             body.append("○ No recent check result\n", style=THEME_HEX["amber"])
             body.append("\nPress c to check for updates.\n", style="dim")
-        elif self._kind == "available" and self._current:
-            body.append(f"Update available with version: v{current}\n", style=THEME_HEX["blue"])
-            body.append("\nRun this to update:\n\n", style="dim")
-            body.append("  trace update install --yes\n", style="bold")
         else:
             body.append("✓ You're up to date\n", style=THEME_HEX["green"])
         if self._extra:
@@ -363,18 +370,16 @@ class SettingsView(Vertical):
 
     def _describe_update(self, prev: str, payload: dict) -> tuple[str, str, str, str]:  # type: ignore[no-untyped-def]
         current = str(payload.get("target") or "—")
-        parts = []
-        if payload.get("security_update"):
-            parts.append("Security update")
-        if payload.get("minimum_supported_version"):
-            parts.append(f"Minimum supported version: {payload['minimum_supported_version']}")
-        if payload.get("restart_required"):
-            parts.append("Trace will restart to complete this update.")
-        if not payload.get("installable") and payload.get("block_reason"):
-            parts.append(f"Deferred: {payload['block_reason']}")
+        if not payload.get("installable"):
+            parts = []
+            if payload.get("block_reason"):
+                parts.append(f"Deferred: {payload['block_reason']}")
             if payload.get("notes"):
                 parts.append(str(payload["notes"]))
-        return prev, current, "available", " ".join(parts)
+            return prev, current, "deferred", " ".join(parts)
+        if payload.get("security_update"):
+            return prev, current, "available", "Security update"
+        return prev, current, "available", ""
 
     def _check_text(self) -> tuple[str, str, str, str]:
         """Cached state only. Painting the tab must never touch the network; a live

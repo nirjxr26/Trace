@@ -107,6 +107,28 @@ def filter_completions(candidates: list[tuple[str, str]], query: str, limit: int
     return merged[:limit]
 
 
+def complete_paths(prefix: str, limit: int = 8) -> list[tuple[str, str]]:
+    import os
+    from pathlib import Path
+
+    raw = Path(prefix or ".")
+    parent = raw.parent if str(raw.parent) else Path(".")
+    stem = raw.name
+    try:
+        entries = sorted(parent.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
+    except OSError:
+        return []
+    out: list[tuple[str, str]] = []
+    for entry in entries:
+        if stem and not entry.name.lower().startswith(stem.lower()):
+            continue
+        value = str(entry)
+        out.append((value + (os.sep if entry.is_dir() else ""), "dir" if entry.is_dir() else "file"))
+        if len(out) >= limit:
+            break
+    return out
+
+
 def rank_cases(cases: list[Any], active_number: str | None = None) -> list[Any]:
     """Active first, then recent (updated_at desc), then OPEN before others."""
     from trace_core.core.canonical import parse_trailing_seq

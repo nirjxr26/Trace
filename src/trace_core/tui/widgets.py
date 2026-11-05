@@ -221,7 +221,18 @@ class TablePane[T](Vertical):
         active = active_tab(self)
         parent_id = getattr(self.parent, "id", None)
         if parent_id is None or active is None or parent_id == active:
-            self.refresh_data()
+            self.activate()
+
+    def on_unmount(self) -> None:
+        if self._search_timer is not None:
+            self._search_timer.stop()
+            self._search_timer = None
+
+    def activate(self) -> None:
+        self.refresh_data()
+
+    def search_changed(self) -> None:
+        self.refresh_data()
 
     def focus_default(self) -> None:
         self._table().focus()
@@ -322,7 +333,7 @@ class TablePane[T](Vertical):
         if event.input.id == self.SEARCH_ID:
             if self._search_timer is not None:
                 self._search_timer.stop()
-            self._search_timer = self.set_timer(0.25, self.refresh_data)
+            self._search_timer = self.set_timer(0.25, self.search_changed)
 
     def action_search(self) -> None:
         self.query_one(f"#{self.SEARCH_ID}", Input).focus()

@@ -33,13 +33,13 @@ class UpdateShellCommandHandler(BaseShellHandler):
     def _shell_check(self, args: list[str]) -> bool:
         from trace_core.core.cli.error_handler import capture_cli_errors
         from trace_core.updates.checker import cached_check, resolve_channel, resolve_manifest_target
-        from trace_core.updates.renderers import render_check_card
+        from trace_core.updates.renderers import render_shell_check_card
 
         _ = args
         with capture_cli_errors("Update Check", exit_on_error=False):
             channel = resolve_channel(None)
             target = resolve_manifest_target(None)
-            render_check_card(cached_check(target, channel), channel)
+            render_shell_check_card(cached_check(target, channel), channel)
         return True
 
     def get_completions(self, text: str, ctx: object) -> list[str]:

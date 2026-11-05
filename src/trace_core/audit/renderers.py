@@ -1,7 +1,7 @@
 """Audit renderers."""
 
 from collections.abc import Sequence
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 from rich.text import Text
 
@@ -21,6 +21,12 @@ from trace_core.core.ui.renderers import (
 from trace_core.core.ui.theme import THEME_TOKENS
 
 NO_CASE_LABEL: Final[str] = "(no case)"
+
+
+class DeviceAuditInfo(NamedTuple):
+    name: str
+    serial: str | None = None
+    case_number: str | None = None
 
 
 def subject_case_label(number: str | None) -> str:
@@ -92,9 +98,9 @@ def render_audit_table(events: Sequence[AuditEventDto | AuditEventSummaryDto]) -
             )
 
 
-def render_event(event: AuditEventDto, output: str = "table") -> None:
+def render_event(event: AuditEventDto, output: str = "table", device: DeviceAuditInfo | None = None) -> None:
     """Render a single event as a 5W1H dossier or raw JSON. Mirrors render_case."""
-    render_output(output, event, lambda: render_audit_detail(event))
+    render_output(output, event, lambda: render_audit_detail(event, device))
 
 
 def render_events(events: list[AuditEventDto], output: str = "table") -> None:
@@ -236,7 +242,7 @@ def _timeline_summary(e: AuditEventDto, details: dict) -> str:
     return ""
 
 
-def render_audit_timeline(events: list[AuditEventDto]) -> None:
+def render_audit_timeline(events: list[AuditEventDto], devices: dict[int, DeviceAuditInfo] | None = None) -> None:
     """CASE ACTIVITY block: one entry per recorded action, newest first.
 
     Reached only through `render_case_timeline_view`, which requires a `--case` filter and
@@ -258,7 +264,6 @@ def render_audit_timeline(events: list[AuditEventDto]) -> None:
         return
     _, term_w = breakpoint_width()
     render_section_title("CASE ACTIVITY")
-    console.print("")
 
     # `format_history_clock` is always `hh:mm AM/PM` (9 chars), so the activity column is a
     # fixed width and the continuation lines can be aligned under the label by arithmetic
@@ -276,6 +281,9 @@ def render_audit_timeline(events: list[AuditEventDto]) -> None:
         )
         console.print(first)
         console.print(Text(f"{body_indent}By {sanitize_terminal(e.actor)}", style=TOK["muted"]))
+        info = (devices or {}).get(e.seq)
+        if info is not None:
+            console.print(Text(f"{body_indent}Device  {sanitize_terminal(info.name)}", style=TOK["muted"]))
         summary = _activity_summary(e, details, term_w)
         if summary:
             console.print(Text(f"{body_indent}{summary}"))
@@ -336,7 +344,7 @@ def format_change_value(value: Any) -> str:
     return str(value)
 
 
-def render_audit_detail(e: AuditEventDto) -> None:
+def render_audit_detail(e: AuditEventDto, device: DeviceAuditInfo | None = None) -> None:
     from trace_core.audit.events import parse_details
     from trace_core.core.ui.renderers import (
         breakpoint_width,
@@ -357,16 +365,19 @@ def render_audit_detail(e: AuditEventDto) -> None:
     details = parse_details(e.payload_json)
     utc_display = format_utc_zulu(e.ts)
     bp, _ = breakpoint_width()
+    case_number = e.subject_case_number or (device.case_number if device else None)
 
     render_detail_header(
         "AUDIT",
         f"#{e.seq}",
         action_title(e.action.value),
-        f"{sanitize_terminal(subject_case_label(e.subject_case_number))} · {format_india_datetime(e.ts)}",
+        f"{sanitize_terminal(subject_case_label(case_number))} · {format_india_datetime(e.ts)}",
     )
     console.print(
         create_key_value_grid(
-            _detail_fields(e, details, utc_display), width=kv_width(bp, min_width=16), padding=table_padding(bp)
+            _detail_fields(e, details, utc_display, device),
+            width=kv_width(bp, min_width=16),
+            padding=table_padding(bp),
         )
     )
 
@@ -420,21 +431,25 @@ def render_audit_detail(e: AuditEventDto) -> None:
     )
     seal = "✓ MATCHED" if intact else "✗ MISMATCH"
     render_section_title(f"SELF-CHECK · {seal}", style=TOK["accent"] if intact else TOK["danger"])
-    console.print("")
     if not intact:
         console.print("[dim]Row failed its self-check — run `audit verify` for the full chain.[/dim]")
     render_raw_tip(f"audit show --seq {e.seq} --output json for the raw payload")
 
 
-def _detail_fields(e: AuditEventDto, details: dict | None, utc_display: str) -> list[tuple[str, Any]]:
+def _detail_fields(
+    e: AuditEventDto, details: dict | None, utc_display: str, device: DeviceAuditInfo | None = None
+) -> list[tuple[str, Any]]:
     if details is None:
-        return [
+        rows_unreadable: list[tuple[str, Any]] = [
             ("Actor", sanitize_terminal(e.actor)),
             ("Timestamp", f"{format_india_datetime(e.ts)} ({utc_display})"),
             ("", ""),
             ("Event", e.action.value),
-            ("Payload", "unreadable — details cannot be shown"),
         ]
+        if device is not None:
+            rows_unreadable.extend(_device_rows(device))
+        rows_unreadable.append(("Payload", "unreadable — details cannot be shown"))
+        return rows_unreadable
     host = details.get("host") or "-"
     reason = (details.get("reason") or "").strip()
     rows: list[tuple[str, Any]] = [
@@ -443,8 +458,17 @@ def _detail_fields(e: AuditEventDto, details: dict | None, utc_display: str) -> 
         ("", ""),
         ("Event", e.action.value),
     ]
+    if device is not None:
+        rows.extend(_device_rows(device))
     if reason:
         rows.append(("Reason", sanitize_terminal(reason)))
+    return rows
+
+
+def _device_rows(device: DeviceAuditInfo) -> list[tuple[str, Any]]:
+    rows: list[tuple[str, Any]] = [("Device", sanitize_terminal(device.name))]
+    if device.serial:
+        rows.append(("Serial", sanitize_terminal(device.serial)))
     return rows
 
 
