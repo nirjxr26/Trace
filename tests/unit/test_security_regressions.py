@@ -730,14 +730,15 @@ def test_sealed_bundle_wrong_passphrase(tmp_path) -> None:  # type: ignore[no-un
 
 
 def test_encrypted_export_roundtrip(tmp_path, service: CaseService, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
-    from trace_core.audit.helpers import do_decrypt, do_export_encrypted
+    from trace_core.audit.helpers import do_decrypt, do_export
     from trace_core.audit.service import AuditService
     from trace_core.cases.dto import CaseCreateDto
 
     monkeypatch.setenv("TRACE_EXPORT_PASSPHRASE", "s3cret")
     service.create_case(CaseCreateDto(title="T", lead_examiner="Ex"))
-    sealed_path = tmp_path / "bundle.jsonl.enc"
-    do_export_encrypted(AuditService(service.session_manager), str(sealed_path), "s3cret")
+    sealed = do_export(AuditService(service.session_manager), str(tmp_path / "bundle.jsonl"), "s3cret")
+    sealed_path = sealed.path
+    assert sealed_path.name.endswith(".sealed")
     assert b'"title"' not in sealed_path.read_bytes()
     plain_path = tmp_path / "bundle.jsonl"
     do_decrypt(str(sealed_path), str(plain_path), "s3cret")

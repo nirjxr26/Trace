@@ -173,4 +173,7 @@ class TraceShellCompleter(Completer):
             yield from self._root_completions(text, word)
             return
 
+        if self.shell.service is None:
+            self.shell._ensure_service()
+
         yield from self._delegated_completions(text, word)

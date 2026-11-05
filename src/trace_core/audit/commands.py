@@ -99,7 +99,7 @@ def audit_verify(
 
 @audit_app.command("export")
 def audit_export(
-    out: str = typer.Option(..., "--out", help="Output JSONL file path"),
+    out: str = typer.Option("", "--out", help="Output path (default: audit-<UTC timestamp>.jsonl)"),
     fmt: str = typer.Option("jsonl", "--format", help="jsonl only in V1"),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite an existing bundle file"),
     encrypt: bool = typer.Option(False, "--encrypt", help="Seal with a passphrase (env/prompt, never argv)"),
@@ -109,33 +109,24 @@ def audit_export(
             render_error_card("Invalid Format", f"Unknown format '{fmt}'.", "Expected: jsonl.")
             raise typer.Exit(EXIT_ERROR)
         svc = _get_service()
-        from trace_core.audit.helpers import (
-            check_export_dest,
-            do_export_encrypted,
-            prompt_passphrase,
-            report_written,
-        )
+        from trace_core.audit.helpers import do_export, next_step_for, prompt_passphrase, report_bundle
 
-        check_export_dest(out, force)
-        if encrypt:
-            path = do_export_encrypted(svc, out, prompt_passphrase(confirm=True))
-        else:
-            path = svc.export(out)
-        report_written(path, "Audit bundle exported.")
+        passphrase = prompt_passphrase(confirm=True) if encrypt else None
+        receipt = do_export(svc, out, passphrase, force=force)
+        report_bundle(receipt, "Audit bundle sealed." if encrypt else "Audit bundle exported.", next_step_for(receipt))
 
 
 @audit_app.command("decrypt")
 def audit_decrypt(
     inp: str = typer.Option(..., "--in", help="Sealed bundle file path"),
-    out: str = typer.Option(..., "--out", help="Output JSONL file path"),
+    out: str = typer.Option("", "--out", help="Output path (default: sealed name without .sealed)"),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite an existing file"),
 ) -> None:
     with capture_cli_errors("Audit Decrypt"):
-        from trace_core.audit.helpers import check_export_dest, do_decrypt, prompt_passphrase, report_written
+        from trace_core.audit.helpers import do_decrypt, prompt_passphrase, report_bundle
 
-        check_export_dest(out, force)
-        path = do_decrypt(inp, out, prompt_passphrase())
-        report_written(path, "Bundle decrypted.")
+        receipt = do_decrypt(inp, out, prompt_passphrase(), force=force)
+        report_bundle(receipt, "Bundle decrypted.")
 
 
 @audit_app.command("keys-init")

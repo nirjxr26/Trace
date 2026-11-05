@@ -27,6 +27,13 @@ AUDIT_ACTIONS = [
     ("decrypt", "Open a sealed bundle"),
 ]
 
+
+def _path_completions(prefix: str) -> list[tuple[str, str]]:
+    from trace_core.core.cli.completion import complete_paths
+
+    return complete_paths(prefix)
+
+
 _AUDIT_VALUE_FLAGS = (
     "--case",
     "--action",
@@ -60,7 +67,7 @@ class AuditShellCommandHandler(BaseShellHandler):
         return [
             ("audit show [--case NUM] [--action X]", "", "List audit events"),
             ("audit verify", "", "Verify chain integrity"),
-            ("audit export --out FILE", "", "Export JSONL bundle"),
+            ("audit export --out FILE [--encrypt]", "", "Export JSONL bundle"),
             ("audit decrypt --in FILE --out FILE", "", "Open a sealed bundle"),
         ]
 
@@ -142,10 +149,18 @@ class AuditShellCommandHandler(BaseShellHandler):
     def _complete_export(self, parts: list[str], text: str) -> list[Any]:
         if parts[-1] in ("--format",) and text.endswith(" "):
             return [("jsonl", "JSONL bundle")]
+        if parts[-1] == "--out" and text.endswith(" "):
+            return _path_completions("")
+        if not text.endswith(" ") and not parts[-1].startswith("-") and "--out" in parts:
+            return _path_completions(parts[-1])
         curr = parts[-1] if not text.endswith(" ") else ""
         return [(f, d) for f, d in AUDIT_EXPORT_FLAGS if f.startswith(curr)]
 
     def _complete_decrypt(self, parts: list[str], text: str) -> list[Any]:
+        if parts[-1] in ("--in", "--out") and text.endswith(" "):
+            return _path_completions("")
+        if not text.endswith(" ") and not parts[-1].startswith("-") and ("--in" in parts or "--out" in parts):
+            return _path_completions(parts[-1])
         curr = parts[-1] if not text.endswith(" ") else ""
         return [(f, d) for f, d in AUDIT_DECRYPT_FLAGS if f.startswith(curr)]
 
@@ -244,37 +259,45 @@ class AuditShellCommandHandler(BaseShellHandler):
             do_verify(svc, output, anchor)
 
     def _export(self, svc: AuditService, args: list[str]) -> None:
+        sealed = has_flag(args, "--encrypt")
         out = extract_flag_value(args, "--out")
-        if not out:
-            render_error_card("Missing Output", "Pass --out FILE for the export bundle.")
-            return
         with capture_cli_errors("Audit Export", exit_on_error=False):
-            from trace_core.audit.helpers import (
-                check_export_dest,
-                do_export_encrypted,
-                prompt_passphrase,
-                report_written,
-            )
+            from trace_core.audit.helpers import do_export, next_step_for, prompt_passphrase, report_bundle
 
-            check_export_dest(out, has_flag(args, "--force", "-f"))
-            if has_flag(args, "--encrypt"):
-                path = do_export_encrypted(svc, out, prompt_passphrase())
-            else:
-                path = svc.export(out)
-            report_written(path, "Audit bundle exported.")
+            if not out:
+                from trace_core.core.cli.args import interactive_terminal
+
+                if not interactive_terminal():
+                    render_error_card("Missing Output", "Pass --out FILE for the export bundle.")
+                    return
+                import typer
+
+                from trace_core.audit.helpers import default_export_path
+
+                out = typer.prompt("Export to", default=str(default_export_path(sealed)))
+            passphrase = prompt_passphrase(confirm=True) if sealed else None
+            receipt = do_export(svc, out, passphrase, force=has_flag(args, "--force", "-f"))
+            report_bundle(
+                receipt,
+                "Audit bundle sealed." if sealed else "Audit bundle exported.",
+                next_step_for(receipt),
+            )
 
     def _decrypt(self, svc: AuditService, args: list[str]) -> None:
         # svc unused today; kept in the handler signature so every audit action routes
         # through the same (service, args) dispatch shape.
         _ = svc
         inp = extract_flag_value(args, "--in")
-        out = extract_flag_value(args, "--out")
-        if not inp or not out:
-            render_error_card("Missing Input", "Pass --in FILE --out FILE to open a sealed bundle.")
+        if not inp:
+            render_error_card("Missing Input", "Pass --in FILE to open a sealed bundle.")
             return
         with capture_cli_errors("Audit Decrypt", exit_on_error=False):
-            from trace_core.audit.helpers import check_export_dest, do_decrypt, prompt_passphrase, report_written
+            from trace_core.audit.helpers import do_decrypt, prompt_passphrase, report_bundle
 
-            check_export_dest(out, has_flag(args, "--force", "-f"))
-            path = do_decrypt(inp, out, prompt_passphrase())
-            report_written(path, "Bundle decrypted.")
+            receipt = do_decrypt(
+                inp,
+                extract_flag_value(args, "--out") or "",
+                prompt_passphrase(),
+                force=has_flag(args, "--force", "-f"),
+            )
+            report_bundle(receipt, "Bundle decrypted.")

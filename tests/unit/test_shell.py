@@ -5,6 +5,7 @@ import pytest
 from trace_core.cases.dto import CaseCreateDto
 from trace_core.cases.service import CaseService
 from trace_core.cli.shell import InteractiveShell
+from trace_core.core.database.session import DatabaseSessionManager
 
 pytestmark = pytest.mark.unit
 
@@ -116,6 +117,28 @@ def test_shell_autocompletion_and_suggestions(service: CaseService) -> None:
     sug_case = suggester.get_suggestion(None, Document("case "))
     assert sug_case is not None
     assert sug_case.text == "list"
+
+
+def test_shell_completion_bootstraps_service_before_first_command(
+    service: CaseService, session_manager: DatabaseSessionManager
+) -> None:
+    from prompt_toolkit.document import Document
+
+    service.create_case(
+        CaseCreateDto(
+            number="2026-SH-0003",
+            title="Completion Before First Command",
+            lead_examiner="Investigator Suggest",
+        )
+    )
+
+    shell = InteractiveShell(session_manager=session_manager)
+    assert shell.service is None
+
+    doc_show = Document("case show ")
+    completions = [c.text for c in shell.completer.get_completions(doc_show, None)]
+
+    assert "2026-SH-0003" in completions
 
 
 def test_shell_rejects_invalid_status_like_typer(service: CaseService, capsys: pytest.CaptureFixture[str]) -> None:

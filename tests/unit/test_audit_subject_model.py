@@ -121,13 +121,13 @@ def test_export_emits_null_for_a_non_case_subject(session_manager: DatabaseSessi
 
 
 def test_export_then_decrypt_round_trips_a_non_case_subject(session_manager: DatabaseSessionManager, tmp_path) -> None:
-    from trace_core.audit.helpers import do_decrypt, do_export_encrypted
+    from trace_core.audit.helpers import do_decrypt, do_export
 
     _append_device_event(session_manager)
-    sealed = do_export_encrypted(AuditService(session_manager), str(tmp_path / "sealed.json"), "pw-test")
-    plain = do_decrypt(str(sealed), str(tmp_path / "plain.json"), "pw-test")
+    sealed = do_export(AuditService(session_manager), str(tmp_path / "sealed.json"), "pw-test")
+    plain = do_decrypt(str(sealed.path), str(tmp_path / "plain.json"), "pw-test")
 
-    rows = [json.loads(line) for line in plain.read_text(encoding="utf-8").splitlines() if line]
+    rows = [json.loads(line) for line in plain.path.read_text(encoding="utf-8").splitlines() if line]
     data = [r for r in rows if "seq" in r]
     assert len(data) == 1
     assert "subject_case_number" in data[0]

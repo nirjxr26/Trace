@@ -129,6 +129,15 @@ class CaseForm(_BaseModal):
         self.dismiss(None)
 
 
+def _pretty_json(body: str) -> str:
+    import json
+
+    try:
+        return json.dumps(json.loads(body), indent=2, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return body
+
+
 class RawModal(_BaseModal):
     """Scrollable raw JSON drawer. Esc backs out."""
 
@@ -150,7 +159,7 @@ class RawModal(_BaseModal):
         with Vertical(id="raw-box"):
             yield Label(self._title)
             with VerticalScroll(id="raw-body"):
-                yield Static(self._body)
+                yield Static(_pretty_json(self._body))
 
 
 class TextInputModal(_BaseModal):
@@ -161,20 +170,37 @@ class TextInputModal(_BaseModal):
     #text-box { width: 64; height: auto; border: round $panel 50%; background: $surface; padding: 1 2; }
     #text-box Input { border: round $panel; height: 3; background: transparent; }
     #text-box Input:focus { background: transparent; background-tint: transparent; }
+    #text-box Input.second { margin-top: 1; }
     #text-box Horizontal { align: center middle; height: 3; margin-top: 1; }
     #text-box Button { border: round $panel; min-width: 16; height: 3; }
     """
 
-    def __init__(self, title: str, placeholder: str = "", required: bool = False) -> None:
+    def __init__(
+        self,
+        title: str,
+        placeholder: str = "",
+        required: bool = False,
+        password: bool = False,
+        confirm: bool = False,
+    ) -> None:
         super().__init__()
         self._title = title if not required else f"{title} *"
         self._placeholder = placeholder
         self._required = required
+        self._password = password
+        self._confirm = confirm
 
     def compose(self) -> ComposeResult:
         with Vertical(id="text-box"):
             yield Label(self._title)
-            yield Input(placeholder=self._placeholder, id="text-input")
+            yield Input(placeholder=self._placeholder, id="text-input", password=self._password)
+            if self._confirm:
+                yield Input(
+                    placeholder="Repeat passphrase",
+                    id="text-confirm",
+                    password=True,
+                    classes="second",
+                )
             with Horizontal():
                 yield Button("OK", variant="primary", id="ok")
                 yield Button("Cancel", id="cancel")
@@ -182,18 +208,74 @@ class TextInputModal(_BaseModal):
     def on_mount(self) -> None:
         self.query_one("#text-input", Input).focus()
 
+    @on(Input.Submitted, "#text-input")
+    def _advance(self) -> None:
+        if self._confirm:
+            self.query_one("#text-confirm", Input).focus()
+            return
+        self._ok()
+
     @on(Button.Pressed, "#ok")
-    @on(Input.Submitted)
+    @on(Input.Submitted, "#text-confirm")
     def _ok(self) -> None:
         value = self.query_one("#text-input", Input).value.strip()
         if self._required and not value:
             self.app.notify("A value is required.", severity="warning")
             return
+        if self._confirm:
+            repeated = self.query_one("#text-confirm", Input).value
+            if value != repeated:
+                self.app.notify("Passphrases do not match.", severity="warning")
+                return
         self.dismiss(value or None)
 
     @on(Button.Pressed, "#cancel")
     def _cancel(self) -> None:
         self.dismiss(None)
+
+
+class ExportHubModal(_BaseModal):
+    CSS = """
+    ExportHubModal { align: center middle; }
+    #export-box { width: 72; height: auto; border: round $panel 50%; background: $surface; padding: 1 2; }
+    #export-title { color: $accent; text-style: bold; }
+    #export-scope { color: $text-muted; margin-bottom: 1; }
+    #export-list { height: 7; background: transparent; }
+    #export-list > ListItem { background: transparent; padding: 0 1; }
+    #export-list > ListItem.-highlight { background: $surface-active; }
+    """
+
+    CHOICES = (
+        ("plain", "Bundle (JSONL)", "plain, readable"),
+        ("sealed", "Sealed bundle", "passphrase protected"),
+        ("open", "Open a sealed bundle", "decrypt to JSONL"),
+    )
+
+    def __init__(self, scope: str = "") -> None:
+        super().__init__()
+        self._scope = scope
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="export-box"):
+            yield Label("EXPORT", id="export-title")
+            if self._scope:
+                yield Label(self._scope, id="export-scope")
+            yield ListView(id="export-list")
+
+    def on_mount(self) -> None:
+        from textual.widgets import ListItem
+
+        listing = self.query_one("#export-list", ListView)
+        for _, label, note in self.CHOICES:
+            listing.append(ListItem(Label(f"{label}   {note}")))
+        listing.index = 0
+        listing.focus()
+
+    @on(ListView.Selected, "#export-list")
+    def _picked(self, event: ListView.Selected) -> None:
+        index = event.list_view.index
+        if index is not None and 0 <= index < len(self.CHOICES):
+            self.dismiss(self.CHOICES[index][0])
 
 
 class TypedConfirmModal(_BaseModal):
