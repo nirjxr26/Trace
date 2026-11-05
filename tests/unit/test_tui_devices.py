@@ -52,11 +52,20 @@ async def _wait_detail(app: TraceApp, pilot, needle: str, tries: int = 40) -> st
     return _detail(app)
 
 
+async def _settle(app: TraceApp, pilot, tries: int = 100) -> None:  # type: ignore[no-untyped-def]
+    for _ in range(tries):
+        await pilot.pause()
+        if not app.workers:
+            return
+        await app.workers.wait_for_complete()
+    raise AssertionError("background refresh did not settle")
+
+
 async def test_the_devices_tab_mounts(session_manager, device_file_env: Path) -> None:
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         assert _table(app).row_count == 2
         assert any("disk-a.dd" in cell for row in _rows(app) for cell in row)
 
@@ -80,7 +89,7 @@ async def test_search_filters_the_device_table(session_manager, device_file_env:
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         app.query_one("#device-search", Input).value = "disk-b"
         await pilot.pause(0.8)
         assert _table(app).row_count == 1
@@ -92,7 +101,7 @@ async def test_kind_cycles_and_filters(session_manager, device_file_env: Path) -
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         await pilot.press("k")
         await pilot.pause()
         assert "kind: file" in _summary(app)
@@ -106,7 +115,7 @@ async def test_check_records_a_gate_and_shows_it(session_manager, device_file_en
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         await pilot.press("c")
         detail = await _wait_detail(app, pilot, "READ_ONLY")
         assert "WRITE PROTECTION" in detail
@@ -119,7 +128,7 @@ async def test_check_writes_the_gate_to_the_ledger(session_manager, device_file_
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         await pilot.press("c")
         await _wait_detail(app, pilot, "Kind")
     with session_manager.session() as session:
@@ -131,7 +140,7 @@ async def test_inspect_records_the_device_identity(session_manager, device_file_
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         await pilot.press("i")
         detail = await _wait_detail(app, pilot, "IDENTITY")
         assert "Hardware" in detail
@@ -264,10 +273,10 @@ async def test_the_detail_pane_reads_plainly_and_heads_sections_in_accent(
     async with app.run_test() as pilot:
         await pilot.pause()
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         view = app.query_one(DevicesView)
         view.refresh_data()
-        await pilot.pause()
+        await _settle(app, pilot)
         if not view._items:
             pytest.skip("no device visible to this adapter")
 
@@ -313,7 +322,7 @@ async def test_the_identity_section_head_is_drawn_in_the_accent(session_manager,
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         await pilot.press("i")
         detail = await _wait_detail(app, pilot, "IDENTITY")
 
@@ -350,7 +359,7 @@ async def test_a_synthetic_device_needs_no_opt_in(session_manager, device_file_e
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         await pilot.press("c")
         await pilot.pause(0.8)
     assert granted == [False]
@@ -362,7 +371,7 @@ async def test_real_hardware_prompts_before_any_access(session_manager, device_f
 
     monkeypatch.setenv("TRACE_DEVICE_ADAPTER", "win32")
     monkeypatch.setattr(
-        "trace_core.devices.helpers.do_list",
+        "trace_core.devices.helpers.do_enumerate",
         lambda *_a, **_k: [
             DeviceInfoDto(
                 node=r"\\.\PhysicalDrive0",
@@ -382,7 +391,7 @@ async def test_real_hardware_prompts_before_any_access(session_manager, device_f
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         await pilot.press("c")
         await pilot.pause(0.6)
     assert granted == [], "the service was reached without answering the consent prompt"
@@ -398,7 +407,7 @@ async def test_no_adapter_configured_renders_empty_without_crashing(
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         assert _table(app).row_count == 0
 
 
@@ -415,7 +424,7 @@ async def test_a_hostile_model_string_reaches_the_terminal_sanitised(
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         assert _table(app).row_count == 1
         rendered = _detail(app) + " ".join(cell for row in _rows(app) for cell in row)
         assert "\x1b[" not in rendered, "an escape sequence reached the terminal"
@@ -429,32 +438,34 @@ async def test_a_plugged_in_drive_appears_without_any_keypress(session_manager, 
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         (device_file_env / "disk-a.dd").unlink()
         synthetic.write_disk(device_file_env / "disk-c.dd", seed=b"hotplug", size=512)
         view = app.screen.query_one(DevicesView)
         view._poll_devices()
-        await pilot.pause()
+        await _settle(app, pilot)
         names = [cell for row in _rows(app) for cell in row]
         assert any("disk-c.dd" in name for name in names)
         assert not any("disk-a.dd" in name for name in names)
 
 
 async def test_the_quiet_poll_never_toasts_on_failure(session_manager, device_file_env: Path, monkeypatch) -> None:
+    from trace_core.devices import synthetic
     from trace_core.tui.screens.devices import DevicesView
 
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         assert _table(app).row_count == 2
         monkeypatch.setattr(
-            "trace_core.devices.helpers.do_list",
+            "trace_core.devices.helpers.do_enumerate",
             lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("adapter gone")),
         )
         before = len(app._notifications)
+        synthetic.write_disk(device_file_env / "disk-plugged.dd", seed=b"plug", size=256)
         app.screen.query_one(DevicesView)._poll_devices()
-        await pilot.pause()
+        await _settle(app, pilot)
         assert len(app._notifications) == before
         assert _table(app).row_count == 2
 
@@ -465,22 +476,70 @@ async def test_the_poll_skips_enumeration_while_nothing_changed(
     from trace_core.tui.screens.devices import DevicesView
 
     calls: list[int] = []
-    real = __import__("trace_core.devices.helpers", fromlist=["do_list"]).do_list
+    real = __import__("trace_core.devices.helpers", fromlist=["do_enumerate"]).do_enumerate
 
     def _counting(*args, **kwargs):
         calls.append(1)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr("trace_core.devices.helpers.do_list", _counting)
+    monkeypatch.setattr("trace_core.devices.helpers.do_enumerate", _counting)
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         mounted_calls = len(calls)
         assert mounted_calls >= 1
         app.screen.query_one(DevicesView)._poll_devices()
         await pilot.pause()
         assert len(calls) == mounted_calls, "an unchanged token must not re-enumerate"
+
+
+async def test_returning_to_the_tab_does_not_re_enumerate_while_the_token_holds(
+    session_manager, device_file_env: Path, monkeypatch
+) -> None:
+    from trace_core.devices import helpers
+
+    calls: list[int] = []
+    real = helpers.do_enumerate
+
+    def _counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(helpers, "do_enumerate", _counting)
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(120, 34)) as pilot:
+        await pilot.press("2")
+        await _settle(app, pilot)
+        loaded = len(calls)
+        assert loaded >= 1
+        await pilot.press("1")
+        await _settle(app, pilot)
+        await pilot.press("2")
+        await _settle(app, pilot)
+        assert len(calls) == loaded, "a repeat visit re-enumerated without a token change"
+        assert _table(app).row_count == 2, "cached rows vanished on the repeat visit"
+
+
+async def test_enumeration_runs_off_the_ui_thread(session_manager, device_file_env: Path, monkeypatch) -> None:
+    import threading
+
+    from trace_core.devices import helpers
+
+    threads: list[bool] = []
+    real = helpers.do_enumerate
+
+    def _record(*args, **kwargs):
+        threads.append(threading.current_thread() is threading.main_thread())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(helpers, "do_enumerate", _record)
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(120, 34)) as pilot:
+        await pilot.press("2")
+        await _settle(app, pilot)
+    assert threads, "enumeration never ran"
+    assert not any(threads), f"enumeration ran on the UI thread: {threads}"
 
 
 async def test_the_poll_enumerates_as_soon_as_the_token_moves(
@@ -492,10 +551,10 @@ async def test_the_poll_enumerates_as_soon_as_the_token_moves(
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         synthetic.write_disk(device_file_env / "disk-hot.dd", seed=b"hot", size=256)
         app.screen.query_one(DevicesView)._poll_devices()
-        await pilot.pause()
+        await _settle(app, pilot)
         assert any("disk-hot.dd" in cell for row in _rows(app) for cell in row)
 
 
@@ -509,7 +568,7 @@ async def test_denial_reaches_the_toast_unchanged(session_manager, device_file_e
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         before = len(app._notifications)
         await pilot.press("c")
         await pilot.pause()
@@ -532,7 +591,7 @@ async def test_the_device_table_has_no_horizontal_scroller(session_manager, devi
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         await pilot.pause()
         table = app.query_one("#device-table", DataTable)
         assert table.scrollbar_size_horizontal == 0
@@ -603,7 +662,7 @@ async def test_device_history_names_the_recorder(session_manager, device_file_en
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         await pilot.pause()
         app.query_one(DevicesView).run_command("history")
         await pilot.pause()
@@ -699,7 +758,7 @@ async def test_device_poll_pauses_on_hidden_tab(session_manager, monkeypatch) ->
         await asyncio.sleep(1.3)
         assert calls == 0, f"poll ticked while hidden: {calls} token reads"
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         calls = 0
         await asyncio.sleep(1.3)
         assert calls > 0, "poll never resumed on the visible tab"
@@ -723,7 +782,7 @@ async def test_acknowledge_accepts_an_unverified_source_after_the_typed_token(
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         await pilot.press("a")
         await pilot.pause()
         await pilot.press(*"UNVERIFIED")
@@ -752,7 +811,7 @@ async def test_acknowledge_refuses_any_other_token(
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 34)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
+        await _settle(app, pilot)
         view = app.query_one(DevicesView)
         await pilot.press("a")
         await pilot.pause()

@@ -52,6 +52,15 @@ def _text(widget) -> str:  # type: ignore[no-untyped-def]
     return renderable.plain if isinstance(renderable, Text) else str(renderable)
 
 
+async def _settle(app: TraceApp, pilot, tries: int = 100) -> None:  # type: ignore[no-untyped-def]
+    for _ in range(tries):
+        await pilot.pause()
+        if not app.workers:
+            return
+        await app.workers.wait_for_complete()
+    raise AssertionError("background refresh did not settle")
+
+
 async def test_tui_pilot_flow(seeded_manager: DatabaseSessionManager) -> None:
     """Mount → cases listed → cursor moves dossier → audit → settings sections."""
     from textual.widgets import DataTable, Static, TabbedContent
@@ -191,8 +200,7 @@ async def test_the_device_summary_and_header_carry_no_separating_rule(session_ma
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         await pilot.press("2")
-        await pilot.pause()
-        await pilot.pause()
+        await _settle(app, pilot)
         left = app.screen.query_one("#device-left")
         kinds = [type(w).__name__ for w in left.children]
 
@@ -259,8 +267,7 @@ async def test_every_left_panel_label_shares_one_column(session_manager, device_
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 44)) as pilot:
         await pilot.press("2")
-        await pilot.pause()
-        await pilot.pause()
+        await _settle(app, pilot)
         strips = app.screen._compositor.render_strips()
         left = app.screen.query_one("#device-left")
         rows = range(left.region.y, left.region.y + left.region.height)
@@ -465,7 +472,6 @@ async def test_background_tabs_skip_mount_fetch(session_manager, monkeypatch) ->
     counts: dict[str, int] = {}
     for mod, cls_name in (
         (cases_mod, "CasesView"),
-        (devices_mod, "DevicesView"),
         (audit_mod, "AuditView"),
     ):
         cls = getattr(mod, cls_name)
@@ -476,6 +482,13 @@ async def test_background_tabs_skip_mount_fetch(session_manager, monkeypatch) ->
             return _real(self)
 
         monkeypatch.setattr(cls, "refresh_data", counting)
+    real_scan = devices_mod.DevicesView._start_scan
+
+    def counting_scan(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        counts["DevicesView"] = counts.get("DevicesView", 0) + 1
+        return real_scan(self, *args, **kwargs)
+
+    monkeypatch.setattr(devices_mod.DevicesView, "_start_scan", counting_scan)
     real_settings = SettingsView.refresh_data
 
     def counting_settings(self):  # type: ignore[no-untyped-def]
@@ -496,6 +509,7 @@ async def test_background_tabs_skip_mount_fetch(session_manager, monkeypatch) ->
             await pilot.press(key)
             await pilot.pause()
             await pilot.pause()
+        await _settle(app, pilot)
         assert counts.get("DevicesView", 0) >= 1, "devices tab blank after visit"
         assert counts.get("AuditView", 0) >= 1, "audit tab blank after visit"
         assert counts.get("SettingsView", 0) >= 1, "settings tab blank after visit"
@@ -671,6 +685,40 @@ async def test_the_anchor_command_verifies_a_file_and_reports_the_verdict(
     assert notices, "the anchor check must report a verdict"
     assert "tail matches" in notices[0][0], notices
     assert notices[0][1].get("severity") != "error", notices
+
+
+async def test_audit_export_opens_a_three_way_chooser(session_manager: DatabaseSessionManager) -> None:
+    from textual.widgets import ListView
+
+    from trace_core.tui.screens.audit import AuditView
+
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(120, 32)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        app.query_one(AuditView).action_export()
+        await pilot.pause()
+        assert len(app.screen.query_one("#export-list", ListView).children) == 3
+
+
+def test_raw_modal_pretty_prints_json_and_keeps_other_text() -> None:
+    from trace_core.tui.forms import _pretty_json
+
+    assert _pretty_json('{"a":1,"b":{"c":2}}') == '{\n  "a": 1,\n  "b": {\n    "c": 2\n  }\n}'
+    assert _pretty_json("not json") == "not json"
+
+
+def test_audit_hint_advertises_export_and_only_bound_keys() -> None:
+    from textual.binding import Binding
+
+    from trace_core.tui.app import TAB_HINTS
+    from trace_core.tui.screens.audit import AuditView
+
+    hint = TAB_HINTS["audit"]
+    assert "e Export" in hint
+    bound = {str(b.key) for b in AuditView.BINDINGS if isinstance(b, Binding)} | {"q", "r", "enter"}
+    advertised = {token for token in hint.split() if len(token) == 1 and token.isalpha()}
+    assert not advertised - bound, f"hint advertises unbound keys: {advertised - bound}"
 
 
 async def test_repaint_selection_does_not_swallow_unexpected_failures(

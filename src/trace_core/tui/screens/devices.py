@@ -14,6 +14,7 @@ from textual.containers import Horizontal, Vertical
 from textual.events import Resize
 from textual.timer import Timer
 from textual.widgets import DataTable, Input, Rule, Static
+from textual.worker import Worker
 
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.ui.renderers import format_india_datetime, sanitize_terminal
@@ -65,6 +66,13 @@ class DevicesView(TablePane[DeviceInfoDto]):
         self._gate_node: str | None = None
         self._inspected: InspectionDto | None = None
         self._refresh_timer: Timer | None = None
+        self._scan_worker: Worker[None] | None = None
+        self._last_token: tuple[str, ...] | None = None
+        self._scan_token: tuple[str, ...] | None = None
+        self._scanning = False
+        self._scan_pending = False
+        self._scan_generation = 0
+        self._all_devices: list[DeviceInfoDto] = []
         self._cases_cache: dict[str, list[str]] = {}
         self._serials: dict[str, str] = {}
         self._history: list[ObservationDto] = []
@@ -72,13 +80,21 @@ class DevicesView(TablePane[DeviceInfoDto]):
 
     def on_mount(self) -> None:
         super().on_mount()
-        self._last_token: tuple[str, ...] | None = None
         self._refresh_timer = self.set_interval(POLL_SECONDS, self._poll_devices)
 
     def on_unmount(self) -> None:
+        self._scan_generation += 1
+        self._scanning = False
+        self._scan_pending = False
+        self._scan_token = None
+        self._last_token = None
+        if self._scan_worker is not None:
+            self._scan_worker.cancel()
+            self._scan_worker = None
         if self._refresh_timer is not None:
             self._refresh_timer.stop()
             self._refresh_timer = None
+        super().on_unmount()
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="device-main"):
@@ -91,23 +107,85 @@ class DevicesView(TablePane[DeviceInfoDto]):
             with DossierScroll(id="device-right"):
                 yield Static("Select a device…", id=DEVICE_DETAIL_ID)
 
+    def activate(self) -> None:
+        self._refresh_if_changed()
+
     def refresh_data(self) -> None:
-        devices = self._fetch()
-        if devices is None:
-            return
-        self._last_token = self._token()
-        self._render_list(devices)
+        self._start_scan(force=True)
 
     def _poll_devices(self) -> None:
         if active_tab(self) != "devices":
             return
+        self._refresh_if_changed(quiet=True)
+
+    def _refresh_if_changed(self, *, quiet: bool = False) -> None:
         token = self._token()
+        if self._scanning:
+            if token is not None and self._scan_token is not None and token != self._scan_token:
+                self._scan_pending = True
+            return
         if token is not None and token == self._last_token:
             return
-        devices = self._fetch(quiet=True)
-        if devices is not None:
+        self._start_scan(token, quiet=quiet)
+
+    def _start_scan(
+        self,
+        token: tuple[str, ...] | None = None,
+        *,
+        force: bool = False,
+        quiet: bool = False,
+    ) -> None:
+        if self._scanning:
+            if force:
+                self._scan_pending = True
+            return
+        if token is None:
+            token = self._token()
+        self._scanning = True
+        self._scan_pending = False
+        self._scan_token = token
+        self._scan_generation += 1
+        self._render_summary()
+        self._scan_worker = self.run_worker(
+            self._scan(self._scan_generation, self._kind, token, quiet),
+            name="device-scan",
+            group="device-scan",
+        )
+
+    async def _scan(self, generation: int, kind: str, token: tuple[str, ...] | None, quiet: bool) -> None:
+        import asyncio
+
+        from trace_core.devices.helpers import do_enumerate, do_observed_devices
+
+        error: Exception | None = None
+        devices: list[DeviceInfoDto] = []
+        try:
+            observed = do_observed_devices(self._manager)
+            devices = await asyncio.to_thread(do_enumerate, self._manager, kind, observed=observed)
+        except Exception as exc:  # boundary: a service failure becomes a toast, never a crash
+            error = exc
+        if generation != self._scan_generation or not self.is_attached:
+            return
+        self._scan_worker = None
+        self._scanning = False
+        if error is not None:
+            if not quiet:
+                self.app.notify(str(error), severity="error")
+            self._render_summary()
+        elif kind != self._kind:
+            self._scan_pending = True
+            self._render_summary()
+        else:
             self._last_token = token
-            self._render_list(devices)
+            self._all_devices = devices
+            self._serials = {d.node: d.serial for d in devices if d.serial}
+            self._render_devices()
+        if self._scan_pending:
+            self._scan_pending = False
+            self._start_scan(quiet=True)
+
+    def search_changed(self) -> None:
+        self._render_devices()
 
     def _token(self) -> tuple[str, ...] | None:
         from trace_core.devices.helpers import do_change_token
@@ -117,29 +195,25 @@ class DevicesView(TablePane[DeviceInfoDto]):
         except Exception:
             return None
 
-    def _fetch(self, quiet: bool = False) -> list[DeviceInfoDto] | None:
-        from trace_core.devices.helpers import do_list
-
-        try:
-            devices = do_list(self._manager, self._kind)
-        except Exception as exc:  # boundary: a service failure becomes a toast, never a crash
-            if not quiet:
-                self.app.notify(str(exc), severity="error")
-            return None
-        self._serials = {d.node: d.serial for d in devices if d.serial}
-        query = self.query_one("#device-search", Input).value.strip() or None
+    def _render_devices(self) -> None:
+        query = self.query_one("#device-search", Input).value.strip().lower()
+        devices = self._all_devices
         if query:
             devices = [
                 d
                 for d in devices
                 if query in d.node.lower() or query in (d.model_hint or "").lower() or query in (d.serial or "").lower()
             ]
-        return devices
+        self._render_list(devices)
 
     def _render_list(self, devices: list[DeviceInfoDto]) -> None:
-        summary = self.query_one(f"#{DEVICE_SUMMARY_ID}", Static)
-        summary.update(f"kind: {self._kind}")
+        self._render_summary()
         self.fill_table(devices, [d.node for d in devices])
+
+    def _render_summary(self) -> None:
+        summary = self.query_one(f"#{DEVICE_SUMMARY_ID}", Static)
+        label = f"kind: {self._kind}"
+        summary.update(f"{label} · scanning…" if self._scanning else label)
 
     def row_cells(self, device: DeviceInfoDto, selected: bool) -> list:  # type: ignore[no-untyped-def]
         from trace_core.core.ui.renderers import fit_text

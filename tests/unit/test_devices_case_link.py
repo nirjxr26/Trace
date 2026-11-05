@@ -629,6 +629,7 @@ async def test_dossier_scans_once_until_something_changes(session_manager, devic
         do_inspect(session_manager, node_b)
         await pilot.press("2")
         await pilot.pause()
+        await app.workers.wait_for_complete()
         app.query_one(DevicesView)._linked(node_b, case.number)
         await pilot.pause()
         await pilot.press("3")

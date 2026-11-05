@@ -6,7 +6,7 @@ validation the service already performs.
 """
 
 from trace_core.core.database.session import DatabaseSessionManager
-from trace_core.devices.domain import ObservedDevice
+from trace_core.devices.domain import DeviceInfo, ObservedDevice
 from trace_core.devices.dto import (
     CaseDeviceLinkDto,
     DeviceInfoDto,
@@ -21,6 +21,13 @@ OVERRIDE_TOKEN = "UNVERIFIED"
 
 def _service(session_manager: DatabaseSessionManager | None = None) -> DeviceService:
     return DeviceService(session_manager)
+
+
+def _to_dtos(devices: list[DeviceInfo], observed: dict[str, ObservedDevice]) -> list[DeviceInfoDto]:
+    return [
+        DeviceInfoDto.from_domain(device, observed[device.node].serial if device.node in observed else None)
+        for device in devices
+    ]
 
 
 def do_list(
@@ -38,11 +45,20 @@ def do_list(
     read is separate and touches no device."""
     service = _service(session_manager)
     devices = service.list_devices(kind, audit_recognition=audit_recognition)
-    observed = service.observed_devices()
-    return [
-        DeviceInfoDto.from_domain(device, observed[device.node].serial if device.node in observed else None)
-        for device in devices
-    ]
+    return _to_dtos(devices, service.observed_devices())
+
+
+def do_enumerate(
+    session_manager: DatabaseSessionManager | None,
+    kind: str = KIND_ALL,
+    *,
+    observed: dict[str, ObservedDevice] | None = None,
+) -> list[DeviceInfoDto]:
+    service = _service(session_manager)
+    devices = service.list_devices(kind)
+    if observed is None:
+        observed = service.observed_devices()
+    return _to_dtos(devices, observed)
 
 
 def do_observed_devices(session_manager: DatabaseSessionManager | None) -> dict[str, ObservedDevice]:
