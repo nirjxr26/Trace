@@ -61,6 +61,14 @@ class SqlAlchemyImagingRepository:
         )
         return [_to_dto(model) for model in self.session.scalars(statement)]
 
+    def list_recent(self, limit: int = 100) -> list[ImagingOperation]:
+        statement = (
+            select(ImagingOperationModel)
+            .order_by(ImagingOperationModel.created_at.desc(), ImagingOperationModel.id.asc())
+            .limit(limit)
+        )
+        return [_to_dto(model) for model in self.session.scalars(statement)]
+
     def claim_for_acquisition(
         self,
         operation_id: UUID,

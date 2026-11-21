@@ -1,11 +1,8 @@
 """Cases tab: live table + dossier + raw drawer + mutation forms."""
 
 import json
-import threading
-import time
 from datetime import datetime
 from typing import NamedTuple
-from uuid import UUID
 
 from rich.text import Text
 from sqlalchemy.exc import SQLAlchemyError
@@ -25,7 +22,7 @@ from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.errors import ApplicationError, NotFoundError
 from trace_core.core.ui.renderers import format_india_datetime, sanitize_terminal
 from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
-from trace_core.imaging.domain import ImagingOperation, ImagingState
+from trace_core.imaging.domain import ImagingOperation
 from trace_core.tui.actions import run_guarded
 from trace_core.tui.forms import CaseForm, RawModal, TextInputModal, TypedConfirmModal, YesNoModal
 from trace_core.tui.theme import status_text
@@ -89,11 +86,7 @@ class CasesView(TablePane[CaseResponseDto]):
         Binding("r", "recent", "Recent"),
         Binding("slash", "search", "Search"),
         Binding("v", "raw", "Raw"),
-        Binding("i", "imaging", "Reserve image"),
-        Binding("g", "imaging_acquire", "Acquire fixture"),
-        Binding("G", "imaging_acquire_physical", "Acquire physical"),
-        Binding("V", "imaging_verify", "Verify image"),
-        Binding("z", "imaging_abandon", "Abandon image"),
+        Binding("i", "imaging", "Imaging"),
     ]
 
     TABLE_ID = TABLE_ID
@@ -111,8 +104,6 @@ class CasesView(TablePane[CaseResponseDto]):
         self._event_total: dict[str, int] = {}
         self._device_cache: dict[str, list[_LinkedDevice] | None] = {}
         self._imaging_cache: dict[str, list[ImagingOperation] | None] = {}
-        self._imaging_cancel: threading.Event | None = None
-        self._imaging_progress: dict[UUID, tuple[int, int, float]] = {}
         self._case_versions: dict[str, datetime] = {}
         self._detail_width: int | None = None
 
@@ -286,10 +277,6 @@ class CasesView(TablePane[CaseResponseDto]):
         for operation in operations[:3]:
             state = operation.state.value
             body.append(f"  {state.replace('_', ' ').title()}", style=THEME_HEX["value"])
-            if state == "ACQUIRING" and operation.id in self._imaging_progress:
-                done, total, _ = self._imaging_progress[operation.id]
-                percent = done * 100 // total if total else 0
-                body.append(f" — {percent}% ({done}/{total} bytes)", style="dim")
             if state == "PREPARING":
                 body.append(" — reservation only; no image acquired", style="dim")
             elif state == "BYTE_VERIFIED":
@@ -299,7 +286,7 @@ class CasesView(TablePane[CaseResponseDto]):
                 body.append(f" — {operation.failure_category or 'no failure recorded'}", style="dim")
             body.append(f"\n    {operation.id}\n", style="dim")
         if len(operations) > 3:
-            body.append("  Additional operations not shown; use case imaging.\n", style="dim")
+            body.append("  Additional operations not shown; use the Imaging tab.\n", style="dim")
 
     def _append_linked_devices(self, body, rule, devices) -> None:  # type: ignore[no-untyped-def]
         if devices is None:
@@ -451,174 +438,19 @@ class CasesView(TablePane[CaseResponseDto]):
         case = self._require_selected()
         if case is None:
             return
+        from textual.css.query import NoMatches
+        from textual.widgets import TabbedContent
 
-        from trace_core.imaging.service import ImagingService
-
-        def _reserve() -> str:
-            operation = ImagingService(self._manager).reserve(case.number)
-            return f"Imaging reservation {operation.id} created; no image acquired."
-
-        run_guarded(self, _reserve)
-
-    def action_imaging_acquire(self) -> None:
-        self._begin_acquisition(physical=False)
-
-    def action_imaging_acquire_physical(self) -> None:
-        self._begin_acquisition(physical=True)
-
-    def _begin_acquisition(self, *, physical: bool) -> None:
-        case = self._require_selected()
-        if case is None:
-            return
-
-        from trace_core.imaging.service import ImagingService
+        from trace_core.tui.screens.imaging import ImagingView
 
         try:
-            operations = ImagingService(self._manager).list_for_case(case.number)
-        except Exception as exc:  # boundary: every service failure becomes a toast, never a crash
-            self.app.notify(str(exc), severity="error")
+            imaging = self.app.query_one(ImagingView)
+            tabs = self.app.query_one(TabbedContent)
+        except NoMatches:
+            self.app.notify("Imaging tab is not mounted.", severity="error")
             return
-        acquiring = [
-            operation
-            for operation in operations
-            if operation.state in {ImagingState.PREPARING, ImagingState.INTERRUPTED}
-        ]
-        if not acquiring:
-            self.app.notify("No unresolved imaging reservation. Press i to reserve one.", severity="warning")
-            return
-        operation = acquiring[0]
-        title = "Physical device node" if physical else "Fixture source path"
-        hint = "device node, e.g. //./PhysicalDrive0 or /dev/sdb" if physical else "file to acquire"
-        self.app.push_screen(
-            TextInputModal(title, hint, required=True),
-            lambda path: self._start_acquisition(operation.id, path, physical=physical),
-        )
-
-    def action_imaging_verify(self) -> None:
-        case = self._require_selected()
-        if case is None:
-            return
-
-        from trace_core.imaging.service import ImagingService
-
-        try:
-            operations = ImagingService(self._manager).list_for_case(case.number)
-        except Exception as exc:  # boundary: every service failure becomes a toast, never a crash
-            self.app.notify(str(exc), severity="error")
-            return
-        verified = [operation for operation in operations if operation.state is ImagingState.BYTE_VERIFIED]
-        if not verified:
-            self.app.notify("No byte-verified image for this case.", severity="warning")
-            return
-        self.run_worker(self._verify_worker(verified[0].id), exclusive=True)
-
-    async def _verify_worker(self, operation_id: UUID) -> None:
-        import asyncio
-
-        from trace_core.imaging.service import ImagingService
-
-        try:
-            matches = await asyncio.to_thread(ImagingService(self._manager).verify_image, operation_id)
-        except Exception as exc:  # boundary: worker failure becomes a toast, never a crash
-            self.app.notify(str(exc), severity="error")
-        else:
-            if matches:
-                self.app.notify(f"Image for {operation_id} matches its SHA-256 manifest.")
-            else:
-                self.app.notify(f"Image for {operation_id} FAILED verification.", severity="error")
-
-    def action_imaging_abandon(self) -> None:
-        case = self._require_selected()
-        if case is None:
-            return
-
-        from trace_core.imaging.service import ImagingService
-
-        try:
-            operations = ImagingService(self._manager).list_for_case(case.number)
-        except Exception as exc:  # boundary: every service failure becomes a toast, never a crash
-            self.app.notify(str(exc), severity="error")
-            return
-        running = [
-            operation for operation in operations if operation.state in {ImagingState.ACQUIRING, ImagingState.VERIFYING}
-        ]
-        if running and self._imaging_cancel is not None:
-            self._imaging_cancel.set()
-            self.app.notify("Cancellation requested; the partial image is kept for resume.")
-            return
-        if running:
-            self.app.notify(
-                "An acquisition is running in another process; it cannot be abandoned here.", severity="warning"
-            )
-            return
-        unresolved = [
-            operation
-            for operation in operations
-            if operation.state in {ImagingState.PREPARING, ImagingState.INTERRUPTED}
-        ]
-        if not unresolved:
-            self.app.notify("No abandonable imaging operation.", severity="warning")
-            return
-        operation = unresolved[0]
-        self.app.push_screen(
-            YesNoModal(f"Abandon imaging operation {operation.id}?"),
-            lambda ok: self._abandon_imaging(operation.id) if ok else None,
-        )
-
-    def _abandon_imaging(self, operation_id: UUID) -> None:
-        from trace_core.imaging.service import ImagingService
-
-        def _abandon() -> str:
-            ImagingService(self._manager).abandon(operation_id)
-            return f"Imaging operation {operation_id} abandoned."
-
-        run_guarded(self, _abandon)
-
-    def _start_acquisition(self, operation_id: UUID, path: str | None, *, physical: bool = False) -> None:
-        if not path:
-            return
-        cancel = threading.Event()
-        self._imaging_cancel = cancel
-        self._imaging_progress.pop(operation_id, None)
-        label = "physical device" if physical else "fixture image"
-        self.app.notify(f"Acquiring {label}...")
-        self.run_worker(self._acquire_worker(operation_id, path, physical, cancel), exclusive=True)
-
-    async def _acquire_worker(self, operation_id: UUID, path: str, physical: bool, cancel: threading.Event) -> None:
-        import asyncio
-
-        from trace_core.imaging.service import ImagingService
-
-        last = [0.0]
-
-        def _progress(done: int, total: int) -> None:
-            now = time.monotonic()
-            if now - last[0] < 0.25 and done != total:
-                return
-            last[0] = now
-            self.app.call_from_thread(self._update_imaging_progress, operation_id, done, total)
-
-        try:
-            operation = await asyncio.to_thread(
-                ImagingService(self._manager).acquire,
-                operation_id,
-                path,
-                allow_real_hardware=physical,
-                progress=_progress,
-                cancelled=cancel.is_set,
-            )
-        except Exception as exc:  # boundary: worker failure becomes a toast, never a crash
-            self.app.notify(str(exc), severity="error")
-        else:
-            self.app.notify(f"Image byte-verified: {operation.acquisition_sha256}")
-        finally:
-            self._imaging_progress.pop(operation_id, None)
-            self._imaging_cancel = None
-            self.refresh_data()
-
-    def _update_imaging_progress(self, operation_id: UUID, done: int, total: int) -> None:
-        self._imaging_progress[operation_id] = (done, total, time.monotonic())
-        self.render_detail()
+        imaging.set_case(case.number)
+        tabs.active = "imaging"
 
     def action_create(self) -> None:
         self.app.push_screen(CaseForm("Create Case"), self._created)

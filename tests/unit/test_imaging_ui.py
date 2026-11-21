@@ -121,7 +121,9 @@ async def test_case_dossier_refresh_reloads_imaging_status(
 async def test_case_view_reserves_and_acquires_a_fixture(
     tmp_path: Path, temp_storage: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from textual.widgets import Input
+    from textual.widgets import Input, TabbedContent
+
+    from trace_core.tui.screens.imaging import ImagingView
 
     manager = DatabaseSessionManager(f"sqlite:///{(tmp_path / 'cases.sqlite').as_posix()}")
     manager.init_schema()
@@ -135,12 +137,16 @@ async def test_case_view_reserves_and_acquires_a_fixture(
         monkeypatch.setattr(tui, "notify", lambda message, **kwargs: notices.append((message, kwargs)))
         await pilot.press("i")
         await pilot.pause()
+        assert tui.query_one(TabbedContent).active == "imaging"
+        assert tui.query_one(ImagingView)._case_number == case.number
+
+        await pilot.press("n")
+        await pilot.pause()
         operations = ImagingService(manager).list_for_case(case.number)
         assert len(operations) == 1
         assert operations[0].state is ImagingState.PREPARING
-        assert "no image acquired" in notices[0][0]
 
-        await pilot.press("g")
+        await pilot.press("a")
         await pilot.pause()
         tui.screen.query_one("#text-input", Input).value = str(source)
         await pilot.press("enter")
@@ -159,17 +165,24 @@ async def test_case_view_reserves_and_acquires_a_fixture(
 async def test_case_view_abandons_an_unresolved_operation(
     service: CaseService, session_manager: DatabaseSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from textual.widgets import Button
+    from textual.widgets import Button, TabbedContent
+
+    from trace_core.tui.screens.imaging import ImagingView
 
     case = service.create_case(CaseCreateDto(title="Imaging", lead_examiner="Examiner"))
-    operation = ImagingService(session_manager).reserve(case.number)
+    ImagingService(session_manager).reserve(case.number)
     tui = TraceApp(session_manager)
     notices: list[tuple[str, dict]] = []
 
     async with tui.run_test(size=(110, 40)) as pilot:
         await pilot.pause()
         monkeypatch.setattr(tui, "notify", lambda message, **kwargs: notices.append((message, kwargs)))
-        await pilot.press("z")
+        await pilot.press("i")
+        await pilot.pause()
+        assert tui.query_one(TabbedContent).active == "imaging"
+        assert tui.query_one(ImagingView)._selected_operation() is not None
+
+        await pilot.press("x")
         await pilot.pause()
         tui.screen.query_one("#yes", Button).press()
         for _ in range(40):
@@ -177,9 +190,38 @@ async def test_case_view_abandons_an_unresolved_operation(
             if ImagingService(session_manager).list_for_case(case.number)[0].state is ImagingState.FAILED:
                 break
 
-    assert str(operation.id) in notices[0][0]
-    assert ImagingService(session_manager).list_for_case(case.number)[0].state is ImagingState.FAILED
     assert any("abandoned" in message for message, _ in notices)
+    assert ImagingService(session_manager).list_for_case(case.number)[0].state is ImagingState.FAILED
+
+
+@pytest.mark.anyio
+async def test_imaging_dossier_shows_case_and_status_only(session_manager: DatabaseSessionManager) -> None:
+    from textual.widgets import Static, TabbedContent
+
+    from trace_core.cases.dto import CaseCreateDto
+    from trace_core.cases.service import CaseService
+    from trace_core.imaging.service import ImagingService
+    from trace_core.tui.app import TAB_HINTS
+    from trace_core.tui.screens.imaging import ImagingView
+
+    case = CaseService(session_manager).create_case(CaseCreateDto(title="Imaging", lead_examiner="Ex"))
+    operation = ImagingService(session_manager).reserve(case.number)
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(110, 40)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        assert app.query_one(TabbedContent).active == "imaging"
+        view = app.query_one(ImagingView)
+        view._update_progress(50, 100)
+        detail = str(app.query_one("#imaging-dossier", Static).render())
+        assert case.number in detail
+        assert "Preparing" in detail
+        assert "50%" in detail
+        assert str(operation.id) not in detail
+        assert "manifest" not in detail.lower()
+
+    assert "tab-imaging" not in TAB_HINTS
+    assert "Ctrl+P Commands" in TAB_HINTS["imaging"]
 
 
 @pytest.mark.anyio

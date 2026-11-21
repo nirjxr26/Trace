@@ -326,7 +326,7 @@ async def _audit_tab_on_a_long_ledger(
     seqs = _seed(session_manager, PAGE_ROWS + 25)
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         table = app.query_one("#audit-table", DataTable)
         assert table.row_count == PAGE_ROWS
@@ -413,7 +413,7 @@ async def test_audit_header_reports_the_whole_matching_ledger_not_the_window(
     seqs = _seed(session_manager, PAGE_ROWS + 25)
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         header = str(app.query_one(f"#{AUDIT_HEADER_ID}", Static).render())
         assert header.rstrip().endswith(f"· {len(seqs)}")
@@ -438,7 +438,7 @@ async def test_audit_table_stays_inside_the_sidebar(
     _seed(session_manager, 60)
     app = TraceApp(session_manager)
     async with app.run_test(size=size) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         table = app.query_one("#audit-table", DataTable)
         left = app.query_one("#audit-left")
@@ -482,7 +482,7 @@ async def test_audit_view_does_not_extend_before_the_table_is_measured(
     _seed(session_manager, PAGE_ROWS + 25)
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         for _ in range(3):
             await pilot.pause()
         table = app.query_one("#audit-table", DataTable)
@@ -499,13 +499,13 @@ async def test_audit_view_detail_is_not_refetched_when_the_tab_is_revisited(
     _seed(session_manager, 5)
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         with _selects(session_manager) as seen:
             for _ in range(2):
-                await pilot.press("4")
+                await pilot.press("5")
                 await pilot.pause()
-                await pilot.press("3")
+                await pilot.press("4")
                 await pilot.pause()
             assert app.query_one("#audit-table", DataTable).row_count == 5
             assert len([s for s in seen if "payload_json" in s]) == 0
@@ -552,7 +552,7 @@ async def test_a_failing_count_is_announced_and_never_shown_as_a_wrong_total(
     monkeypatch.setattr("trace_core.audit.service.AuditService.count_events", _broken)
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         messages = [n.message for n in app._notifications]
         header = str(app.query_one(f"#{AUDIT_HEADER_ID}", Static).render())
@@ -636,7 +636,7 @@ async def test_audit_window_stops_at_five_pages(
     seqs = _seed(session_manager, 1200)
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         await pilot.pause()
         view = app.query_one(AuditView)

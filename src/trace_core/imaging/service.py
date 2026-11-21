@@ -98,6 +98,23 @@ class ImagingService(BaseService):
                     raise CaseNotFoundError(case_identifier)
             return SqlAlchemyImagingRepository(uow.session).list_for_case(number)
 
+    def list_recent(self, limit: int = 100) -> list[ImagingOperation]:
+        with self.transaction() as uow:
+            require_role(uow.session, ROLE_ADMIN, ROLE_AUDITOR, ROLE_INVESTIGATOR, action="view imaging operations")
+            return SqlAlchemyImagingRepository(uow.session).list_recent(limit)
+
+    def manifest_for(self, operation_id: UUID) -> dict[str, object]:
+        root = Path(settings.storage_root)
+        with self.transaction() as uow:
+            require_role(uow.session, ROLE_ADMIN, ROLE_AUDITOR, ROLE_INVESTIGATOR, action="view imaging operations")
+            operation = SqlAlchemyImagingRepository(uow.session).get(operation_id)
+            if operation is None:
+                raise NotFoundError("Imaging operation", str(operation_id))
+            if operation.manifest_relpath is None:
+                raise ImagingDestinationError("The operation has no recorded manifest.")
+            manifest = check_contained(root / operation.manifest_relpath, root, what="imaging manifest")
+        return self._read_manifest_payload(manifest)
+
     def reserve(self, case_identifier: str) -> ImagingOperation:
         with update_lock(), self.transaction() as uow:
             require_mutator(uow.session, action="reserve imaging")

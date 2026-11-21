@@ -38,7 +38,7 @@ from trace_core.imaging.service import ImagingService
 from trace_core.imaging.source import FileSource
 from trace_core.imaging.stream import PIECE_SIZE, copy_raw
 from trace_core.tui.app import TAB_HINTS
-from trace_core.tui.screens.cases import CasesView
+from trace_core.tui.screens.imaging import ImagingView
 
 pytestmark = pytest.mark.unit
 
@@ -301,11 +301,10 @@ def test_cli_verify_reports_a_corrupted_image(
 
 
 def test_tui_advertises_physical_acquire_binding() -> None:
-    keys = {str(binding.key) for binding in CasesView.BINDINGS if isinstance(binding, Binding)}
-    assert "G" in keys
-    assert "V" in keys
-    assert "G Physical" in TAB_HINTS["cases"]
-    assert "V Verify" in TAB_HINTS["cases"]
+    keys = {str(binding.key) for binding in ImagingView.BINDINGS if isinstance(binding, Binding)}
+    assert "p" in keys
+    assert "v" in keys
+    assert "Ctrl+P Commands" in TAB_HINTS["imaging"]
 
 
 def test_manifest_carries_raw_format_and_piecewise_hashes(tmp_path: Path, temp_storage: Path) -> None:

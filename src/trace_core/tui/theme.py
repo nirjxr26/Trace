@@ -26,6 +26,8 @@ TRACE_THEME = Theme(
         "tag": THEME_TOKENS["tag"],
         "surface-active": THEME_TOKENS["surface_active"],
         "surface-elevated": THEME_TOKENS["surface_elevated"],
+        "palette-active": THEME_HEX["palette_active"],
+        "violet": THEME_HEX["violet"],
     },
 )
 

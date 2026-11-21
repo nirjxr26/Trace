@@ -32,7 +32,7 @@ async def _goto_settings_updates(pilot, app) -> None:  # type: ignore[no-untyped
     from textual.widgets import Static, TabbedContent
 
     for _ in range(10):
-        await pilot.press("4")
+        await pilot.press("5")
         await pilot.pause()
         if app.query_one(TabbedContent).active == "settings":
             break
@@ -332,7 +332,7 @@ async def test_a_failing_section_renderer_names_itself(
 
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
-        await pilot.press("4")
+        await pilot.press("5")
         await pilot.pause()
         monkeypatch.setattr(SettingsView, "_updates_body", _boom)
         app.query_one("#settings-sections", ListView).focus()

@@ -81,8 +81,7 @@ async def test_the_devices_hint_is_declared() -> None:
     from trace_core.tui.app import TAB_HINTS
 
     assert "devices" in TAB_HINTS
-    assert "Inspect" in TAB_HINTS["devices"]
-    assert "Check" in TAB_HINTS["devices"]
+    assert "Ctrl+P Commands" in TAB_HINTS["devices"]
 
 
 async def test_search_filters_the_device_table(session_manager, device_file_env: Path) -> None:
@@ -624,7 +623,7 @@ async def test_a_device_link_event_names_the_device(session_manager, device_file
 
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         await pilot.pause()
         view = app.query_one(AuditView)
@@ -692,7 +691,7 @@ async def test_audit_dividers_refit_after_a_width_change(session_manager, device
 
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         await pilot.pause()
         view = app.query_one(AuditView)

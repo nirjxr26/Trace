@@ -628,7 +628,7 @@ async def test_dossier_scans_once_until_something_changes(session_manager, devic
         await pilot.pause()
         await pilot.pause()
         assert link_scans == 1, f"dossier did not scan on first paint: {link_scans}"
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         await pilot.press("1")
         await pilot.pause()
@@ -642,7 +642,7 @@ async def test_dossier_scans_once_until_something_changes(session_manager, devic
         await app.workers.wait_for_complete()
         app.query_one(DevicesView)._linked(node_b, case.number)
         await pilot.pause()
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         await pilot.press("1")
         await pilot.pause()

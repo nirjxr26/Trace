@@ -182,10 +182,10 @@ def test_the_palette_offers_both_link_commands() -> None:
     assert {"device-link", "device-unlink"} <= names
 
 
-def test_the_footer_hint_names_the_link_key() -> None:
+def test_the_footer_hint_points_to_the_command_palette() -> None:
     from trace_core.tui.app import TAB_HINTS
 
-    assert "l Link" in TAB_HINTS["devices"]
+    assert "Ctrl+P Commands" in TAB_HINTS["devices"]
 
 
 @pytest.mark.anyio

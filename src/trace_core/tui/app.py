@@ -10,17 +10,20 @@ from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.tui.theme import TRACE_THEME
 
 TAB_HINTS: dict[str, str] = {
-    "cases": "↑↓ Navigate   / Search   i Reserve   g Acquire   G Physical   V Verify   z Abandon   r Recent   q Quit",
-    "devices": "↑↓ Navigate   i Inspect   c Check   a Acknowledge   l Link   k Kind   / Search   q Quit",
-    "audit": "↑↓ Navigate   Enter Open   s Scope   v Raw   e Export   a Anchor   / Search   r Refresh   q Quit",
-    "settings": "↑↓ Sections   Enter Run   m Migrate   c Check updates   q Quit",
+    "cases": "↑↓ Navigate   / Search   Ctrl+P Commands   q Quit",
+    "devices": "↑↓ Navigate   / Search   Ctrl+P Commands   q Quit",
+    "audit": "↑↓ Navigate   Enter Open   / Search   Ctrl+P Commands   q Quit",
+    "settings": "↑↓ Sections   Enter Run   Ctrl+P Commands   q Quit",
+    "imaging": "↑↓ Operations   / Search   Ctrl+P Commands   q Quit",
 }
 
-_TAB_ORDER = ("cases", "devices", "audit", "settings")
+_TAB_ORDER = ("cases", "devices", "imaging", "audit", "settings")
 
 
 class TraceApp(App[None]):
     """Live fullscreen console. Views call services; this shell only hosts them."""
+
+    ENABLE_COMMAND_PALETTE = False
 
     CSS = """
     Screen { background: $background; width: 100%; height: 100%; }
@@ -37,14 +40,14 @@ class TraceApp(App[None]):
         background: $surface;
         padding: 0 2;
     }
-    #cases-top, #audit-main, #settings-top, #device-main { height: 1fr; }
-    #cases-left, #cases-right, #audit-left, #audit-right, #settings-left, #settings-right, #device-left, #device-right {
+    #cases-top, #audit-main, #settings-top, #device-main, #imaging-top { height: 1fr; }
+    #cases-left, #cases-right, #audit-left, #audit-right, #settings-left, #settings-right, #device-left, #device-right, #imaging-left, #imaging-right {
         border: round $panel;
         background: $surface;
         padding: 1 2;
     }
-    #cases-left, #audit-left, #settings-left, #device-left { width: 1fr; margin-right: 1; }
-    #cases-right, #audit-right, #settings-right, #device-right { width: 2fr; }
+    #cases-left, #audit-left, #settings-left, #device-left, #imaging-left { width: 1fr; margin-right: 1; }
+    #cases-right, #audit-right, #settings-right, #device-right, #imaging-right { width: 2fr; }
     #settings-sections { height: 1fr; background: transparent; }
     #settings-sections:focus { background-tint: transparent; }
     #settings-left .card-title { padding: 0; }
@@ -52,11 +55,12 @@ class TraceApp(App[None]):
     #settings-sections ListItem.-hovered, #settings-sections ListItem.-highlight { background: transparent; background-tint: transparent; border: none; color: $text; text-style: bold; }
     .table-head { text-style: bold; color: $text; height: 1; }
     #settings-left Rule, #cases-left Rule, #audit-left Rule, #device-left Rule { color: $panel; margin: 0 0 1 0; }
-    #case-search, #audit-search, #device-search { border: round $panel; margin-bottom: 1; background: transparent; }
-    #audit-table, #case-table, #device-table { scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }
-    #device-right, #cases-right, #audit-right { scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }
-    #case-search:focus, #audit-search:focus, #device-search:focus { background: transparent; background-tint: transparent; }
+    #case-search, #audit-search, #device-search, #imaging-search { border: round $panel; margin-bottom: 1; background: transparent; }
+    #audit-table, #case-table, #device-table, #imaging-table { scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }
+    #device-right, #cases-right, #audit-right, #imaging-right { scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }
+    #case-search:focus, #audit-search:focus, #device-search:focus, #imaging-search:focus { background: transparent; background-tint: transparent; }
     #audit-scope { height: 1; color: $muted; }
+    #imaging-left Rule { color: $panel; margin: 0 0 1 0; }
     #device-summary { height: 1; color: $muted; padding-left: 1; margin: 1 0; }
     #device-search { margin-bottom: 0; padding: 0 2; }
     VerticalScroll { scrollbar-size: 1 1; }
@@ -74,7 +78,7 @@ class TraceApp(App[None]):
     .input-row Button { min-width: 16; border: round $panel; }
     #db-migrations { height: 1fr; }
     #db-migrations DataTable { height: 1fr; }
-    #audit-table, #case-table, #device-table { height: 1fr; }
+    #audit-table, #case-table, #device-table, #imaging-table { height: 1fr; }
     DataTable { background: transparent; border: none; }
     DataTable > .datatable--header { background: transparent; text-style: bold; }
     DataTable > .datatable--cursor { background: $surface-active; color: $text; text-style: bold; }
@@ -89,8 +93,9 @@ class TraceApp(App[None]):
     BINDINGS = [
         Binding("1", "tab('cases')", "Cases"),
         Binding("2", "tab('devices')", "Devices"),
-        Binding("3", "tab('audit')", "Audit"),
-        Binding("4", "tab('settings')", "Settings"),
+        Binding("3", "tab('imaging')", "Imaging"),
+        Binding("4", "tab('audit')", "Audit"),
+        Binding("5", "tab('settings')", "Settings"),
         Binding("left", "prev_tab", "Prev tab", show=False),
         Binding("right", "next_tab", "Next tab", show=False),
         Binding("r", "refresh", "Refresh", show=False),
@@ -126,6 +131,7 @@ class TraceApp(App[None]):
         from trace_core.tui.screens.audit import AuditView
         from trace_core.tui.screens.cases import CasesView
         from trace_core.tui.screens.devices import DevicesView
+        from trace_core.tui.screens.imaging import ImagingView
         from trace_core.tui.screens.settings import SettingsView
 
         with TabbedContent(initial="cases"):
@@ -133,6 +139,8 @@ class TraceApp(App[None]):
                 yield CasesView(self._session_manager)
             with TabPane("Devices", id="devices"):
                 yield DevicesView(self._session_manager)
+            with TabPane("Imaging", id="imaging"):
+                yield ImagingView(self._session_manager)
             with TabPane("Audit", id="audit"):
                 yield AuditView(self._session_manager)
             with TabPane("Settings", id="settings"):
@@ -170,17 +178,23 @@ class TraceApp(App[None]):
     def action_palette(self) -> None:
         from trace_core.tui.palette import PaletteModal
 
-        self.push_screen(PaletteModal(), self._palette_done)
+        tabs = self.query_one(TabbedContent)
+        self.push_screen(PaletteModal(tabs.active or "cases"), self._palette_done)
 
     def _palette_done(self, command: str | None) -> None:
         if not command:
             return
         from trace_core.tui.actions import resolve_palette_command
+        from trace_core.tui.palette import command_scope
 
         command = resolve_palette_command(command)
+        tabs = self.query_one(TabbedContent)
         if command.startswith("tab-"):
             self.action_tab(command.removeprefix("tab-"))
             return
+        scope = command_scope(command)
+        if scope and scope in _TAB_ORDER and tabs.active != scope:
+            tabs.active = scope
         view = self.current_view()
         run = getattr(view, "run_command", None)
         if callable(run):

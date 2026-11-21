@@ -27,6 +27,7 @@ THEME_HEX: Final[dict[str, str]] = {
     "selection": "#182B35",
     "tag": "#82AEBE",
     "metadata": "#8A949C",
+    "palette_active": "#E8A87C",
 }
 
 THEME_TOKENS: Final[dict[str, str]] = {

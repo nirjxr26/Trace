@@ -84,7 +84,7 @@ async def test_tui_pilot_flow(seeded_manager: DatabaseSessionManager) -> None:
         await pilot.pause()
         assert "Alpha" in _text(app.query_one("#case-dossier", Static))
 
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         assert app.query_one(TabbedContent).active == "audit"
         audit_table = app.query_one("#audit-table", DataTable)
@@ -95,7 +95,7 @@ async def test_tui_pilot_flow(seeded_manager: DatabaseSessionManager) -> None:
         assert "Case details updated" in _text(app.query_one("#audit-detail", Static))
         assert "Seq" in app.export_screenshot()
 
-        await pilot.press("4")
+        await pilot.press("5")
         await pilot.pause()
         assert app.query_one(TabbedContent).active == "settings"
         from textual.widgets import ListView, Static
@@ -235,7 +235,7 @@ async def test_the_audit_sidebar_search_has_no_divider_below_it(session_manager)
 
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         await pilot.pause()
         kinds = [type(w).__name__ for w in app.screen.query_one("#audit-left").children]
@@ -316,7 +316,7 @@ async def test_no_left_sidebar_shows_a_scrollbar(session_manager, device_file_en
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("key", "pane_id"),
-    [("1", "cases-right"), ("2", "device-right"), ("3", "audit-right")],
+    [("1", "cases-right"), ("2", "device-right"), ("4", "audit-right")],
 )
 async def test_no_dossier_shows_a_scrollbar(session_manager, device_file_env, key, pane_id) -> None:  # type: ignore[no-untyped-def]
     """The dossier panes keep scrolling but lose the chrome, like the tables before
@@ -352,7 +352,7 @@ async def test_settings_headers_share_row_and_spacing(session_manager) -> None:
 
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.press("4")
+        await pilot.press("5")
         await pilot.pause()
         await pilot.pause()
         strips = app.screen._compositor.render_strips()
@@ -505,7 +505,7 @@ async def test_background_tabs_skip_mount_fetch(session_manager, monkeypatch) ->
         assert counts.get("AuditView", 0) == 0, f"audit fetched before visit: {counts}"
         assert counts.get("SettingsView", 0) == 0, f"settings fetched before visit: {counts}"
         assert counts.get("CasesView", 0) >= 1, "initial tab never fetched"
-        for key in ("2", "3", "4"):
+        for key in ("2", "3", "4", "5"):
             await pilot.press(key)
             await pilot.pause()
             await pilot.pause()
@@ -587,7 +587,7 @@ async def _audit_tab_with_one_event(
 
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 32)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         yield app, pilot
 
@@ -639,6 +639,106 @@ def test_the_palette_and_keys_offer_only_what_the_tui_runs() -> None:
     assert "install update" not in advertised
 
 
+async def test_ctrl_p_opens_trace_palette_not_the_textual_default(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    from trace_core.tui.palette import PaletteModal
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        assert app.ENABLE_COMMAND_PALETTE is False
+        await pilot.press("ctrl+p")
+        await pilot.pause()
+        assert isinstance(app.screen, PaletteModal)
+
+
+def test_palette_action_titles_are_short() -> None:
+    from trace_core.tui.palette import COMMANDS
+
+    assert all(len(label) <= 18 for _, label, _ in COMMANDS)
+    assert all(" — " not in label for _, label, _ in COMMANDS)
+
+
+async def test_palette_groups_the_active_tab_first_and_keeps_every_command(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    from textual.widgets import ListView
+
+    from trace_core.tui.palette import COMMANDS, PaletteModal, command_scope
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        modal = PaletteModal("imaging")
+        app.push_screen(modal)
+        await pilot.pause()
+        view = modal.query_one("#palette-list", ListView)
+        children = list(view.children)
+        heads = [str(child.query_one(".group-label").render()) for child in children if "group-head" in child.classes]
+        assert heads[0] == "In this tab"
+        ids = [child.id for child in children if child.id]
+        assert len(ids) == len(COMMANDS)
+        assert set(ids) == {command for command, _, _ in COMMANDS}
+        scoped = [command for command in ids if command_scope(command) == "imaging"]
+        assert ids[: len(scoped)] == scoped
+
+
+async def test_palette_arrow_keys_move_the_highlight(session_manager: DatabaseSessionManager) -> None:
+    from textual.widgets import ListView
+
+    from trace_core.tui.palette import PaletteModal
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        modal = PaletteModal("devices")
+        app.push_screen(modal)
+        await pilot.pause()
+        view = modal.query_one("#palette-list", ListView)
+        first = view.index
+        assert first is not None
+        await pilot.press("down")
+        await pilot.pause()
+        assert view.index == first + 1
+        await pilot.press("up")
+        await pilot.pause()
+        assert view.index == first
+
+
+async def test_palette_search_boosts_the_active_tab(session_manager: DatabaseSessionManager) -> None:
+    from textual.widgets import Input, ListView
+
+    from trace_core.tui.palette import PaletteModal
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        modal = PaletteModal("imaging")
+        app.push_screen(modal)
+        await pilot.pause()
+        modal.query_one("#palette-input", Input).value = "seal"
+        await pilot.pause()
+        view = modal.query_one("#palette-list", ListView)
+        ids = [child.id for child in view.children if child.id]
+        assert ids[0] == "imaging-seal"
+        assert "case-close" in ids
+        first_label = view.children[1].query_one(".cmd-label")
+        assert "Seal image" in str(first_label.render())
+        assert "Imaging" in str(modal.query_one("#palette-context").render())
+
+
+async def test_palette_command_switches_to_its_tab_before_running(
+    session_manager: DatabaseSessionManager,
+) -> None:
+    from textual.widgets import TabbedContent
+
+    app = TraceApp(session_manager)
+    async with app.run_test() as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        assert app.query_one(TabbedContent).active == "imaging"
+        app._palette_done("case-recent")
+        await pilot.pause()
+        assert app.query_one(TabbedContent).active == "cases"
+
+
 def test_the_header_count_stays_within_the_table_width() -> None:
     from trace_core.tui.theme import header_with_count
 
@@ -671,7 +771,7 @@ async def test_the_anchor_command_verifies_a_file_and_reports_the_verdict(
     notices: list[tuple[str, dict]] = []
     async with app.run_test(size=(120, 32)) as pilot:
         monkeypatch.setattr(app, "notify", lambda message, **kwargs: notices.append((message, kwargs)))
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         app.query_one(AuditView).run_command("audit-anchor")
         await pilot.pause()
@@ -694,7 +794,7 @@ async def test_audit_export_opens_a_three_way_chooser(session_manager: DatabaseS
 
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 32)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         app.query_one(AuditView).action_export()
         await pilot.pause()
@@ -708,14 +808,14 @@ def test_raw_modal_pretty_prints_json_and_keeps_other_text() -> None:
     assert _pretty_json("not json") == "not json"
 
 
-def test_audit_hint_advertises_export_and_only_bound_keys() -> None:
+def test_audit_hint_points_to_commands_and_only_bound_keys() -> None:
     from textual.binding import Binding
 
     from trace_core.tui.app import TAB_HINTS
     from trace_core.tui.screens.audit import AuditView
 
     hint = TAB_HINTS["audit"]
-    assert "e Export" in hint
+    assert "Ctrl+P Commands" in hint
     bound = {str(b.key) for b in AuditView.BINDINGS if isinstance(b, Binding)} | {"q", "r", "enter"}
     advertised = {token for token in hint.split() if len(token) == 1 and token.isalpha()}
     assert not advertised - bound, f"hint advertises unbound keys: {advertised - bound}"
