@@ -246,6 +246,7 @@ def test_the_dossier_heading_is_linked_device(session_manager, device_file_env, 
     view = CasesView.__new__(CasesView)
     view._manager = session_manager
     view._device_cache = {}
+    view._imaging_cache = {}
 
     rendered: list[str] = []
     body = _Recorder(rendered)

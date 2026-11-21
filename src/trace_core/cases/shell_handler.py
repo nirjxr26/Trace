@@ -12,7 +12,7 @@ from trace_core.cases.dto import (
 )
 from trace_core.cases.renderers import render_case, render_case_detail, render_cases
 from trace_core.cases.service import CaseService
-from trace_core.core.cli.args import extract_flag_value, extract_int_flag, has_flag
+from trace_core.core.cli.args import extract_flag_value, extract_int_flag, extract_positional, has_flag
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.output import parse_output_format
 from trace_core.core.cli.registry import ShellContext
@@ -39,6 +39,10 @@ CASE_ACTIONS = [
     ("restore", "Restore archived case"),
     ("select", "Set active case context"),
     ("deselect", "Clear active case context"),
+    ("imaging", "List imaging operations"),
+    ("imaging-reserve", "Reserve an imaging operation"),
+    ("imaging-acquire", "Acquire a fixture file or physical device (--physical)"),
+    ("imaging-abandon", "Abandon an unresolved operation"),
 ]
 
 CASE_FLAGS = [
@@ -85,6 +89,8 @@ _CASE_VALUE_FLAGS = (
     "--desc",
     "--notes",
     "--tags",
+    "--source",
+    "--fixture-root",
 )
 
 
@@ -167,6 +173,14 @@ class CaseShellCommandHandler(BaseShellHandler):
             ("case close [<ID|NUM>]", "close case", "Seal & close (type number to confirm)"),
             ("case delete [<ID|NUM>] [--purge]", "delete case", "Archive (y/N) or purge (type number)"),
             ("case restore [<ID|NUM>]", "restore case", "Restore an archived case"),
+            ("case imaging [<ID|NUM>]", "imaging", "List imaging operations for a case"),
+            ("case imaging-reserve [<ID|NUM>]", "imaging-reserve", "Reserve an imaging operation"),
+            (
+                "case imaging-acquire [<ID|NUM>]",
+                "imaging-acquire",
+                "Acquire a fixture image for the newest reservation (--source PATH)",
+            ),
+            ("case imaging-abandon <UUID>", "imaging-abandon", "Abandon an unresolved imaging operation"),
             ("ls / sh / ed", "", "Short aliases for list / show / edit"),
         ]
 
@@ -191,7 +205,19 @@ class CaseShellCommandHandler(BaseShellHandler):
     def _complete_action_args(self, act: str, parts: list[str], text: str, ctx: ShellContext) -> list[Any]:
         if act == "list":
             return self._complete_list_args(parts, text, ctx)
-        if act in ("show", "select", "use", "edit", "review", "close", "delete", "restore"):
+        if act in (
+            "show",
+            "select",
+            "use",
+            "edit",
+            "review",
+            "close",
+            "delete",
+            "restore",
+            "imaging",
+            "imaging-reserve",
+            "imaging-acquire",
+        ):
             return self._complete_case_targets(act, parts, text, ctx)
         return []
 
@@ -317,6 +343,18 @@ class CaseShellCommandHandler(BaseShellHandler):
         if act == "restore":
             self._interactive_restore_case(service, args, ctx)
             return True
+        if act == "imaging":
+            self._interactive_list_imaging(service, args, ctx)
+            return True
+        if act == "imaging-reserve":
+            self._interactive_reserve_imaging(service, args, ctx)
+            return True
+        if act == "imaging-acquire":
+            self._interactive_acquire_imaging(service, args, ctx)
+            return True
+        if act == "imaging-abandon":
+            self._interactive_abandon_imaging(service, args)
+            return True
         if act in ("select", "use"):
             self._select_case(service, args, ctx)
             return True
@@ -328,6 +366,93 @@ class CaseShellCommandHandler(BaseShellHandler):
         return self.unknown_action(
             act, f"Action '{act}' is not valid for case commands. Type 'help' for available actions."
         )
+
+    def _interactive_list_imaging(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:
+        from trace_core.imaging.service import ImagingService
+
+        ident = self._resolve_or_prompt_identifier(sub_args, ctx, "to list imaging")
+        with capture_cli_errors("Imaging Status", exit_on_error=False):
+            operations = ImagingService(service.session_manager).list_for_case(ident)
+            if parse_output_format(sub_args) == "json":
+                import json
+
+                console.print(json.dumps([operation.model_dump(mode="json") for operation in operations], indent=2))
+                return
+            if not operations:
+                console.print("[dim]No imaging operations recorded.[/dim]")
+                return
+            console.print("\n[bold]IMAGING[/bold]")
+            for operation in operations:
+                digest = (operation.acquisition_sha256 or "")[:12]
+                console.print(f"  {operation.id}  {operation.state.value}  {operation.copied_bytes or '-'}  {digest}")
+            console.print("[dim]PREPARING is a reservation, not a completed image.[/dim]\n")
+
+    def _interactive_reserve_imaging(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:
+        from trace_core.imaging.service import ImagingService
+
+        ident = self._resolve_or_prompt_identifier(sub_args, ctx, "to reserve imaging")
+        if not prompt_confirm(f"Reserve an imaging operation for case '{ident}'?"):
+            print_cancelled("Reservation")
+            return
+        with capture_cli_errors("Imaging Reservation", exit_on_error=False):
+            operation = ImagingService(service.session_manager).reserve(ident)
+            render_success(f"Imaging reservation {operation.id} created.")
+            console.print("[dim]Reservation only; no image acquired.[/dim]")
+
+    def _interactive_acquire_imaging(self, service: CaseService, sub_args: list[str], ctx: ShellContext) -> None:
+        from trace_core.imaging.domain import ImagingState
+        from trace_core.imaging.service import ImagingService
+
+        ident = self._resolve_or_prompt_identifier(sub_args, ctx, "to acquire an image")
+        source = extract_flag_value(sub_args, "--source") or Prompt.ask(
+            f"\n[{THEME_TOKENS['section_title']}]Source path or device node[/{THEME_TOKENS['section_title']}]"
+        )
+        source = source.strip()
+        if not source:
+            print_cancelled("Acquisition")
+            return
+        with capture_cli_errors("Imaging Acquisition", exit_on_error=False):
+            imaging = ImagingService(service.session_manager)
+            preparing = [
+                operation for operation in imaging.list_for_case(ident) if operation.state is ImagingState.PREPARING
+            ]
+            if not preparing:
+                console.print("[dim]No preparing imaging reservation for this case.[/dim]")
+                return
+            operation = imaging.acquire(
+                preparing[0].id,
+                source,
+                fixture_root=extract_flag_value(sub_args, "--fixture-root"),
+                allow_real_hardware="--physical" in sub_args,
+            )
+            render_success(f"Image byte-verified for operation {operation.id}.")
+            console.print(f"  SHA-256   {operation.acquisition_sha256}")
+            console.print(f"  Bytes     {operation.copied_bytes}")
+            console.print(f"  Image     {operation.image_relpath}")
+            console.print(f"  Manifest  {operation.manifest_relpath}")
+
+    def _interactive_abandon_imaging(self, service: CaseService, sub_args: list[str]) -> None:
+        from uuid import UUID
+
+        from trace_core.core.errors import ValidationError
+        from trace_core.imaging.service import ImagingService
+
+        positional = extract_positional(sub_args)
+        raw = (
+            positional[0]
+            if positional
+            else Prompt.ask(f"\n[{THEME_TOKENS['section_title']}]Operation UUID[/{THEME_TOKENS['section_title']}]")
+        )
+        try:
+            operation_id = UUID(raw.strip())
+        except ValueError as exc:
+            raise ValidationError("Invalid imaging operation UUID.") from exc
+        if not prompt_confirm(f"Abandon imaging operation {operation_id}?"):
+            print_cancelled("Abandon")
+            return
+        with capture_cli_errors("Imaging Abandon", exit_on_error=False):
+            ImagingService(service.session_manager).abandon(operation_id)
+            render_success("Imaging operation abandoned.")
 
     def _resolve_target_identifier(self, sub_args: list[str], ctx: ShellContext) -> str | None:
         from trace_core.core.cli.args import extract_positional

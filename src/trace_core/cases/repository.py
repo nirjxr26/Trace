@@ -3,7 +3,7 @@
 import uuid
 from typing import Protocol
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -49,6 +49,16 @@ class SqlAlchemyCaseRepository(SqlAlchemyBaseRepository[CaseModel, Case, uuid.UU
 
     def __init__(self, session: Session):
         super().__init__(session=session, model_cls=CaseModel)
+
+    def lock_for_imaging(self, case_id: uuid.UUID) -> Case | None:
+        statement = (
+            update(CaseModel)
+            .where(CaseModel.id == case_id)
+            .values(version=CaseModel.version, updated_at=CaseModel.updated_at)
+        )
+        self.session.execute(statement)
+        self.session.expire_all()
+        return self.get_by_id(case_id)
 
     def _to_domain(self, model: CaseModel) -> Case:
         return Case(

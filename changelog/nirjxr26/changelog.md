@@ -5325,3 +5325,48 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Summary: version bumped to 0.3.6 - `pyproject.toml`, `src/trace_core/__init__.py`, `src/trace_core/core/settings.py`, the `trace` package entry in `uv.lock`, and the README headline and install-command pins (`v0.3.6`). No code changed.
 - Files: pyproject.toml, uv.lock, README.md, src/trace_core/__init__.py, src/trace_core/core/settings.py, changelog/nirjxr26/changelog.md.
 - Verification: `uv lock --check` exit 0 after re-pin (single `trace` version line 0.3.5 -> 0.3.6 in the re-pin diff); `git diff --check` clean. No tests ran: no code changed, but the full gate was green on this tree at 0.3.5 before the bump. Nothing pushed.
+
+## 2026-11-19
+- Summary: Began the internal imaging stream with bounded copying and SHA-256 over confirmed writes. Updated agent rules, with owner approval, for the current vendored Ponytail skill and approved imaging abstractions. This is not a complete acquisition workflow.
+- Files: AGENTS.md, src/trace_core/imaging/__init__.py, src/trace_core/imaging/stream.py, tests/unit/test_imaging_stream.py, changelog/nirjxr26/changelog.md.
+- Verification: `python -m pytest tests/unit/test_imaging_stream.py -q` (11 passed); `ruff check .` (passed); `ruff format --check .` (passed); `mypy src tests` (passed). Full suite and physical hardware unverified.
+
+## 2026-11-19
+- Summary: Added bounded image read-back verification against the expected byte count and acquisition-stream SHA-256. This internal function does not enable physical acquisition.
+- Files: src/trace_core/imaging/stream.py, tests/unit/test_imaging_stream.py, changelog/nirjxr26/changelog.md.
+- Verification: `python -m pytest tests/unit/test_imaging_stream.py -q` (19 passed); `ruff check .` (passed); `ruff format --check .` (passed); `mypy src tests` (passed). Full suite and physical hardware unverified.
+
+## 2026-11-19
+- Summary: Added real-file fixture tests for bounded copy, file flush, fresh-handle read-back, and exclusive image creation. This does not enable physical acquisition.
+- Files: tests/unit/test_imaging_stream.py, changelog/nirjxr26/changelog.md.
+- Verification: `python -m pytest tests/unit/test_imaging_stream.py -q` (21 passed); `ruff check .` (passed); `ruff format --check .` (passed); `mypy src tests` (passed). Full suite and physical hardware unverified.
+
+## 2026-11-19
+- Summary: Added imaging lifecycle transition rules and required matching byte counts and SHA-256 digests for a byte-verified transition. Service integration, filesystem durability, and transactional audit remain unimplemented.
+- Files: src/trace_core/imaging/domain.py, tests/unit/test_imaging_domain.py, changelog/nirjxr26/changelog.md.
+- Verification: `python -m pytest tests/unit/test_imaging_domain.py tests/unit/test_imaging_stream.py -q` (79 passed); `ruff check .` (passed); `ruff format --check .` (passed); `mypy src tests` (passed). Full suite, PostgreSQL write tests, and physical hardware unverified.
+
+## 2026-11-19
+- Summary: Reject incomplete non-blocking reads rather than treating them as EOF during imaging copy or verification, preventing an incomplete empty-image read from passing verification.
+- Files: src/trace_core/imaging/stream.py, tests/unit/test_imaging_stream.py, changelog/nirjxr26/changelog.md.
+- Verification: `python -m pytest tests/unit/test_imaging_stream.py tests/unit/test_imaging_domain.py -q` (81 passed); `ruff check .` (passed); `ruff format --check .` (passed); `mypy src tests` (passed). Full suite and physical hardware unverified.
+
+## 2026-11-19
+- Summary: Prevented an explicit imaging source path from selecting a different fixture with the same basename. Bare fixture names remain supported.
+- Files: src/trace_core/imaging/service.py, tests/unit/test_imaging_acquisition.py, changelog/nirjxr26/changelog.md.
+- Verification: The imaging test suite passed 120 tests before this change; `python -m pytest tests/unit/test_imaging_acquisition.py -q` passed 9 tests after it. `.\check-pr.ps1` passed formatting, lint, and mypy; pytest reported 1627 passed and 21 skipped, but the gate failed during coverage aggregation with `attempt to write a readonly database` on `.coverage`. Cause unverified; coverage and the full gate are not verified. `git diff --check` passed.
+
+## 2026-11-21
+- Summary: Made the local gate use a fresh temporary coverage data file per run and clean stale root coverage files, preventing cross-run coverage database contamination without changing the 70% threshold. Hardened Windows ACL test helpers to probe for a usable PowerShell and use a clean module path, because the installed `pwsh` app alias cannot be spawned from Python. Made the long-ledger TUI pagination assertion wait for the extended window instead of assuming one pause is enough. No product code changed.
+- Files: check-pr.ps1, tests/unit/test_security_regressions.py, tests/unit/test_audit_pagination.py, changelog/nirjxr26/changelog.md.
+- Verification: `.\check-pr.ps1` passed twice consecutively after the fix - each run reported 1627 passed, 21 skipped, coverage 82.27% then 82.26%, with Ruff format, Ruff lint and mypy strict green. Targeted checks: 3 ACL tests and the long-ledger TUI pagination test passed; lint clean on both changed Python test files. `git diff --check` passed. The exact original cause of the `.coverage` write error was not isolated; the fix removes stale and cross-run coverage database state from the gate. No tests were skipped or weakened and the 70% coverage threshold is unchanged.
+
+## 2026-11-21
+- Summary: Implemented physical-disk imaging through Trace itself, with explicit real-hardware opt-in via `case imaging-acquire --physical` and Cases TUI `G`. Added a block-device source reader, checkpoint/resume with source-identity and partial-size validation, progress callbacks in CLI/TUI, cancellation that keeps a resumable partial image, no-clobber publish with a portable copy fallback, destination-is-source guard, and manifest re-verification via `case imaging-verify` and TUI `V`. Fixture-file acquisition remains the default. No schema change or new dependency.
+- Files: src/trace_core/imaging/{service,source,destination,stream,domain,repository}.py, src/trace_core/cases/{commands,shell_handler}.py, src/trace_core/tui/{app,screens/cases}.py, tests/unit/test_imaging_physical.py, tests/unit/test_imaging_domain.py, changelog/nirjxr26/changelog.md.
+- Verification: final `.\check-pr.ps1` passed with 1637 passed, 21 skipped, coverage 81.73%, Ruff format (240 files), Ruff lint and mypy strict (236 files) green. Targeted physical/acquisition/UI tests and new tests in `tests/unit/test_imaging_physical.py` pass. A second review fixed a physical-handle leak on failed opens, added a portable no-clobber manifest publish fallback, stopped the TUI abandoning an operation while another worker owns it, and added recovery for `ACQUIRING`/`VERIFYING` states with a final checkpoint digest. Real hardware, bad-sector policy, throughput benchmarking and Raspberry Pi remain UNVERIFIED or unimplemented; physical paths were exercised with an injected device service over a regular file.
+
+## 2026-11-21
+- Summary: Production-hardened the RAW imaging format without changing the canonical image bytes. Manifest now records `format: RAW` and piecewise SHA-256 block hashes. Source read failures zero-fill the affected block and record a bad-region map in the manifest. Added sealed-image sidecars using streaming AES-256-GCM with PBKDF2-SHA256, passphrases only via hidden prompt or env, plus `case imaging-seal` and `case imaging-unseal` with decrypt-and-hash verification. Re-verification now checks piecewise hashes as well as the whole-image digest. Deep review also removed duplicate copy hashing, kept bad regions through cancel checkpoints, bounded sealed headers, and rolled back seal/unseal artifacts when audit commit fails.
+- Files: src/trace_core/imaging/{domain,stream,destination,vault,service}.py, src/trace_core/audit/domain.py, src/trace_core/cases/commands.py, tests/unit/test_imaging_physical.py, tests/unit/test_imaging_acquisition.py, changelog/nirjxr26/changelog.md.
+- Verification: final `.\check-pr.ps1` passed with 1643 passed, 21 skipped, coverage 81.69%, Ruff format (241 files), Ruff lint and mypy strict (237 files) green. 57 targeted imaging tests pass. Repeated deep review found and fixed all identified defects; no security gate was weakened and no new dependency was added. Physical hardware remains UNVERIFIED.

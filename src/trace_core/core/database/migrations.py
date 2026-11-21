@@ -1366,3 +1366,109 @@ def _migration_025_roles_resilient(bind: Engine | Connection) -> None:
     else:
         with bind.begin() as conn:
             _run_migration_025(conn)
+
+
+def _verify_026_imaging_operations(conn: Connection) -> bool:
+    table = "imaging_operations"
+    required = {"id", "case_id", "case_number", "state", "created_at", "created_by"}
+    return (
+        table in inspect(conn).get_table_names()
+        and required.issubset(_column_names(conn, table))
+        and _index_exists(conn, table, "ix_imaging_operations_case_id")
+        and _index_exists(conn, table, "ix_imaging_operations_case_number")
+    )
+
+
+@register_migration(
+    26,
+    "026_imaging_operations",
+    operations=(
+        _create_all(("imaging_operations",)),
+        "CREATE INDEX ix_imaging_operations_case_id on imaging_operations (case_id)",
+        "CREATE INDEX ix_imaging_operations_case_number on imaging_operations (case_number)",
+        "GRANT SELECT, INSERT, UPDATE ON imaging_operations TO trace_app if role exists",
+        "GRANT SELECT ON imaging_operations TO trace_reader if role exists",
+    ),
+    verify=_verify_026_imaging_operations,
+)
+def _migration_026_imaging_operations(bind: Engine | Connection) -> None:
+    from trace_core.imaging.models import ImagingOperationModel
+
+    table = Base.metadata.tables[ImagingOperationModel.__tablename__]
+    if isinstance(bind, Engine):
+        with bind.begin() as conn:
+            _create_imaging_operations(conn, table)
+    else:
+        _create_imaging_operations(bind, table)
+
+
+def _create_imaging_operations(conn: Connection, table: Table) -> None:
+    Base.metadata.create_all(bind=conn, tables=[table])
+    if conn.dialect.name != "postgresql":
+        return
+    roles = {
+        row[0]
+        for row in conn.execute(
+            text("SELECT rolname FROM pg_roles WHERE rolname IN (:app_role, :reader_role)"),
+            {"app_role": "trace_app", "reader_role": "trace_reader"},
+        )
+    }
+    if "trace_app" in roles:
+        conn.execute(text("GRANT SELECT, INSERT, UPDATE ON imaging_operations TO trace_app"))
+    if "trace_reader" in roles:
+        conn.execute(text("GRANT SELECT ON imaging_operations TO trace_reader"))
+
+
+_IMAGING_ACQUISITION_COLUMNS = (
+    ("updated_at", "ALTER TABLE imaging_operations ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE"),
+    ("source_node", "ALTER TABLE imaging_operations ADD COLUMN source_node VARCHAR(4096)"),
+    ("source_kind", "ALTER TABLE imaging_operations ADD COLUMN source_kind VARCHAR(16)"),
+    ("source_serial", "ALTER TABLE imaging_operations ADD COLUMN source_serial VARCHAR(512)"),
+    ("source_model", "ALTER TABLE imaging_operations ADD COLUMN source_model VARCHAR(512)"),
+    ("source_size_bytes", "ALTER TABLE imaging_operations ADD COLUMN source_size_bytes BIGINT"),
+    ("source_protection", "ALTER TABLE imaging_operations ADD COLUMN source_protection VARCHAR(16)"),
+    ("source_adapter", "ALTER TABLE imaging_operations ADD COLUMN source_adapter VARCHAR(64)"),
+    ("source_inspected_at", "ALTER TABLE imaging_operations ADD COLUMN source_inspected_at TIMESTAMP WITH TIME ZONE"),
+    ("expected_bytes", "ALTER TABLE imaging_operations ADD COLUMN expected_bytes BIGINT"),
+    ("copied_bytes", "ALTER TABLE imaging_operations ADD COLUMN copied_bytes BIGINT"),
+    ("acquisition_sha256", "ALTER TABLE imaging_operations ADD COLUMN acquisition_sha256 VARCHAR(64)"),
+    ("readback_sha256", "ALTER TABLE imaging_operations ADD COLUMN readback_sha256 VARCHAR(64)"),
+    ("image_relpath", "ALTER TABLE imaging_operations ADD COLUMN image_relpath VARCHAR(1024)"),
+    ("manifest_relpath", "ALTER TABLE imaging_operations ADD COLUMN manifest_relpath VARCHAR(1024)"),
+    ("failure_category", "ALTER TABLE imaging_operations ADD COLUMN failure_category VARCHAR(64)"),
+    ("started_at", "ALTER TABLE imaging_operations ADD COLUMN started_at TIMESTAMP WITH TIME ZONE"),
+    ("finished_at", "ALTER TABLE imaging_operations ADD COLUMN finished_at TIMESTAMP WITH TIME ZONE"),
+)
+
+
+def _verify_027_imaging_acquisition(conn: Connection) -> bool:
+    table = "imaging_operations"
+    required = {name for name, _ in _IMAGING_ACQUISITION_COLUMNS}
+    return (
+        table in inspect(conn).get_table_names()
+        and required.issubset(_column_names(conn, table))
+        and _index_exists(conn, table, "ix_imaging_operations_state")
+    )
+
+
+@register_migration(
+    27,
+    "027_imaging_acquisition",
+    operations=tuple(ddl for _, ddl in _IMAGING_ACQUISITION_COLUMNS)
+    + ("CREATE INDEX IF NOT EXISTS ix_imaging_operations_state on imaging_operations (state)",),
+    verify=_verify_027_imaging_acquisition,
+)
+def _migration_027_imaging_acquisition(bind: Engine | Connection) -> None:
+    if isinstance(bind, Engine):
+        with bind.begin() as conn:
+            _run_migration_027(conn)
+    else:
+        _run_migration_027(bind)
+
+
+def _run_migration_027(conn: Connection) -> None:
+    if "imaging_operations" not in inspect(conn).get_table_names():
+        return
+    for column, ddl in _IMAGING_ACQUISITION_COLUMNS:
+        _ensure_column(conn, "imaging_operations", column, ddl)
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_imaging_operations_state on imaging_operations (state)"))

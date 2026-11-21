@@ -341,6 +341,15 @@ async def _wait_scrollable(pilot: Any, table: DataTable, tries: int = 40) -> Non
     assert table.max_scroll_y > 0
 
 
+async def _wait_rows(pilot: Any, table: DataTable, count: int, tries: int = 40) -> None:
+    await pilot.pause()
+    for _ in range(tries):
+        if table.row_count == count:
+            return
+        await pilot.pause()
+    assert table.row_count == count
+
+
 @pytest.mark.unit
 @pytest.mark.anyio
 async def test_audit_view_pages_back_through_every_event(
@@ -351,8 +360,7 @@ async def test_audit_view_pages_back_through_every_event(
         await pilot.pause()
         with _selects(session_manager) as seen:
             table.move_cursor(row=table.row_count - 1)
-            await pilot.pause()
-            assert table.row_count == len(seqs)
+            await _wait_rows(pilot, table, len(seqs))
             keyset = [s for s in seen if "payload_json" not in s and "seq < " in s]
             assert len(keyset) == 1
             detail = [s for s in seen if "payload_json" in s]
@@ -360,8 +368,7 @@ async def test_audit_view_pages_back_through_every_event(
 
             for _ in range(5):
                 await pilot.press("down")
-            await pilot.pause()
-            assert table.row_count == len(seqs)
+            await _wait_rows(pilot, table, len(seqs))
             assert len([s for s in seen if "seq < " in s]) == 1
             assert len([s for s in seen if "payload_json" in s]) == 6
 
@@ -591,6 +598,15 @@ def test_every_event_label_is_short_and_readable() -> None:
         "DEVICE_LINKED": "Device Linked",
         "DEVICE_UNLINKED": "Device Unlinked",
         "DEVICE_RECOGNIZED": "Device Recognized",
+        "IMAGING_RESERVED": "Imaging Reserved",
+        "IMAGING_ABANDONED": "Imaging Abandoned",
+        "IMAGING_STARTED": "Imaging Started",
+        "IMAGING_VERIFYING": "Imaging Verifying",
+        "IMAGING_COMPLETED": "Imaging Completed",
+        "IMAGING_FAILED": "Imaging Failed",
+        "IMAGING_QUARANTINED": "Imaging Quarantined",
+        "IMAGING_SEALED": "Imaging Sealed",
+        "IMAGING_UNSEALED": "Imaging Unsealed",
         "UPDATE_POLICY_OVERRIDE": "Policy Override",
     }
     for action in AuditAction:
