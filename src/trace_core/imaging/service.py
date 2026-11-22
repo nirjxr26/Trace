@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from collections.abc import Callable
@@ -65,7 +66,7 @@ from trace_core.imaging.domain import (
 )
 from trace_core.imaging.repository import SqlAlchemyImagingRepository
 from trace_core.imaging.source import SourceReader, open_source
-from trace_core.imaging.stream import PIECE_SIZE, copy_raw_with_regions, hash_stream
+from trace_core.imaging.stream import CHUNK_SIZE, PIECE_SIZE, copy_raw_with_regions, hash_stream
 from trace_core.imaging.vault import ALGORITHM, open_sealed, seal_file
 from trace_core.updates.lock import update_lock
 
@@ -77,6 +78,7 @@ _FAILED_STATES = {
 }
 _CHECKPOINT_BYTES = 64 * 1024 * 1024
 Progress = Callable[[int, int], None]
+CheckpointProgress = Callable[[int, int, str], None]
 Cancelled = Callable[[], bool]
 
 
@@ -160,6 +162,10 @@ class ImagingService(BaseService):
             expected_sha256 = payload.get("acquisition_sha256")
             if not isinstance(expected_bytes, int) or not isinstance(expected_sha256, str):
                 raise ImagingDestinationError("The imaging manifest is malformed.")
+            if operation.expected_bytes is None or operation.acquisition_sha256 is None:
+                raise ImagingDestinationError("The operation has no recorded image digest.")
+            if expected_bytes != operation.expected_bytes or expected_sha256 != operation.acquisition_sha256:
+                raise ImagingDestinationError("The manifest does not match the recorded imaging operation.")
             verified, pieces = verify_image_with_pieces(image_path, expected_bytes, expected_sha256)
             if not self._manifest_matches(payload, expected_bytes, expected_sha256, pieces):
                 verified = False
@@ -340,7 +346,7 @@ class ImagingService(BaseService):
                 claimed = self._claim(operation, source, paths)
                 return self._finish_copy(claimed, source, source_stat, paths, 0, progress, cancelled)
             if operation.state is ImagingState.INTERRUPTED:
-                offset = self._resume_offset(operation, paths)
+                offset, _, _ = self._acquiring_state(operation, paths)
                 claimed = self._resume_claim(operation, now_utc())
                 return self._finish_copy(claimed, source, source_stat, paths, offset, progress, cancelled)
             if operation.state is ImagingState.ACQUIRING:
@@ -525,20 +531,19 @@ class ImagingService(BaseService):
             raise ImagingDestinationError("The partial image does not match the resume checkpoint.")
         return payload
 
-    def _resume_offset(self, operation: ImagingOperation, paths: tuple) -> int:
-        offset = self._checkpoint_payload(operation, paths).get("offset")
-        if not isinstance(offset, int):
-            raise ImagingDestinationError("The resume checkpoint has an invalid offset.")
-        return offset
-
     def _acquiring_state(
         self, operation: ImagingOperation, paths: tuple
     ) -> tuple[int, str, tuple[ImagingBadRegion, ...]]:
         payload = self._checkpoint_payload(operation, paths)
         offset = payload.get("offset")
         digest = payload.get("digest")
-        if not isinstance(offset, int) or not isinstance(digest, str):
+        if not isinstance(offset, int) or not isinstance(digest, str) or len(digest) != 64:
             raise ImagingDestinationError("The checkpoint has no completed-copy digest.")
+        partial = paths[1]
+        if not partial.is_file() or partial.stat().st_size != offset:
+            raise ImagingDestinationError("The partial image does not match the resume checkpoint.")
+        if self._partial_digest(partial) != digest:
+            raise ImagingDestinationError("The partial image does not match the resume checkpoint.")
         return offset, digest, self._bad_regions_from_payload(payload)
 
     @staticmethod
@@ -568,6 +573,10 @@ class ImagingService(BaseService):
             case = cases.lock_for_imaging(operation.case_id)
             if case is None:
                 raise CaseNotFoundError(operation.case_number)
+            try:
+                require_eligible_case(case.status, case.is_deleted)
+            except ImagingTransitionError as exc:
+                raise InvalidCaseStateError(str(exc)) from exc
             imaging = SqlAlchemyImagingRepository(uow.session)
             claimed = imaging.resume_claim(operation.id, started_at)
             if claimed is None:
@@ -603,10 +612,12 @@ class ImagingService(BaseService):
         reader = open_source(source, source_stat)
         prior_regions = self._bad_regions_from_payload(read_checkpoint(checkpoint) or {}) if offset else ()
         live_regions = list(prior_regions)
+        initial_digest = self._acquiring_state(operation, paths)[1] if offset else ""
         resume_progress, resume_cancelled = self._checkpoint_callbacks(
-            operation, source, checkpoint, offset, progress, cancelled, live_regions
+            operation, source, checkpoint, offset, progress, cancelled, live_regions, initial_digest
         )
 
+        hasher = hashlib.sha256()
         try:
             ensure_dir(case_dir.parent)
             if offset == 0:
@@ -620,6 +631,16 @@ class ImagingService(BaseService):
             else:
                 if not case_dir.is_dir() or not partial.is_file():
                     raise ImagingDestinationError("The partial image disappeared before resume.")
+                remaining = offset
+                with partial.open("rb") as handle:
+                    while remaining > 0:
+                        chunk = handle.read(min(CHUNK_SIZE, remaining))
+                        if not chunk:
+                            raise ImagingDestinationError("The partial image does not match the resume checkpoint.")
+                        hasher.update(chunk)
+                        remaining -= len(chunk)
+                if hasher.hexdigest() != initial_digest:
+                    raise ImagingDestinationError("The partial image does not match the resume checkpoint.")
                 writer = append_partial(partial)
             reader.open(offset)
             self._guard_destination(partial, source)
@@ -628,7 +649,8 @@ class ImagingService(BaseService):
                 writer,
                 operation.expected_bytes or 0,
                 offset=offset,
-                progress=resume_progress,
+                progress_with_digest=resume_progress,
+                digest=hasher,
                 cancelled=resume_cancelled,
                 on_bad_region=live_regions.append,
             )
@@ -640,7 +662,7 @@ class ImagingService(BaseService):
             reader.close()
             if source.synthetic and not new_regions and source.serial != f"SYNTH-{stream_digest[:32]}" and offset == 0:
                 raise ImagingSourceChangedError("The fixture source no longer matches its preflight identity.")
-            digest = stream_digest if offset == 0 else self._partial_digest(partial)
+            digest = stream_digest
             bad_regions = tuple(live_regions)
             write_checkpoint(
                 checkpoint,
@@ -676,11 +698,15 @@ class ImagingService(BaseService):
         progress: Progress | None,
         cancelled: Cancelled | None,
         bad_regions: list[ImagingBadRegion] | None = None,
-    ) -> tuple[Progress, Cancelled]:
+        digest: str = "",
+    ) -> tuple[CheckpointProgress, Cancelled]:
         position = {"bytes": offset}
+        digest_state = {"value": digest}
         regions = bad_regions if bad_regions is not None else []
 
         def _write_checkpoint() -> None:
+            if not digest_state["value"]:
+                return
             write_checkpoint(
                 checkpoint,
                 {
@@ -688,13 +714,15 @@ class ImagingService(BaseService):
                     "expected_bytes": operation.expected_bytes or 0,
                     "source_serial": source.serial,
                     "source_node": source.node,
+                    "digest": digest_state["value"],
                     "bad_regions": [region.model_dump() for region in regions],
                     "tool_version": settings.version,
                 },
             )
 
-        def _progress(done: int, total: int) -> None:
+        def _progress(done: int, total: int, running_digest: str) -> None:
             position["bytes"] = done
+            digest_state["value"] = running_digest
             if done - offset >= _CHECKPOINT_BYTES and done % _CHECKPOINT_BYTES == 0:
                 _write_checkpoint()
             if progress is not None:

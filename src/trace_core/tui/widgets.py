@@ -36,6 +36,8 @@ class DossierScroll(VerticalScroll):
             width = self.scrollable_content_region.width
         except Exception:
             width = 60
+        if width < 20:
+            width = 66
         return rule_width(width, 66)
 
     def divider(self) -> Text:

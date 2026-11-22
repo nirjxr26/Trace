@@ -10,19 +10,21 @@ from collections.abc import Callable
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
 from textual.events import Resize
 from textual.timer import Timer
-from textual.widgets import DataTable, Input, Rule, Static
+from textual.widgets import DataTable, Input, Static
 from textual.worker import Worker
 
 from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.ui.renderers import format_india_datetime, sanitize_terminal
 from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
 from trace_core.devices.dto import DeviceInfoDto, InspectionDto, ObservationDto, WpCheckDto
-from trace_core.devices.renderers import display_node, format_bytes, readable_model, verdict_style
+from trace_core.devices.renderers import display_node, format_bytes, readable_model
 from trace_core.tui.actions import confirm_overwrite, run_guarded
-from trace_core.tui.widgets import DossierScroll, TablePane, active_tab
+from trace_core.tui.design.text import NO_SELECTION_DEVICE, kv_row, section_head
+from trace_core.tui.design.tokens import LABEL_MD
+from trace_core.tui.design.widgets import ListDetailPane, sync_detail_width, unknown_command
+from trace_core.tui.widgets import TablePane, active_tab
 
 TABLE_ID = "device-table"
 DEVICE_HEADER_ID = "device-header"
@@ -31,7 +33,14 @@ DEVICE_SUMMARY_ID = "device-summary"
 TABLE_COLUMNS = (("Device", 15), ("Size", 9))
 MAX_PICKER_ROWS = 200
 POLL_SECONDS = 1.0
-SELECT_DEVICE_FIRST = "Select a device first."
+SELECT_DEVICE_FIRST = NO_SELECTION_DEVICE
+
+
+def _device_prompt(prefix: str, node: str, suffix: str) -> Text:
+    prompt = Text(prefix)
+    prompt.append(sanitize_terminal(node), style=THEME_HEX["blue"])
+    prompt.append(suffix)
+    return prompt
 
 
 def _display_name(device: DeviceInfoDto) -> str:
@@ -97,15 +106,18 @@ class DevicesView(TablePane[DeviceInfoDto]):
         super().on_unmount()
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="device-main"):
-            with Vertical(id="device-left"):
-                yield Input(placeholder="Search node or model...", id="device-search")
-                yield Static("", id=DEVICE_SUMMARY_ID, classes="muted")
-                yield Static("", id=DEVICE_HEADER_ID, classes="table-head")
-                yield Rule()
-                yield DataTable(id=TABLE_ID, cursor_type="row", show_header=False)
-            with DossierScroll(id="device-right"):
-                yield Static("Select a device…", id=DEVICE_DETAIL_ID)
+        yield ListDetailPane(
+            top_id="device-main",
+            left_id="device-left",
+            right_id="device-right",
+            detail_id=DEVICE_DETAIL_ID,
+            detail_text="Select a device…",
+            search_id="device-search",
+            search_placeholder="Search node or model...",
+            header_id=DEVICE_HEADER_ID,
+            table_factory=lambda: DataTable(id=TABLE_ID, cursor_type="row", show_header=False, classes="pane-table"),
+            left_extra=(Static("", id=DEVICE_SUMMARY_ID, classes="muted"),),
+        )
 
     def activate(self) -> None:
         self._refresh_if_changed()
@@ -226,10 +238,8 @@ class DevicesView(TablePane[DeviceInfoDto]):
 
     def on_resize(self, event: Resize) -> None:
         """Dividers are baked for one width; rebuild them when the width moves."""
-        width = self.query_one("#device-right", DossierScroll).content_region.width
-        if width == self._detail_width:
+        if not sync_detail_width(self, "device-right"):
             return
-        self._detail_width = width
         self.render_detail()
 
     def render_detail(self) -> None:
@@ -241,36 +251,37 @@ class DevicesView(TablePane[DeviceInfoDto]):
                 detail_placeholder(bool(self._items), "No devices visible to this adapter.")
             )
             return
-        pane = self.query_one("#device-right", DossierScroll)
         body = Text()
+        device_type = "Physical device" if device.requires_real_hardware_opt_in else "Image-backed device"
+        capacity = format_bytes(device.size_bytes) if device.size_bytes is not None else "—"
         body.append(f"{sanitize_terminal(_display_name(device))}\n", style=THEME_TOKENS["accent"])
-        body.append(pane.divider())
-        body.append("\n")
-        body.append("Node       ", style="dim")
-        body.append(f"{sanitize_terminal(device.node)}\n")
-        body.append("Kind       ", style="dim")
-        body.append(f"{device.kind.value}\n")
-        body.append("Size       ", style="dim")
-        body.append(f"{sanitize_terminal(format_bytes(device.size_bytes))}\n")
-        body.append("Model      ", style="dim")
-        body.append(f"{sanitize_terminal(device.model_hint or '-')}\n")
-        body.append("Hardware   ", style="dim")
-        body.append(
-            "real device - access needs confirming\n"
-            if device.requires_real_hardware_opt_in
-            else "emulated or image-backed\n"
-        )
-        if self._inspected is not None and self._inspected.device.node == device.node:
-            body.append(pane.divider())
-            body.append("\nIDENTITY\n", style=THEME_TOKENS["accent"])
-            self._append_fingerprint(body)
-        self._append_cases(body, pane, device.node)
-        self._append_history(body, pane)
+        body.append(f"{device_type} · {capacity}\n", style="dim")
+        section_head(body, "DEVICE DETAILS")
+        self._dossier_row(body, "Node", device.node)
+        self._dossier_row(body, "Access", "Not confirmed" if device.requires_real_hardware_opt_in else "Confirmed")
+        section_head(body, "IDENTITY")
+        self._append_fingerprint(body, device)
+        section_head(body, "LINKED CASES")
+        cases = self._cases_for(device.node)
+        if cases:
+            for number in cases:
+                body.append(f"  {sanitize_terminal(number)}  Current\n", style=THEME_HEX["value"])
+        else:
+            body.append("  No linked cases.\n", style="dim")
+        section_head(body, "IMAGING")
+        self._append_imaging(body, device.node)
+        body.append(f"\nINSPECTION HISTORY · {len(self._history)}\n", style=THEME_TOKENS["accent"])
+        self._append_history(body)
         if self._gate is not None and self._gate_node == device.node:
-            body.append(pane.divider())
-            body.append("\nWRITE PROTECTION\n", style=THEME_TOKENS["accent"])
+            section_head(body, "WRITE PROTECTION")
             self._append_gate(body)
+        section_head(body, "AUDIT REFERENCES")
+        self._append_audit_refs(body, device)
         self.query_one(f"#{DEVICE_DETAIL_ID}", Static).update(body)
+
+    @staticmethod
+    def _dossier_row(body: Text, label: str, value: str) -> None:
+        kv_row(body, label, value, LABEL_MD)
 
     def _refresh_node(self, node: str) -> None:
         """Drop one node's cached cases and repaint. Every mutation that can change which
@@ -292,67 +303,100 @@ class DevicesView(TablePane[DeviceInfoDto]):
         self._cases_cache[node] = cases
         return cases
 
-    def _append_fingerprint(self, body: Text) -> None:
+    def _append_fingerprint(self, body: Text, device: DeviceInfoDto) -> None:
         inspection = self._inspected
-        if inspection is None:
+        if inspection is not None and inspection.device.node == device.node:
+            fingerprint = inspection.fingerprint
+            serial = fingerprint.serial
+            interface = fingerprint.interface.value
+            adapter = fingerprint.source
+            firmware = fingerprint.firmware or ""
+            wwn = fingerprint.wwn or ""
+            observed = format_india_datetime(inspection.inspected_at)
+        else:
+            serial = device.serial or ""
+            interface = ""
+            adapter = ""
+            firmware = ""
+            wwn = ""
+            observed = ""
+        self._dossier_row(body, "Serial", serial)
+        self._dossier_row(body, "Interface", interface)
+        self._dossier_row(body, "Adapter", adapter)
+        if firmware:
+            self._dossier_row(body, "Firmware", firmware)
+        if wwn:
+            self._dossier_row(body, "WWN", wwn)
+        self._dossier_row(body, "Observed", observed)
+
+    def _append_imaging(self, body: Text, node: str) -> None:
+        from trace_core.imaging.service import ImagingService
+
+        try:
+            operations = [op for op in ImagingService(self._manager).list_recent(50) if op.source_node == node]
+        except Exception:
+            body.append("  Imaging records unavailable.\n", style="dim")
             return
-        fingerprint = inspection.fingerprint
-        body.append("Serial     ", style="dim")
-        body.append(f"{sanitize_terminal(fingerprint.serial)}\n")
-        body.append("Interface  ", style="dim")
-        body.append(f"{fingerprint.interface.value}\n")
-        body.append("Source     ", style="dim")
-        body.append(f"{fingerprint.source}\n")
-        body.append("Firmware   ", style="dim")
-        body.append(f"{sanitize_terminal(fingerprint.firmware or '-')}\n")
-        body.append("WWN        ", style="dim")
-        body.append(f"{sanitize_terminal(fingerprint.wwn or '-')}\n")
-        body.append("Observed   ", style="dim")
-        body.append(f"{format_india_datetime(inspection.inspected_at)}\n")
+        if not operations:
+            body.append("  No imaging operations recorded.\n", style="dim")
+            return
+        for operation in operations[:2]:
+            state = operation.state.value.replace("_", " ").title()
+            copied = format_bytes(operation.copied_bytes) if operation.copied_bytes is not None else "—"
+            digest = (operation.acquisition_sha256 or "")[:12]
+            line = f"  {state} · {copied}"
+            if digest:
+                line += f" · SHA-256 {digest}…"
+            body.append(f"{line}\n")
+            self._dossier_row(body, "Operation", str(operation.id))
 
     def _append_gate(self, body: Text) -> None:
         gate = self._gate
         if gate is None:
             return
-        _, style = verdict_style(gate.verdict.value)
-        body.append("Verdict    ", style="dim")
-        body.append(f"{gate.verdict.value}\n", style=style)
+        verdict = {
+            "READ_ONLY": "Software read-only",
+            "WRITABLE": "Writable",
+            "UNKNOWN": "Unknown",
+        }.get(gate.verdict.value, gate.verdict.value.replace("_", " ").title())
+        self._dossier_row(body, "Verdict", verdict)
+        self._dossier_row(body, "Checked", format_india_datetime(gate.checked_at))
+        platform = "simulated" if gate.platform == "fake" else gate.platform
+        self._dossier_row(body, "Platform", f"{platform} / {gate.adapter_version}")
         if gate.unknown_cause:
-            body.append("Cause      ", style="dim")
-            body.append(f"{sanitize_terminal(gate.unknown_cause)}\n")
-        body.append("Timestamp  ", style="dim")
-        body.append(f"{format_india_datetime(gate.checked_at)}\n")
-        body.append("Platform   ", style="dim")
-        source = "simulated" if gate.platform == "fake" else gate.platform
-        body.append(f"{sanitize_terminal(source)} / {sanitize_terminal(gate.adapter_version)}\n")
-        body.append("\nEvidence\n")
+            self._dossier_row(body, "Cause", gate.unknown_cause)
+        section_head(body, "CHECK RESULTS")
         for check in gate.checks:
-            body.append(f"  {sanitize_terminal(check.name):<18}", style="dim")
-            body.append(f"{sanitize_terminal(check.result)}")
-            if check.detail:
-                body.append(f"  {sanitize_terminal(check.detail)}")
-            body.append("\n")
+            body.append(f"  {sanitize_terminal(check.name):<20}", style="dim")
+            body.append(f"{sanitize_terminal(check.result)}\n")
+        self._dossier_row(body, "Hardware gate", "Not verified")
 
-    def _append_cases(self, body: Text, pane: DossierScroll, node: str) -> None:
-        cases = self._cases_for(node)
-        if not cases:
-            return
-        body.append(pane.divider())
-        body.append("\nCASES\n", style=THEME_TOKENS["accent"])
-        for number in cases:
-            body.append(f"  {sanitize_terminal(number)}\n", style=THEME_HEX["value"])
-
-    def _append_history(self, body: Text, pane: DossierScroll) -> None:
+    def _append_history(self, body: Text) -> None:
         if not self._history:
+            body.append("  No inspections recorded.\n", style="dim")
             return
-        body.append(pane.divider())
-        body.append(f"\nHISTORY · {len(self._history)}\n", style=THEME_TOKENS["accent"])
         for row in self._history:
-            verdict = row.verdict.value if row.verdict else "-"
+            action = "Read-only Checked" if row.verdict is not None else "Device Inspected"
             body.append(
-                f"  {format_india_datetime(row.inspected_at)}  {sanitize_terminal(verdict)}"
-                f"  {sanitize_terminal(row.inspected_by)}\n"
+                f"  {format_india_datetime(row.inspected_at)}  {action}  {sanitize_terminal(row.inspected_by)}\n"
             )
+
+    def _append_audit_refs(self, body: Text, device: DeviceInfoDto) -> None:
+        from trace_core.audit.dto import AuditFilterDto
+        from trace_core.audit.service import AuditService
+
+        inspection = self._inspected
+        serial = (inspection.fingerprint.serial if inspection else "") or device.serial or ""
+        if not serial:
+            body.append("  No device serial recorded.\n", style="dim")
+            return
+        try:
+            events = AuditService(self._manager).list_events(AuditFilterDto(device_serial=serial, limit=3))
+        except Exception:
+            body.append("  Audit references unavailable.\n", style="dim")
+            return
+        for event in events:
+            body.append(f"  {event.action.value}  #{event.seq}\n", style="dim")
 
     def _selected_node(self) -> str | None:
         device = self._selected()
@@ -381,7 +425,7 @@ class DevicesView(TablePane[DeviceInfoDto]):
             then(False)
             return
         self.app.push_screen(
-            YesNoModal(f"Real hardware. Allow access to {sanitize_terminal(node)}?"),
+            YesNoModal(_device_prompt("Real hardware. Allow access to ", node, "?")),
             lambda answer: then(bool(answer)) if answer else self.app.notify("Cancelled.", severity="warning"),
         )
 
@@ -420,7 +464,7 @@ class DevicesView(TablePane[DeviceInfoDto]):
     def action_acknowledge(self) -> None:
         node = self._selected_node()
         if node is None:
-            self.app.notify("Select a device first.", severity="warning")
+            self.app.notify(SELECT_DEVICE_FIRST, severity="warning")
             return
         from trace_core.devices.helpers import OVERRIDE_TOKEN
         from trace_core.tui.forms import TextInputModal
@@ -509,7 +553,7 @@ class DevicesView(TablePane[DeviceInfoDto]):
         from trace_core.tui.forms import YesNoModal
 
         self.app.push_screen(
-            YesNoModal(f"Remove {sanitize_terminal(node)} from {case_number}?"),
+            YesNoModal(_device_prompt("Remove ", node, f" from {case_number}?")),
             lambda answer: self._unlinked(node, case_number, answer),
         )
 
@@ -544,7 +588,7 @@ class DevicesView(TablePane[DeviceInfoDto]):
         elif action == "export":
             self.action_export()
         else:
-            self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")
+            unknown_command(self, command)
 
     def _show_history(self) -> None:
         """Every prior observation of the selected device, newest first."""

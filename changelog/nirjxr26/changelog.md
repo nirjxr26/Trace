@@ -5390,3 +5390,268 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Summary: Palette search cursor no longer blinks, and its text starts at the same column as the command rows below it.
 - Files: src/trace_core/tui/palette.py, changelog/nirjxr26/changelog.md.
 - Verification: Ruff lint and mypy strict green on `palette.py`; 39 focused TUI tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-21
+- Summary: Restored the full Imaging dossier for UI inspection. It now shows case, status, live progress, source metadata, acquisition and read-back digests, timestamps, artifact paths, failure category, manifest fields, piecewise hashes, bad regions, encryption details and limitations. Operation ids remain hidden; the Cases-style dossier layout and third-tab placement are unchanged.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff format/lint and mypy strict green; 49 focused imaging/TUI tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-21
+- Summary: Imaging dossier no longer looks empty for a reservation. Every field is now rendered with a `—` placeholder when unset, including created/updated metadata, source, acquisition, artifacts and failure. Manifest status now appears under a `MANIFEST` section.
+- Files: src/trace_core/tui/screens/imaging.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 10 focused imaging tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-21
+- Summary: Added a labelled UI preview mode to the Imaging tab. `Ctrl+D` toggles a sample operation with realistic source, hash, piecewise, bad-region, encryption and limitation values, always under a visible `PREVIEW DATA — SAMPLE ONLY, NOT EVIDENCE` banner. Real operations are untouched and the mode is off by default.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff format/lint and mypy strict green; 11 focused imaging tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-21
+- Summary: Rebuilt the labelled preview dossier to the supplied six-section layout. Case Information, Source Evidence, Acquisition Details, Integrity Verification, Evidence Artifacts and Acquisition Exceptions now show only the agreed fields: Updated, Kind, Adapter, Inspected, duplicate hashes, manifest metadata, piece hashes and limitations are gone; Gate is renamed Write protection, sealed_relpath becomes Encrypted image, completion is computed from exact byte counts, and the non-validation caveat is shown in a footer.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff format/lint and mypy strict green; 11 focused imaging tests pass; preview render inspected at 110x40. Full pre-PR gate not run at the user's request.
+
+## 2026-11-21
+- Summary: Updated the labelled preview dossier to the refined production spec. Header metrics now separate acquisition completeness from byte verification; the six primary sections use the agreed terminology, conditional exception table, recorded-only timestamps and a permanent verification-scope statement. `Ctrl+A` expands advanced details A–H with full digests, manifest metadata, source diagnostics, artifact locations, encryption metadata, exception diagnostics, limitations and provenance pointers.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff format/lint and mypy strict green; focused imaging tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-21
+- Summary: Applied the final dossier review to the preview panel. Acquisition and verification statuses are separate fields; byte accounting now shows source bytes read, bytes written, unaccounted bytes and termination reason; Advanced adds verification method and splits encryption into cipher, key derivation and iterations; a fixed sample Acquisition ID is shown. Section numbering removed and advanced categories renamed as plain titles.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff format/lint and mypy strict green; 11 focused imaging tests pass; preview render inspected at 110x40. Full pre-PR gate not run at the user's request.
+
+## 2026-11-21
+- Summary: Shortened `Verification completed` to `Verified at`, indented long descriptions instead of starting them at the left margin, and moved the `Ctrl+A` hint to the bottom of the dossier. `Ctrl+A` now controls advanced manifest details in both preview and real dossiers; the real dossier shows manifest, integrity and encryption details only when expanded.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff format/lint and mypy strict green; 11 focused imaging tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-21
+- Summary: Replaced the old real-dossier layout (`Case/Status/Created/By/Updated`, `SOURCE`, `ACQUISITION`, `ARTIFACTS`, `FAILURE`) with the refined six-section structure. Real operations now render `—` instead of `None` for absent fields, use readable UTC timestamps, and show acquisition status separately from verification status. Only recorded values are displayed; no sample data leaks into the real dossier.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff format/lint and mypy strict green; 11 focused imaging tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-21
+- Summary: Removed horizontal divider rules from the Cases and Audit dossiers. Both now use the Imaging pattern: accented section titles followed by a blank line, with no `─` separators between blocks. The audit resize test now asserts no divider rows instead of refitting them.
+- Files: src/trace_core/tui/screens/cases.py, src/trace_core/tui/screens/audit.py, tests/unit/{test_tui_devices,test_tui,test_imaging_ui}.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 174 focused dossier tests pass, plus 11 imaging tests in isolation. Full pre-PR gate not run at the user's request.
+
+## 2026-11-21
+- Summary: Tightened dossier spacing: no gap between Tags and Opened in Cases, no blank line under section titles in Cases/Audit/Devices/Imaging, a blank line above Cases HISTORY, and no divider rows in the Devices dossier. Settings now has a gap below its title and detail section title while keeping left/right rows aligned.
+- Files: src/trace_core/tui/screens/{cases,audit,devices,imaging,settings}.py, src/trace_core/tui/app.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 174 focused dossier tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-21
+- Summary: Aligned wrapped DESCRIPTION and NOTES text with the same two-space indent on every line, removed the trailing gap after LINKED DEVICE rows, and restored a blank line under the Audit event title.
+- Files: src/trace_core/tui/screens/{cases,audit}.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 115 focused dossier tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-21
+- Summary: Applied the reviewed trimmed device dossier. Header now shows device type and exact capacity; details show Node and Access, IDENTITY shows serial/interface/adapter with conditional firmware/WWN, LINKED CASES is compact, IMAGING links operations by source node, INSPECTION HISTORY uses action labels, WRITE PROTECTION reports software verdict plus `Hardware gate  Not verified`, and AUDIT REFERENCES lists device events by sequence.
+- Files: src/trace_core/tui/screens/devices.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 127 focused device/TUI tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Updated Settings to the reviewed content spec. Removed the update-check spinner animation (static `Checking for updates` text instead), added a blank line plus `update the trace via standalone CLI` and `trace update install` when an update is available, painted Connected and PASS in green, replaced both title dividers with short subtitles (`System configuration`, `Connection & migrations`, etc.), and removed the gap between section-list items. Renamed `Integrity` to `Audit Integrity`.
+- Files: src/trace_core/tui/screens/settings.py, src/trace_core/tui/app.py, tests/unit/test_tui.py, tests/updates/test_tui_updates.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 157 focused settings/TUI/security tests pass, plus 53 in isolation. Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Rewrote Updates, Audit Integrity, Storage & Paths and Diagnostics bodies to the agreed content. Updates shows installed/available version, status and last checked, with the CLI install hint only when an update is available; `Checking for updates...` appears only while the `c`-triggered check runs. Audit Integrity shows chain status, events checked, chain breaks, signature status and last verified, with chain validity separated from signature authenticity. Diagnostics shows one aligned `component + PASS/FAIL` line per row; detailed results stay in `trace doctor`. Fixed the Audit Integrity crash caused by treating `AuditService.head()` tuple as an event.
+- Files: src/trace_core/tui/screens/settings.py, tests/unit/test_tui.py, tests/updates/test_tui_updates.py, tests/unit/test_security_regressions.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 157 focused settings/TUI/security tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Added an extra blank line above the Cases dossier IMAGING section.
+- Files: src/trace_core/tui/screens/cases.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint green; 93 focused dossier tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Applied the final Audit dossier hierarchy: Event Details → Subject Device → Recorded Changes → Integrity Verification → Related Records. Timestamps show UTC and IST; signing-key availability is separate from signature verification; chain status comes from hash integrity alone, so a key problem never reads as a mismatch. Trimmed Integrity Verification to Chain status, Signature, and Signing key only when a key problem exists.
+- Files: src/trace_core/tui/screens/audit.py, tests/unit/{test_tui,test_tui_devices}.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 115 focused audit/TUI tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Adopted a cooler forensic palette derived from the supplied OpenCode scheme. Final tokens: background `#0A0A0A`, surface `#0D1013`, raised `#14191E`, border `#29343D`, border-card `#26313A`, text `#E8EDF2`, value `#DCE5EC`, muted `#8493A0`, blue `#79B9D0`, green `#79BDA7`, amber `#C5B58C`, violet `#A995D6`, red `#C9879A`, highlight `#9CBCE0`. Added a `scrollbar` variable and replaced hardcoded palette CSS hex with `$surface-elevated`.
+- Files: src/trace_core/core/ui/theme.py, src/trace_core/tui/{theme,app,palette}.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 95 focused TUI/device/imaging/verify tests pass, plus 39 TUI tests after the final palette refinement. Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Fixed four TUI defects: long Audit recorded-change values now fit one line, update check text reads `Checking for updates...`, Imaging table reduced to two columns so it fits the sidebar without horizontal scrolling, and dossier dividers use a minimum width when a pane is hidden so DESCRIPTION no longer wraps into a narrow column after tab switches. Also moved the Cases spacing from above IMAGING to below LINKED DEVICE and styled hint keys in primary text with dim labels.
+- Files: src/trace_core/tui/screens/{audit,settings,imaging,cases}.py, src/trace_core/tui/{app,widgets}.py, tests/unit/test_tui_device_link.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 118 focused TUI/imaging/settings tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Rebuilt the Imaging dossier into a header plus five primary sections (Acquisition Details, Source Evidence, Acquisition Results, Acquisition Exceptions, Evidence Artifacts) and three advanced sections (Integrity & Verification, Manifest/Encryption/Paths, Source Diagnostics & Audit). Removed duplicated statuses, digests, timestamps and limitations from the primary view. Advanced now shows a Comparison row after the full digests, uses the shorter Sealed size label, and has no Limitations block or verification-scope sentence.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 11 focused imaging tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Replaced the Imaging dossier header with the approved layout: device and PARTIAL badge on one line, format and case together, labelled acquisition ID, acquisition coverage with exact bytes and image-extent qualifier, and image verification with digest-match wording and read-back method.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 11 focused imaging tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Reordered the Imaging header to device, `RAW acquisition · case`, then `PARTIAL · MATCH REPORTED` with the completeness percentage on the same line, and a blank line after the case line. Moved format and full acquisition ID into Acquisition Details and the extent qualifier into Acquisition Results.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 11 focused imaging tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Added a closeable `ImagingProgressModal` popup for active acquisitions. It shows a `ProgressBar` with percentage and bytes, notes that closing does not cancel the acquisition, and auto-dismisses when the worker finishes. Closing via Close or Esc never cancels the acquisition; progress still updates while closed.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 12 focused imaging tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Added a static layout preview of the Imaging progress popup, reachable with `Ctrl+G` or palette command `imaging-progress-preview`. It shows fixed sample values (`62%`, 4.6 GB/8.0 GB), a `LAYOUT PREVIEW · NO ACQUISITION RUNNING` banner, and a preview note. The live acquisition popup is unchanged.
+- Files: src/trace_core/tui/screens/imaging.py, src/trace_core/tui/palette.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 69 focused TUI/imaging tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Rebuilt the Imaging progress popup to the approved design: device and `ACQUIRING` header, case/format line, large percentage and byte pair, three-row segmented green progress bar, four live metrics, and destination. The preview animates from zero to the sample 62%, filling dim segments with the primary green; the live popup uses real progress. Close stays available via the top-right × or Esc.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 13 focused imaging tests pass. Popup fits 80×24 (78×21 box). Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Set the Imaging progress popup background to `$surface-elevated`, changed metric and destination titles to title case, and tightened segment spacing with thin `▏` dividers so the green bars sit closer together.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 13 focused imaging tests pass. Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Fixed the Imaging popup header and percentage wrapping: replaced collapsed `1fr` widths with explicit widths and `text-wrap: nowrap`, moved `Esc to close` to the top-right beside the × button, removed the blank line below `ACQUIRING`, and made `4.6 GB / 7.5 GB` and `ACQUIRING` bold and brighter. Textual has no font-size CSS, so emphasis uses bold/bright styling.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 13 focused imaging tests pass. Popup fits 80×24 (78×18 box). Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Restructured the Imaging popup: `ACQUIRING` is now a top header line with space below, `Esc to close` sits top-right with no × button, the percentage line is removed in favour of `4.6 GB / 7.5 GB`, and inner padding increased to `2 3`. Esc remains the dismissal path.
+- Files: src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; 13 focused imaging tests pass. Popup fits 80×24 (78×21 box). Full pre-PR gate not run at the user's request.
+
+## 2026-11-22
+- Summary: Created branch `refactor/tui-design-system` and applied the six-phase frontend refactor. Added `src/trace_core/tui/design/` with token, CSS, text and widget layers. Root CSS now uses shared `.pane-*` classes instead of five repeated ID lists. All modals use `ModalFrame` plus shared `.modal-*` classes. Dossier helpers (`section_head`, `kv_row`, `unknown_command`, resize sync) are shared. Token contract tests and CSS-contract tests now guard against drift. UI text, layout regions and popup states unchanged. Fixed `trace tui` startup crash caused by a leading-space color literal in `THEME_HEX["blue_deep"]`.
+- Files: src/trace_core/core/ui/theme.py, src/trace_core/tui/app.py, src/trace_core/tui/forms.py, src/trace_core/tui/theme.py, src/trace_core/tui/design/{__init__,tokens,css,text,widgets}.py, src/trace_core/tui/screens/{cases,audit,devices,imaging,settings}.py, tests/unit/test_tui_design_system.py, tests/unit/test_tui_device_link.py, tests/unit/test_devices_cli.py, tests/unit/test_shell.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; full suite 1657 passed, 21 skipped. Layout probe: 25 region/modal keys identical to pre-refactor baseline. Two reviewer rounds completed; all in-scope findings fixed. CLI launch rendered TUI after the color fix.
+
+## 2026-11-22
+- Summary: Restyled `CaseForm` to match the command-palette popup: palette background with matching padding, `CREATE CASE` header band in `THEME_HEX["form_bg"]` (#141414) with a one-row gap, and neutral focus/hover borders so inputs and buttons no longer change border color. Added `${form-bg}` and `${elevated}` modal CSS variables from theme tokens and guarded the new contract in tests.
+- Files: src/trace_core/core/ui/theme.py, src/trace_core/tui/design/css.py, src/trace_core/tui/forms.py, tests/unit/test_tui_design_system.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; computed-style probe: box #1D1D1F, header #141414, bottom margin 1, focus and button borders neutral. Full suite 1657 passed, 21 skipped.
+
+## 2026-11-22
+- Summary: Rebuilt `CaseForm` into the approved single-column layout: `CREATE  CASE` header band, label/colon rows with borderless inline inputs, and two dark `Save`/`Cancel` buttons. Field IDs, focus order and Enter-to-save flow unchanged.
+- Files: src/trace_core/tui/forms.py, tests/unit/test_tui_design_system.py, changelog/nirjxr26/changelog.md.
+- Verification: Ruff lint and mypy strict green; render probe confirmed header band, colon column at x=39, inputs inline, buttons at bottom. Full suite 1657 passed, 21 skipped; focused TUI/Imaging recheck 56 passed after import cleanup.
+
+## 2026-11-22
+- Summary: Tightened the shared form layout: single-space `CREATE CASE` header, wider body padding, 2-row field rows with one less gap, fully visible bottom buttons, and bolder text on focused/hovered buttons. Field row and label moved to reusable `.modal-field-row` / `.modal-field-label` classes in `design/css.py`, so create and edit case share one implementation.
+- Files: src/trace_core/tui/design/css.py, src/trace_core/tui/forms.py, tests/unit/test_tui_design_system.py, changelog/nirjxr26/changelog.md.
+- Verification: unverified - user asked not to run tests until further notice.
+
+## 2026-11-22
+- Summary: Made CaseForm action buttons blank with wider padding. Added shared `.confirm-prompt`, `.confirm-input` and `.confirm-button` CSS. `YesNoModal` (review, archive, restore) and `TypedConfirmModal` (close, purge) now use the same centered prompt + dark Yes/No button popup style; the typed-number gate for close/purge is preserved.
+- Files: src/trace_core/tui/design/css.py, src/trace_core/tui/forms.py, tests/unit/test_tui_design_system.py, changelog/nirjxr26/changelog.md.
+- Verification: unverified - user asked not to run tests until further notice.
+
+## 2026-11-22
+- Summary: Fixed `trace tui` stylesheet error: `$form-bg` was declared only in modal CSS but used by shared `.confirm-button` rules in `APP_CSS`. Added `form-bg` to `TRACE_THEME.variables` from `THEME_HEX["form_bg"]` and added a contract assertion so it cannot drift again.
+- Files: src/trace_core/tui/theme.py, tests/unit/test_tui_design_system.py, changelog/nirjxr26/changelog.md.
+- Verification: unverified - user asked not to run tests until further notice.
+
+## 2026-11-22
+- Summary: Made blank CaseForm buttons visible with a border and lighter surface, removed one row above the create/edit header, narrowed all confirm popups to 60 columns, enlarged prompt text via uppercase word spacing, shortened button height, and changed hover/focus to accent font color with unchanged background across every popup.
+- Files: src/trace_core/tui/design/css.py, src/trace_core/tui/forms.py, tests/unit/test_tui_design_system.py, changelog/nirjxr26/changelog.md.
+- Verification: unverified - user asked not to run tests until further notice.
+
+## 2026-11-22
+- Summary: Restyled `CasePicker` (File under case / Choose case for imaging) to the reference: header band with title and borderless focused `search or filter case` input, list below with aligned number/title columns. Search keeps focus on mount; no behavior change.
+- Files: src/trace_core/tui/forms.py, tests/unit/test_tui_device_link.py, changelog/nirjxr26/changelog.md.
+- Verification: unverified - user asked not to run tests until further notice.
+
+## 2026-11-22
+- Summary: Fixed form spacing regressions: create/edit field rows and inputs are one line with no vertical padding, picker header/search/list padding reduced to zero rows, confirm prompts restored to original mixed-case text without injected spaces, confirm popups narrowed to 50 columns, and confirm buttons restored to full height so labels are not clipped.
+- Files: src/trace_core/tui/design/css.py, src/trace_core/tui/forms.py, tests/unit/test_tui_design_system.py, tests/unit/test_tui_device_link.py, changelog/nirjxr26/changelog.md.
+- Verification: unverified - user asked not to run tests until further notice.
+
+## 2026-11-22
+- Summary: Restored `Save`/`Cancel` labels and brighter text so create/edit buttons are visible again; added top padding to the create/edit header band. Hover/focus keeps the background and uses accent text plus accent border.
+- Files: src/trace_core/tui/forms.py, tests/unit/test_tui_design_system.py, changelog/nirjxr26/changelog.md.
+- Verification: unverified - user asked not to run tests until further notice.
+
+## 2026-11-22
+- Summary: Set every button to two terminal rows with centered content: shared `.modal-button` and `.confirm-button`, create/edit action buttons, and text-prompt buttons. Render probe confirmed `Save`/`Cancel` still render their labels at height 2.
+- Files: src/trace_core/tui/design/css.py, src/trace_core/tui/forms.py, changelog/nirjxr26/changelog.md.
+- Verification: render probe only; test suite skipped per user instruction.
+
+## 2026-11-22
+- Summary: CasePicker header now has one row of padding above and below, list has one row top/bottom padding, shows eight rows, and scrolls the rest with both scrollbars hidden.
+- Files: src/trace_core/tui/forms.py, tests/unit/test_tui_device_link.py, changelog/nirjxr26/changelog.md.
+- Verification: unverified - user asked not to run tests until further notice.
+
+## 2026-11-22
+- Summary: Fixed invisible button titles at two-row height. Textual CSS rejects `line-pad: 0`, and a 2-row button with a 2-row border has zero content rows. Added reusable `FlatButton` that sets `line_pad = 0` and `height = 2` programmatically, removed borders from all buttons, and switched all modal buttons to it. Render probe shows `Save` and `Cancel` segments on the visible row.
+- Files: src/trace_core/tui/design/css.py, src/trace_core/tui/design/widgets.py, src/trace_core/tui/forms.py, tests/unit/test_tui_design_system.py, changelog/nirjxr26/changelog.md.
+- Verification: render probe only; test suite skipped per user instruction.
+
+## 2026-11-22
+- Summary: Explicitly centered confirm button labels with `text-align: center`. Moved CasePicker search row below the title and above the list, added one-row gap below it, and added a static `›` caret so the field reads as searchable while keeping input focus on open. Create/edit buttons remain two rows.
+- Files: src/trace_core/tui/design/css.py, src/trace_core/tui/forms.py, tests/unit/test_tui_device_link.py, changelog/nirjxr26/changelog.md.
+- Verification: unverified - user asked not to run tests until further notice.
+
+## 2026-11-22
+- Summary: Removed sample data from the Imaging tab by default; real operations now render unless `Ctrl+D` is pressed. Fixed confirm button centering by giving both buttons equal width and setting text/content alignment programmatically in `FlatButton`.
+- Files: src/trace_core/tui/screens/imaging.py, src/trace_core/tui/design/widgets.py, src/trace_core/tui/design/css.py, tests/unit/test_tui_design_system.py, changelog/nirjxr26/changelog.md.
+- Verification: unverified - user asked not to run tests until further notice.
+
+## 2026-11-22
+- Summary: Replaced the three-row Imaging progress widget with a single-line cli-progress-style bar rendered by Textual: `[bar] 62% | ETA: 24s`. `npkgz/cli-progress` is Node.js and writes to stdout, so it cannot be embedded in a Textual popup; no new dependency was added.
+- Files: src/trace_core/tui/design/widgets.py, src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: render probe showed `[████...░░░] 62% | ETA: 24s`; test suite skipped per user instruction.
+
+## 2026-11-22
+- Summary: Rebuilt the Imaging popup to the supplied Evidence Acquisition reference: header band, device/case, byte line, inline bar + status, three metrics (Read Speed, Elapsed, Bad regions), and destination. Added stage tones and `set_stage()` for preflight, acquiring, verifying, success, sealed, failed, cancelled, and quarantined; the worker now shows success/failed briefly before dismissal.
+- Files: src/trace_core/tui/design/tokens.py, src/trace_core/tui/design/widgets.py, src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: render probe confirmed all reference fields; test suite skipped per user instruction.
+
+## 2026-11-22
+- Summary: Full imaging audit and fixes. Backend: verify_image now cross-checks manifest against DB digest/bytes; ensure_dir no longer chmods existing dirs; resume checks eligible case; checkpoints persist full-file SHA-256 via seeded hasher; resume validates partial prefix digest; acquisition hash no longer trusts mutable partial. TUI: worker-scoped cancel/modal identity, unmount guards, cancellation stage, preview reset, palette target capture, derived COMPLETE/PARTIAL, synthetic field derived, per-group action workers, and stale test assertions. Final reviewers reported CLEAN for backend and TUI.
+- Files: src/trace_core/core/fs.py, src/trace_core/imaging/service.py, src/trace_core/imaging/stream.py, src/trace_core/tui/app.py, src/trace_core/tui/forms.py, src/trace_core/tui/screens/imaging.py, src/trace_core/tui/screens/audit.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff + mypy green (203 files). Reviewers CLEAN. Test suite skipped per user instruction.
+
+## 2026-11-22
+- Summary: Compacted Imaging popup height, moved bar and status together, shortened header hint to `Esc`. Redesigned ExportHubModal to the three-row menu with dynamic `›` caret and aligned notes; export/decrypt completion now raises a notification.
+- Files: src/trace_core/tui/screens/imaging.py, src/trace_core/tui/forms.py, src/trace_core/tui/screens/audit.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff + mypy green; render probe confirmed export menu rows/caret. Test suite skipped per user instruction.
+
+## 2026-11-22
+- Summary: Fixed stretched popups: Textual `Vertical` defaults to `height: 1fr`, so `#progress-body`, `#export-head` and `#export-body` filled the screen. Set them to `height: auto`, removed the extra row above Destination, and hid the empty note row. Imaging popup now 17 rows; export popup 10 rows.
+- Files: src/trace_core/tui/screens/imaging.py, src/trace_core/tui/forms.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff + mypy green; region probes confirmed compact heights. Test suite skipped per user instruction.
+
+## 2026-11-22
+- Summary: Removed export list scrollbars so all three options show at once. Restyled every `TextInputModal` used after export selection to the reference: `Title*` label, `›` caret input, borderless field, and two dark `Ok`/`Cancel` buttons. Fixed the button row's default `1fr` height so the prompt is 10 rows instead of 24.
+- Files: src/trace_core/tui/forms.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff + mypy green; region probe confirmed 10-row prompt with caret and fields. Test suite skipped per user instruction.
+
+## 2026-11-22
+- Summary: Fixed export list showing only one option: each `ListItem`'s `Horizontal` row defaulted to `1fr`, making every item three rows tall. Added `.export-row { height: 1; }`, so all three options render fully in the 3-row list without scrolling.
+- Files: src/trace_core/tui/forms.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff + mypy green; region probe confirmed three 1-row ListItems. Test suite skipped per user instruction.
+
+## 2026-11-22
+- Summary: Standardized every TUI button on `FlatButton` with shared `.modal-button`/`.confirm-button` styling. Hover/focus no longer change background or background tint; only text color changes to accent. Added contract assertions so no plain `Button(` can drift back into forms.
+- Files: src/trace_core/tui/design/css.py, src/trace_core/tui/forms.py, tests/unit/test_tui_design_system.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff + mypy green. Test suite skipped per user instruction.
+
+## 2026-11-22
+- Summary: Removed modal background dimming. Textual `ModalScreen` defaults to `background: $background 60%`; shared CSS now sets `background: transparent` and `background-tint: transparent` for all modal screens.
+- Files: src/trace_core/tui/design/css.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff + mypy green; probe confirmed modal screen background alpha 0. Test suite skipped per user instruction.
+
+## 2026-11-22
+- Summary: Restored modal backdrop dimming: all modal screens now use `background: $background 60%` with transparent tint, so the app behind popups is visibly dimmed.
+- Files: src/trace_core/tui/design/css.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff + mypy green; probe confirmed modal background alpha 0.6. Test suite skipped per user instruction.
+
+## 2026-11-22
+- Summary: Buttons set back to 3 rows with centered labels. Purge prompt is left-aligned with no bottom gap. Device consent/unlink prompts render the device node in accent color. CasePicker search has no bottom gap. DataTable hover no longer changes background.
+- Files: src/trace_core/tui/design/css.py, src/trace_core/tui/design/widgets.py, src/trace_core/tui/forms.py, src/trace_core/tui/screens/devices.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff + mypy green. Test suite skipped per user instruction.

@@ -42,6 +42,7 @@ COMMANDS: list[tuple[str, str, str]] = [
     ("imaging-seal", "Seal image", "passphrase"),
     ("imaging-unseal", "Unseal image", "decrypt + verify"),
     ("imaging-change-case", "Choose case", "case picker"),
+    ("imaging-progress-preview", "Preview progress", "static layout"),
     ("database-migrate", "Migrate DB", "pending only"),
     ("updates-check", "Check updates", "available version"),
 ]
@@ -75,6 +76,7 @@ COMMAND_META: dict[str, tuple[str, str]] = {
     "imaging-seal": ("Imaging", "s"),
     "imaging-unseal": ("Imaging", "u"),
     "imaging-change-case": ("Imaging", "c"),
+    "imaging-progress-preview": ("Imaging", "Ctrl+G"),
     "database-migrate": ("Settings", "m"),
     "updates-check": ("Settings", "c"),
 }
@@ -101,15 +103,15 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
 
     CSS = """
     PaletteModal { align: center middle; }
-    #palette-box { width: 54; height: auto; max-height: 28; border: none; background: #111112; padding: 1 2; }
+    #palette-box { width: 54; height: auto; max-height: 28; border: none; background: $surface-elevated; padding: 1 2; }
     #palette-head { height: 1; margin-bottom: 1; }
     #palette-title { width: auto; color: $text; text-style: bold; }
     #palette-context { width: 1fr; color: $muted; text-align: right; }
     #palette-esc { width: auto; color: $muted; text-align: right; margin-left: 2; }
     #palette-search { height: 1; align: center middle; }
-    #palette-input { width: 1fr; height: 1; border: none; background: #111112; padding: 0 1; }
-    #palette-input:focus { border: none; background: #111112; background-tint: transparent; }
-    #palette-list { height: auto; max-height: 17; margin-top: 1; scrollbar-size: 0 0; background: #111112; }
+    #palette-input { width: 1fr; height: 1; border: none; background: $surface-elevated; padding: 0 1; }
+    #palette-input:focus { border: none; background: $surface-elevated; background-tint: transparent; }
+    #palette-list { height: auto; max-height: 17; margin-top: 1; scrollbar-size: 0 0; background: $surface-elevated; }
     #palette-list > ListItem { height: 1; background: transparent; }
     #palette-list > ListItem.group-head { background: transparent; margin-top: 1; }
     #palette-list > ListItem.group-head:first-child { margin-top: 0; }

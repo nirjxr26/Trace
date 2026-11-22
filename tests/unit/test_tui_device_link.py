@@ -285,21 +285,21 @@ def test_every_when_label_is_now_timestamp() -> None:
 
     assert '("Timestamp"' in inspect.getsource(audit_renderers._detail_fields)
     assert '"Timestamp' in inspect.getsource(audit_screen)
-    assert '"Timestamp' in inspect.getsource(devices_screen)
+    assert '"Checked' in inspect.getsource(devices_screen)
 
 
 def test_the_label_columns_stay_aligned_after_the_rename() -> None:
     """`Timestamp` is wider than `When`; a hand-padded column that is not re-padded
     knocks every sibling label out of alignment."""
-    import re
-
+    from trace_core.tui.design.tokens import LABEL_MD
     from trace_core.tui.screens import audit as audit_screen
     from trace_core.tui.screens import devices as devices_screen
 
+    assert LABEL_MD == 16
     for module in (audit_screen, devices_screen):
-        labels = re.findall(r'body\.append\("([A-Za-z ]+)", style="dim"\)', inspect_source(module))
-        widths = {len(x) for x in labels}
-        assert len(widths) == 1, f"{module.__name__} label column is ragged: {labels}"
+        source = inspect_source(module)
+        assert "kv_row(body, label, value, LABEL_MD)" in source
+        assert "LABEL_MD" in source
 
 
 def inspect_source(module) -> str:  # noqa: ANN001
@@ -386,8 +386,12 @@ def test_the_picker_declares_a_scrollbar_and_filter_padding() -> None:
     from trace_core.tui.forms import CasePicker
 
     css = inspect.getsource(CasePicker)
-    assert "#case-pick-filter { margin-bottom: 1; }" in css
-    assert "scrollbar-size-vertical: 1;" in css
+    assert "#case-pick-head { height: auto; background: $form-bg; padding: 1 3; }" in css
+    assert "#case-pick-search { height: 1; align: center middle; margin: 1 3 1 3; }" in css
+    assert 'yield Static("› ", id="case-pick-caret")' in css
+    assert 'placeholder="search or filter case"' in css
+    assert "#case-pick-list { height: 10;" in css
+    assert "scrollbar-size-vertical: 0;" in css
 
 
 @pytest.mark.anyio

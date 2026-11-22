@@ -6,18 +6,20 @@ from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
 from textual.events import Resize
-from textual.widgets import DataTable, Input, Rule, Static
+from textual.widgets import DataTable, Input, Static
 
 from trace_core.audit.dto import AuditEventDto, AuditEventSummaryDto, AuditFilterDto
 from trace_core.audit.events import parse_details
 from trace_core.audit.renderers import action_title, subject_case_label
 from trace_core.audit.service import AuditService
 from trace_core.core.database.session import DatabaseSessionManager
-from trace_core.core.ui.renderers import format_india_datetime, sanitize_terminal
+from trace_core.core.ui.renderers import sanitize_terminal
 from trace_core.core.ui.theme import THEME_TOKENS
 from trace_core.tui.actions import confirm_overwrite, run_guarded
+from trace_core.tui.design.text import kv_row, section_head
+from trace_core.tui.design.tokens import LABEL_MD, LABEL_SM
+from trace_core.tui.design.widgets import ListDetailPane, sync_detail_width, unknown_command
 from trace_core.tui.forms import RawModal, TextInputModal
 from trace_core.tui.widgets import DossierScroll, TablePane
 
@@ -67,19 +69,25 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         return AuditService(self._manager)
 
     def compose(self) -> ComposeResult:
-        from trace_core.tui.widgets import DossierScroll, PagedTable
+        from trace_core.tui.widgets import PagedTable
 
-        table = PagedTable(id=TABLE_ID, cursor_type="row", show_header=False)
-        table.on_scrolled = self._extend
-        with Horizontal(id="audit-main"):
-            with Vertical(id="audit-left"):
-                yield Input(placeholder="Search actor, action, case, device, seq...", id="audit-search")
-                yield Static("", id="audit-scope")
-                yield Static("", id=AUDIT_HEADER_ID, classes="table-head")
-                yield Rule()
-                yield table
-            with DossierScroll(id="audit-right"):
-                yield Static("Select an event…", id=AUDIT_DETAIL_ID)
+        def build_table() -> PagedTable:
+            table = PagedTable(id=TABLE_ID, cursor_type="row", show_header=False, classes="pane-table")
+            table.on_scrolled = self._extend
+            return table
+
+        yield ListDetailPane(
+            top_id="audit-main",
+            left_id="audit-left",
+            right_id="audit-right",
+            detail_id=AUDIT_DETAIL_ID,
+            detail_text="Select an event…",
+            search_id="audit-search",
+            search_placeholder="Search actor, action, case, device, seq...",
+            header_id=AUDIT_HEADER_ID,
+            table_factory=build_table,
+            left_extra=(Static("", id="audit-scope"),),
+        )
 
     def _filter(self, before_seq: int | None = None, limit: int = PAGE_ROWS) -> AuditFilterDto:
         return AuditFilterDto(
@@ -159,28 +167,6 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         prefix = SELECT_PREFIX if selected else "  "
         return [f"{prefix}{event.seq}", short_action_label(event.action)]
 
-    def _append_device(self, body, details, rule: Text) -> None:  # type: ignore[no-untyped-def]
-        """DEVICE section for an event about a device.
-
-        A DEVICE_LINKED row names the case but not the drive, so selecting one showed a
-        link with nothing on the other end of it. The node lives in the payload details;
-        the model and capacity come from the newest observation for that node.
-        """
-        node = str(details.get("node") or "")
-        if not node:
-            return
-        from trace_core.devices.renderers import device_heading
-
-        record = self._observed().get(node)
-        body.append(rule)
-        body.append("\nDevice Linked\n", style=THEME_TOKENS["accent"])
-        heading = device_heading(node, record.model if record else None, record.capacity_bytes if record else None)
-        body.append(f"  {sanitize_terminal(heading)}\n")
-        label = details.get("label")
-        if label:
-            body.append(f"  {'Label':<10}", style="dim")
-            body.append(f"{sanitize_terminal(str(label))}\n")
-
     def _observed(self):  # type: ignore[no-untyped-def]
         """Newest observation per node, fetched once per session for this view."""
         if self._observed_cache is None:
@@ -194,15 +180,37 @@ class AuditView(TablePane[AuditEventSummaryDto]):
 
     def on_resize(self, event: Resize) -> None:
         """Dividers are baked for one width; rebuild them when the width moves."""
-        width = self.query_one("#audit-right", DossierScroll).content_region.width
-        if width == self._detail_width:
+        if not sync_detail_width(self, "audit-right"):
             return
-        self._detail_width = width
         self.render_detail()
 
+    @staticmethod
+    def _detail_row(body: Text, label: str, value: str) -> None:
+        kv_row(body, label, value, LABEL_MD)
+
+    def _append_integrity(
+        self, body: Text, event: AuditEventDto, intact: bool | None, hash_ok: bool | None, key_problem: str
+    ) -> None:
+        from trace_core.tui.theme import DOT_BAD
+
+        section_head(body, "INTEGRITY VERIFICATION")
+        chain = "Valid" if hash_ok is True else ("Mismatch" if hash_ok is False else "Not verified")
+        self._detail_row(body, "Chain status", chain)
+        signature = "Verified" if event.signature and intact is True and not key_problem else "Not verified"
+        self._detail_row(body, "Signature", signature)
+        if key_problem:
+            signing = "Development key" if key_problem == "insecure_key" else "Key unavailable"
+            self._detail_row(body, "Signing key", signing)
+            body.append("This is a key problem, not evidence of tampering.\n", style=DOT_BAD)
+
     def render_detail(self) -> None:
+        from datetime import UTC
+        from zoneinfo import ZoneInfo
+
+        from trace_core.audit.renderers import format_change_value
         from trace_core.audit.verifier import row_key_problem, verify_event
-        from trace_core.tui.theme import DOT_BAD, DOT_OK, integrity_line
+        from trace_core.core.ui.renderers import fit_text
+        from trace_core.devices.renderers import device_heading, format_bytes
 
         e = self._selected_event()
         if e is None:
@@ -213,6 +221,8 @@ class AuditView(TablePane[AuditEventSummaryDto]):
             )
             return
         details = parse_details(e.payload_json)
+        unreadable = details is None
+        details = details or {}
         try:
             intact = verify_event(
                 e.payload_json,
@@ -225,73 +235,72 @@ class AuditView(TablePane[AuditEventSummaryDto]):
             )
         except Exception:
             intact = None
-        pane = self.query_one("#audit-right", DossierScroll)
-        rule = pane.divider()
-        body = Text()
-        body.append(f"#{e.seq}  {action_title(e.action.value)}\n", style=THEME_TOKENS["accent"])
-        body.append(rule)
-        body.append("\n")
-        body.append("Case      ", style="dim")
-        body.append(f"{sanitize_terminal(subject_case_label(e.subject_case_number))}\n")
-        body.append("Actor     ", style="dim")
-        body.append(f"{sanitize_terminal(e.actor)}\n")
-        body.append("Timestamp ", style="dim")
-        body.append(f"{format_india_datetime(e.ts)}\n")
-        body.append("Event     ", style="dim")
-        body.append(f"{e.action.value}\n")
-        if details is None:
-            body.append("Payload   ", style="dim")
-            body.append("unreadable — details cannot be shown\n")
-            details = {}
-        reason = (details.get("reason") or "").strip()
-        if reason:
-            body.append("Reason    ", style="dim")
-            body.append(f"{sanitize_terminal(reason)}\n")
-        self._append_device(body, details, rule)
-        changed = details.get("changed", [])
-        if changed:
-            from trace_core.audit.renderers import format_change_value
-
-            before, after = details.get("before", {}), details.get("after", {})
-            body.append(rule)
-            body.append(f"\nCHANGES · {len(changed)}\n", style=THEME_TOKENS["accent"])
-            for field in changed:
-                body.append(f"{field}\n", style="dim")
-                body.append(f"  {sanitize_terminal(format_change_value(before.get(field)))}", style=DOT_BAD)
-                body.append("  →  ")
-                body.append(f"{sanitize_terminal(format_change_value(after.get(field)))}\n", style=DOT_OK)
-        body.append(rule)
-        body.append("\nSELF-CHECK\n", style=THEME_TOKENS["accent"])
-        key_problem = None
+        try:
+            hash_ok = verify_event(e.payload_json, e.payload_hash, e.prev_chain, e.chain_hash, e.seq)
+        except Exception:
+            hash_ok = None
+        key_problem = ""
         if intact is not None:
             try:
-                key_problem = row_key_problem(
-                    e.payload_json,
-                    e.payload_hash,
-                    e.prev_chain,
-                    e.chain_hash,
-                    e.seq,
-                    signature=e.signature,
-                    key_id=e.key_id,
+                key_problem = (
+                    row_key_problem(
+                        e.payload_json,
+                        e.payload_hash,
+                        e.prev_chain,
+                        e.chain_hash,
+                        e.seq,
+                        signature=e.signature,
+                        key_id=e.key_id,
+                    )
+                    or ""
                 )
             except Exception:
-                key_problem = None
-        if key_problem == "insecure_key":
-            body.append("⚠ ", style=DOT_BAD)
-            body.append("SIGNED WITH THE DEVELOPMENT KEY\n", style="bold")
-            body.append("Signed with the shipped development key, which is public.\n", style="dim")
-            body.append("This is a key problem, not evidence of tampering.\n", style="dim")
-        elif key_problem == "signing_key" or (key_problem is not None and key_problem.startswith("key:")):
-            body.append("⚠ ", style=DOT_BAD)
-            body.append("SIGNING KEY UNAVAILABLE\n", style="bold")
-            if key_problem == "signing_key":
-                body.append("The key this ledger was signed with is not the active key.\n", style="dim")
-            else:
-                body.append("The key this record was signed with is not in the keystore.\n", style="dim")
-            body.append("This is a key problem, not evidence of tampering.\n", style="dim")
+                key_problem = ""
+
+        body = Text()
+
+        utc = e.ts.astimezone(UTC).strftime("%H:%M:%S UTC")
+        ist = e.ts.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S IST")
+        reason = str(details.get("reason") or "").strip()
+        body.append(f"#{e.seq} · {action_title(e.action.value)}\n", style=THEME_TOKENS["accent"])
+        body.append(f"{reason or 'No reason recorded'}\n", style="dim")
+        section_head(body, "EVENT DETAILS")
+        self._detail_row(body, "Event", e.action.value)
+        self._detail_row(body, "Sequence", str(e.seq))
+        self._detail_row(body, "Case", subject_case_label(e.subject_case_number))
+        self._detail_row(body, "Actor", e.actor)
+        self._detail_row(body, "Timestamp", f"{utc} / {ist}")
+        self._detail_row(body, "Reason", reason)
+        if unreadable:
+            body.append("unreadable — details cannot be shown\n", style="dim")
+        section_head(body, "SUBJECT DEVICE")
+        node = str(details.get("node") or "")
+        if node:
+            record = self._observed().get(node)
+            serial = e.subject_device_serial or str(details.get("serial") or "")
+            capacity = record.capacity_bytes if record else None
+            body.append(f"  {sanitize_terminal(device_heading(node, record.model if record else None, capacity))}\n")
+            self._detail_row(body, "Node", node)
+            self._detail_row(body, "Serial", serial)
+            self._detail_row(body, "Capacity", format_bytes(capacity) if capacity is not None else "")
+            self._detail_row(body, "Evidence label", str(details.get("label") or ""))
         else:
-            body.append_text(integrity_line(intact, 0 if intact is not True else 1))
-        body.append("\n")
+            body.append("  No subject device recorded.\n", style="dim")
+        changed = details.get("changed", [])
+        if changed:
+            section_head(body, f"RECORDED CHANGES · {len(changed)}")
+            before, after = details.get("before", {}), details.get("after", {})
+            for field in changed:
+                old = fit_text(format_change_value(before.get(field)), 42)
+                new = fit_text(format_change_value(after.get(field)), 42)
+                self._detail_row(body, field.replace("_", " ").title(), f"{old} → {new}")
+        self._append_integrity(body, e, intact, hash_ok, key_problem)
+        section_head(body, "RELATED RECORDS")
+        related = self._observed().get(node) if node else None
+        device = str(details.get("model") or (related.model if related else ""))
+        self._detail_row(body, "Case", subject_case_label(e.subject_case_number))
+        self._detail_row(body, "Device", device)
+        self._detail_row(body, "Imaging", str(details.get("operation_id") or ""))
         self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(body)
 
     def run_command(self, command: str) -> None:
@@ -302,7 +311,7 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         elif action == "anchor":
             self.action_anchor()
         else:
-            self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")
+            unknown_command(self, command)
 
     def action_anchor(self) -> None:
         self.app.push_screen(
@@ -419,13 +428,11 @@ class AuditView(TablePane[AuditEventSummaryDto]):
             return
         from trace_core.audit.helpers import next_step_for
 
+        message = "Bundle sealed." if receipt.sealed else "Bundle exported."
         if receipt.sealed:
             self._last_sealed = str(receipt.path)
-        self._show_receipt(
-            receipt,
-            "Bundle sealed." if receipt.sealed else "Bundle exported.",
-            next_step_for(receipt),
-        )
+        self.app.notify(message)
+        self._show_receipt(receipt, message, next_step_for(receipt))
 
     def _decrypt_from(self, in_path: str, passphrase: str) -> None:
         from trace_core.audit.helpers import do_decrypt, plain_destination
@@ -435,7 +442,9 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         except Exception as exc:
             self.app.notify(str(exc), severity="error")
             return
-        self._show_receipt(receipt, "Bundle decrypted.")
+        message = "Bundle decrypted."
+        self.app.notify(message)
+        self._show_receipt(receipt, message)
 
     def _show_receipt(self, receipt: "BundleReceipt", message: str, next_step: str = "") -> None:
         from trace_core.audit.helpers import receipt_rows
@@ -450,6 +459,5 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         body.append(rule)
         body.append("\n")
         for key, value in rows:
-            body.append(f"{key:<10}", style="dim")
-            body.append(f"{sanitize_terminal(value)}\n")
+            kv_row(body, key, value, LABEL_SM)
         self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(body)
