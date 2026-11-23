@@ -81,8 +81,7 @@ async def test_the_devices_hint_is_declared() -> None:
     from trace_core.tui.app import TAB_HINTS
 
     assert "devices" in TAB_HINTS
-    assert "Inspect" in TAB_HINTS["devices"]
-    assert "Check" in TAB_HINTS["devices"]
+    assert "Ctrl+P Commands" in TAB_HINTS["devices"]
 
 
 async def test_search_filters_the_device_table(session_manager, device_file_env: Path) -> None:
@@ -143,11 +142,11 @@ async def test_inspect_records_the_device_identity(session_manager, device_file_
         await _settle(app, pilot)
         await pilot.press("i")
         detail = await _wait_detail(app, pilot, "IDENTITY")
-        assert "Hardware" in detail
+        assert "Access" in detail
         assert "Serial" in detail
         assert "SYNTH-" in detail
         assert "Interface" in detail
-        assert "Source" in detail
+        assert "Adapter" in detail
 
 
 def test_the_left_table_shows_only_name_and_size() -> None:
@@ -287,9 +286,9 @@ async def test_the_detail_pane_reads_plainly_and_heads_sections_in_accent(
         plain = _text(app.query_one("#device-detail", Static))
         assert "--allow-real-hardware" not in plain, "a CLI flag must not appear in the GUI"
         assert "Real HW" not in plain, "the terse label is replaced by readable wording"
-        assert "Hardware" in plain
-        assert any(phrase in plain for phrase in ("access needs confirming", "emulated or image-backed")), (
-            "the hardware row must say what it means"
+        assert "Access" in plain
+        assert any(phrase in plain for phrase in ("Not confirmed", "Confirmed")), (
+            "the access row must say what it means"
         )
         assert plain.splitlines()[0] != r"\\.\PhysicalDrive0", "the title must be the readable name"
         assert any(line.startswith("Node") for line in plain.splitlines()), "the raw node stays as a labelled row"
@@ -310,7 +309,7 @@ async def test_the_detail_pane_reads_plainly_and_heads_sections_in_accent(
 
         gated = _text(app.query_one("#device-detail", Static))
         assert "--allow-real-hardware" not in gated, "a CLI flag must not appear in the GUI"
-        assert "access needs confirming" in gated, "real hardware must still be flagged as gated"
+        assert "Not confirmed" in gated, "real hardware must still be flagged as gated"
         assert gated.splitlines()[0] == "Drive 0", "the title must be the readable name"
 
 
@@ -624,7 +623,7 @@ async def test_a_device_link_event_names_the_device(session_manager, device_file
 
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         await pilot.pause()
         view = app.query_one(AuditView)
@@ -640,7 +639,7 @@ async def test_a_device_link_event_names_the_device(session_manager, device_file
         await pilot.pause()
         text = str(getattr(app.screen.query_one(f"#{AUDIT_DETAIL_ID}"), "content", ""))
 
-    assert "Device Linked" in text, "the detail must carry its own Device Linked section"
+    assert "SUBJECT DEVICE" in text, "the detail must carry its own device section"
     # The heading names the model and its capacity, not the OS handle - the same rule the
     # case dossier uses. The synthetic disk's model is its own filename.
     assert "disk-a.dd" in text, "the linked device must be named by its model"
@@ -692,7 +691,7 @@ async def test_audit_dividers_refit_after_a_width_change(session_manager, device
 
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         await pilot.pause()
         view = app.query_one(AuditView)
@@ -729,8 +728,7 @@ async def test_audit_dividers_refit_after_a_width_change(session_manager, device
             line = strips[y].text[pane.content_region.x : pane.content_region.x + width].rstrip()
             if line and set(line) == {"\u2500"}:
                 lengths.add(len(line))
-        assert lengths, "expected divider rows in the detail pane"
-        assert len(lengths) == 1, f"divider rows differ in length - a wrapped remnant is present: {sorted(lengths)}"
+        assert not lengths, f"dossier must not draw divider rows: {sorted(lengths)}"
 
 
 async def test_device_poll_pauses_on_hidden_tab(session_manager, monkeypatch) -> None:

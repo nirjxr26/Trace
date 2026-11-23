@@ -11,6 +11,7 @@ from trace_core.cases.domain import (
     CaseStatus,
     TransitionError,
     normalise_optional,
+    require_no_active_imaging,
     tracked_snapshot,
     transition_case,
 )
@@ -349,7 +350,16 @@ class CaseService(BaseService):
         with self.transaction() as uow:
             require_mutator(uow.session, action="close cases")
             repo = SqlAlchemyCaseRepository(uow.session)
-            case = _require_case(repo, identifier)
+            candidate = _require_case(repo, identifier)
+            case = repo.lock_for_imaging(candidate.id)
+            if case is None:
+                raise CaseNotFoundError(identifier)
+            from trace_core.imaging.repository import SqlAlchemyImagingRepository
+
+            try:
+                require_no_active_imaging(SqlAlchemyImagingRepository(uow.session).has_blocking_operation(case.id))
+            except InvariantViolationError as exc:
+                raise InvalidCaseStateError(str(exc)) from exc
 
             if case.is_deleted:
                 raise InvalidCaseStateError(f"Cannot close soft-deleted or archived case '{identifier}'.")
@@ -390,7 +400,16 @@ class CaseService(BaseService):
         with self.transaction() as uow:
             require_mutator(uow.session, action="archive cases")
             repo = SqlAlchemyCaseRepository(uow.session)
-            case = _require_case(repo, identifier)
+            candidate = _require_case(repo, identifier)
+            case = repo.lock_for_imaging(candidate.id)
+            if case is None:
+                raise CaseNotFoundError(identifier)
+            from trace_core.imaging.repository import SqlAlchemyImagingRepository
+
+            try:
+                require_no_active_imaging(SqlAlchemyImagingRepository(uow.session).has_blocking_operation(case.id))
+            except InvariantViolationError as exc:
+                raise InvalidCaseStateError(str(exc)) from exc
             resolved_actor = _resolve_actor(actor, case.lead_examiner)
 
             if not purge and case.is_deleted:

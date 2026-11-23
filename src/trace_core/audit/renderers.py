@@ -313,6 +313,15 @@ _SHORT_LABELS: Final[dict[str, str]] = {
     "DEVICE_LINKED": "Device Linked",
     "DEVICE_UNLINKED": "Device Unlinked",
     "DEVICE_RECOGNIZED": "Device Recognized",
+    "IMAGING_RESERVED": "Imaging Reserved",
+    "IMAGING_ABANDONED": "Imaging Abandoned",
+    "IMAGING_STARTED": "Imaging Started",
+    "IMAGING_VERIFYING": "Imaging Verifying",
+    "IMAGING_COMPLETED": "Imaging Completed",
+    "IMAGING_FAILED": "Imaging Failed",
+    "IMAGING_QUARANTINED": "Imaging Quarantined",
+    "IMAGING_SEALED": "Imaging Sealed",
+    "IMAGING_UNSEALED": "Imaging Unsealed",
     "UPDATE_POLICY_OVERRIDE": "Policy Override",
 }
 

@@ -1,5 +1,7 @@
 """Typer CLI commands for Case operations."""
 
+from uuid import UUID
+
 import typer
 from rich.prompt import Confirm, Prompt
 
@@ -14,9 +16,16 @@ from trace_core.cases.renderers import render_case, render_case_detail, render_c
 from trace_core.cases.service import CaseService
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.exit_codes import EXIT_ERROR, EXIT_SUCCESS
-from trace_core.core.cli.output import SKIP_CONFIRM_HELP
+from trace_core.core.cli.output import OUTPUT_HELP, SKIP_CONFIRM_HELP, parse_output_format
 from trace_core.core.database.session import DatabaseSessionManager
-from trace_core.core.ui.renderers import console, render_error_card, render_success
+from trace_core.core.ui.renderers import (
+    console,
+    format_india_datetime,
+    render_error_card,
+    render_minimalist_table,
+    render_output,
+    render_success,
+)
 
 case_app = typer.Typer(name="case", help="Create, list, show, edit, review, and close forensic cases.")
 
@@ -30,6 +39,165 @@ def _confirm_or_exit(prompt: str, action: str) -> None:
     if not Confirm.ask(prompt):
         console.print(f"[dim]{action} cancelled.[/dim]")
         raise typer.Exit(EXIT_SUCCESS)
+
+
+@case_app.command("imaging")
+def list_imaging(
+    identifier: str = typer.Argument(..., help="Case number or UUID"),
+    output: str = typer.Option("table", "--output", "-o", help=OUTPUT_HELP),
+) -> None:
+    with capture_cli_errors("Imaging Status Failed"):
+        from trace_core.imaging.service import ImagingService
+
+        output_format = parse_output_format(["--output", output])
+        operations = ImagingService().list_for_case(identifier)
+        render_output(
+            output_format,
+            [operation.model_dump(mode="json") for operation in operations],
+            lambda: render_minimalist_table(
+                "Latest imaging operations (up to 100)",
+                [("Operation", {}), ("State", {}), ("Bytes", {}), ("SHA-256", {}), ("Created", {})],
+                [
+                    [
+                        str(operation.id),
+                        operation.state.value,
+                        "" if operation.copied_bytes is None else str(operation.copied_bytes),
+                        (operation.acquisition_sha256 or "")[:12],
+                        format_india_datetime(operation.created_at),
+                    ]
+                    for operation in operations
+                ],
+                empty_message="No imaging operations recorded.",
+            ),
+        )
+        if output_format != "json" and any(operation.state.value == "PREPARING" for operation in operations):
+            console.print("[dim]PREPARING is a reservation, not a completed image.[/dim]")
+
+
+@case_app.command("imaging-abandon")
+def abandon_imaging(
+    operation_id: UUID = typer.Argument(..., help="Unresolved imaging operation UUID"),
+    force: bool = typer.Option(False, "--yes", "-y", help=SKIP_CONFIRM_HELP),
+) -> None:
+    with capture_cli_errors("Imaging Abandon Failed"):
+        if not force:
+            _confirm_or_exit("Abandon this imaging operation?", "Abandon")
+        from trace_core.imaging.service import ImagingService
+
+        ImagingService().abandon(operation_id)
+        render_success("Imaging operation abandoned.")
+
+
+@case_app.command("imaging-reserve")
+def reserve_imaging(
+    identifier: str = typer.Argument(..., help="Case number or UUID"),
+    force: bool = typer.Option(False, "--yes", "-y", help=SKIP_CONFIRM_HELP),
+) -> None:
+    with capture_cli_errors("Imaging Reservation Failed"):
+        if not force:
+            _confirm_or_exit("Reserve an imaging operation for this case?", "Reservation")
+        from trace_core.imaging.service import ImagingService
+
+        operation = ImagingService().reserve(identifier)
+        render_success(f"Imaging reservation {operation.id} created.")
+        console.print("[dim]Reservation only; no image acquired. Acquire with `trace case imaging-acquire`.[/dim]")
+
+
+@case_app.command("imaging-acquire")
+def acquire_imaging(
+    operation_id: UUID = typer.Argument(..., help="Unresolved imaging reservation UUID"),
+    source: str = typer.Option(..., "--source", "-s", help="Fixture file or physical device node to image"),
+    fixture_root: str = typer.Option(
+        None, "--fixture-root", help="Directory holding the fixture source (default: the source's directory)"
+    ),
+    physical: bool = typer.Option(
+        False, "--physical", help="Acquire a real OS device through the write-protection gate"
+    ),
+    software_write_block: bool = typer.Option(
+        False,
+        "--allow-software-write-block",
+        help="Use Linux kernel software write blocking; development only, NOT EVIDENTIARY",
+    ),
+    hardware_write_block: bool = typer.Option(
+        False,
+        "--hardware-write-block",
+        help="Attest that a validated hardware write blocker protects the source",
+    ),
+    force: bool = typer.Option(False, "--yes", "-y", help=SKIP_CONFIRM_HELP),
+) -> None:
+    with capture_cli_errors("Imaging Acquisition Failed"):
+        if not force:
+            _confirm_or_exit(f"Acquire {source}?", "Acquisition")
+        import time
+
+        from trace_core.devices.renderers import format_bytes
+        from trace_core.imaging.service import ImagingService
+
+        last = [0.0]
+
+        def _progress(done: int, total: int) -> None:
+            now = time.monotonic()
+            if now - last[0] < 0.25:
+                return
+            last[0] = now
+            console.print(f"  [dim]{format_bytes(done)} / {format_bytes(total)}[/dim]")
+
+        operation = ImagingService().acquire(
+            operation_id,
+            source,
+            fixture_root=fixture_root,
+            allow_real_hardware=physical,
+            allow_software_write_block=software_write_block,
+            attest_hardware_write_block=hardware_write_block,
+            progress=_progress,
+        )
+        render_success(f"Image byte-verified for operation {operation.id}.")
+        console.print(f"  SHA-256   {operation.acquisition_sha256}")
+        console.print(f"  Bytes     {operation.copied_bytes}")
+        console.print(f"  Image     {operation.image_relpath}")
+        console.print(f"  Manifest  {operation.manifest_relpath}")
+
+
+@case_app.command("imaging-verify")
+def verify_imaging(
+    operation_id: UUID = typer.Argument(..., help="Byte-verified imaging operation UUID"),
+) -> None:
+    with capture_cli_errors("Image Verification Failed"):
+        from trace_core.imaging.service import ImagingService
+
+        if ImagingService().verify_image(operation_id):
+            render_success(f"Image for operation {operation_id} still matches its SHA-256 manifest.")
+        else:
+            render_error_card("Verification Failed", "The image no longer matches the recorded SHA-256.")
+            raise typer.Exit(EXIT_ERROR)
+
+
+@case_app.command("imaging-seal")
+def seal_imaging(
+    operation_id: UUID = typer.Argument(..., help="Byte-verified imaging operation UUID"),
+) -> None:
+    with capture_cli_errors("Image Sealing Failed"):
+        from trace_core.audit.helpers import prompt_passphrase
+        from trace_core.imaging.service import ImagingService
+
+        encryption = ImagingService().seal_image(operation_id, prompt_passphrase(confirm=True))
+        render_success(f"Image sealed for operation {operation_id}.")
+        console.print(f"  Algorithm  {encryption.algorithm}")
+        console.print(f"  Sealed     {encryption.sealed_relpath}")
+        console.print(f"  SHA-256    {encryption.plaintext_sha256}")
+
+
+@case_app.command("imaging-unseal")
+def unseal_imaging(
+    operation_id: UUID = typer.Argument(..., help="Byte-verified imaging operation UUID"),
+    out: str = typer.Option(..., "--out", help="Output path for the decrypted raw image"),
+) -> None:
+    with capture_cli_errors("Image Unsealing Failed"):
+        from trace_core.audit.helpers import prompt_passphrase
+        from trace_core.imaging.service import ImagingService
+
+        path = ImagingService().open_sealed_image(operation_id, prompt_passphrase(), out)
+        render_success(f"Image unsealed and verified: {path}.")
 
 
 @case_app.command("create")

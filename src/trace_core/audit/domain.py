@@ -31,6 +31,15 @@ class AuditAction(StrEnum):
     DEVICE_LINKED = "DEVICE_LINKED"
     DEVICE_UNLINKED = "DEVICE_UNLINKED"
     DEVICE_RECOGNIZED = "DEVICE_RECOGNIZED"
+    IMAGING_RESERVED = "IMAGING_RESERVED"
+    IMAGING_ABANDONED = "IMAGING_ABANDONED"
+    IMAGING_STARTED = "IMAGING_STARTED"
+    IMAGING_VERIFYING = "IMAGING_VERIFYING"
+    IMAGING_COMPLETED = "IMAGING_COMPLETED"
+    IMAGING_FAILED = "IMAGING_FAILED"
+    IMAGING_QUARANTINED = "IMAGING_QUARANTINED"
+    IMAGING_SEALED = "IMAGING_SEALED"
+    IMAGING_UNSEALED = "IMAGING_UNSEALED"
     UPDATE_POLICY_OVERRIDE = "UPDATE_POLICY_OVERRIDE"
 
 
@@ -47,6 +56,15 @@ ACTION_TITLES: Final[dict[str, str]] = {
     "DEVICE_LINKED": "Device filed under case",
     "DEVICE_UNLINKED": "Device removed from case",
     "DEVICE_RECOGNIZED": "Device recognized",
+    "IMAGING_RESERVED": "Imaging reserved",
+    "IMAGING_ABANDONED": "Imaging reservation abandoned",
+    "IMAGING_STARTED": "Imaging acquisition started",
+    "IMAGING_VERIFYING": "Imaging acquisition verifying",
+    "IMAGING_COMPLETED": "Imaging byte verification completed",
+    "IMAGING_FAILED": "Imaging acquisition failed",
+    "IMAGING_QUARANTINED": "Imaging image quarantined",
+    "IMAGING_SEALED": "Imaging image sealed",
+    "IMAGING_UNSEALED": "Imaging image unsealed",
     "UPDATE_POLICY_OVERRIDE": "Update policy overridden",
 }
 

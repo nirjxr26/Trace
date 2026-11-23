@@ -1,5 +1,6 @@
 """Fullscreen Trace console shell: tabs, hint bar, palette, global keys."""
 
+from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -7,90 +8,49 @@ from textual.notifications import SeverityLevel
 from textual.widgets import Static, TabbedContent, TabPane
 
 from trace_core.core.database.session import DatabaseSessionManager
+from trace_core.core.ui.theme import THEME_HEX
+from trace_core.tui.design.css import APP_CSS
 from trace_core.tui.theme import TRACE_THEME
 
 TAB_HINTS: dict[str, str] = {
-    "cases": "↑↓ Navigate   / Search   r Recent   q Quit",
-    "devices": "↑↓ Navigate   i Inspect   c Check   a Acknowledge   l Link   k Kind   / Search   q Quit",
-    "audit": "↑↓ Navigate   Enter Open   s Scope   v Raw   e Export   a Anchor   / Search   r Refresh   q Quit",
-    "settings": "↑↓ Sections   Enter Run   m Migrate   c Check updates   q Quit",
+    "cases": "↑↓ Navigate   / Search   Ctrl+P Commands   q Quit",
+    "devices": "↑↓ Navigate   / Search   Ctrl+P Commands   q Quit",
+    "audit": "↑↓ Navigate   Enter Open   / Search   Ctrl+P Commands   q Quit",
+    "settings": "↑↓ Sections   Enter Run   Ctrl+P Commands   q Quit",
+    "imaging": "↑↓ Operations   / Search   Ctrl+P Commands   q Quit",
 }
 
-_TAB_ORDER = ("cases", "devices", "audit", "settings")
+_TAB_ORDER = ("cases", "devices", "imaging", "audit", "settings")
+
+
+def _hint_text(hint: str) -> Text:
+    text = Text()
+    for index, part in enumerate(hint.split("   ")):
+        token = part.strip()
+        if not token:
+            continue
+        if index:
+            text.append("   ")
+        key, _, label = token.partition(" ")
+        text.append(key, style=THEME_HEX["value"])
+        if label:
+            text.append(f" {label}", style=THEME_HEX["muted"])
+    return text
 
 
 class TraceApp(App[None]):
     """Live fullscreen console. Views call services; this shell only hosts them."""
 
-    CSS = """
-    Screen { background: $background; width: 100%; height: 100%; }
-    TabbedContent { height: 1fr; }
-    Tabs { height: 1; background: $surface; padding: 0 1; }
-    Tab { padding: 0 2; color: $text-muted; height: 1; min-width: 7; background: transparent; }
-    Tab.-active { color: $text; text-style: bold underline; background: transparent; border: none; }
-    Tab:hover { color: $text; background: transparent; }
-    Underline { display: none; }
-    #hint {
-        height: 1;
-        color: $muted;
-        text-style: dim;
-        background: $surface;
-        padding: 0 2;
-    }
-    #cases-top, #audit-main, #settings-top, #device-main { height: 1fr; }
-    #cases-left, #cases-right, #audit-left, #audit-right, #settings-left, #settings-right, #device-left, #device-right {
-        border: round $panel;
-        background: $surface;
-        padding: 1 2;
-    }
-    #cases-left, #audit-left, #settings-left, #device-left { width: 1fr; margin-right: 1; }
-    #cases-right, #audit-right, #settings-right, #device-right { width: 2fr; }
-    #settings-sections { height: 1fr; background: transparent; }
-    #settings-sections:focus { background-tint: transparent; }
-    #settings-left .card-title { padding: 0; }
-    #settings-sections ListItem { height: auto; padding: 0 1; margin-bottom: 1; background: transparent; background-tint: transparent; color: $text-muted; }
-    #settings-sections ListItem.-hovered, #settings-sections ListItem.-highlight { background: transparent; background-tint: transparent; border: none; color: $text; text-style: bold; }
-    .table-head { text-style: bold; color: $text; height: 1; }
-    #settings-left Rule, #cases-left Rule, #audit-left Rule, #device-left Rule { color: $panel; margin: 0 0 1 0; }
-    #case-search, #audit-search, #device-search { border: round $panel; margin-bottom: 1; background: transparent; }
-    #audit-table, #case-table, #device-table { scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }
-    #device-right, #cases-right, #audit-right { scrollbar-size-vertical: 0; scrollbar-size-horizontal: 0; }
-    #case-search:focus, #audit-search:focus, #device-search:focus { background: transparent; background-tint: transparent; }
-    #audit-scope { height: 1; color: $muted; }
-    #device-summary { height: 1; color: $muted; padding-left: 1; margin: 1 0; }
-    #device-search { margin-bottom: 0; padding: 0 2; }
-    VerticalScroll { scrollbar-size: 1 1; }
-    * { scrollbar-background: transparent; scrollbar-color: $panel; scrollbar-corner-color: transparent; }
-    .card {
-        height: auto;
-        border: round $panel;
-        background: $surface;
-        padding: 1 2;
-        margin-bottom: 1;
-    }
-    .card-title { color: $accent; text-style: bold; }
-    .input-row { height: 3; align: center middle; margin-top: 1; }
-    .input-row Input { width: 1fr; margin-right: 1; border: round $panel; }
-    .input-row Button { min-width: 16; border: round $panel; }
-    #db-migrations { height: 1fr; }
-    #db-migrations DataTable { height: 1fr; }
-    #audit-table, #case-table, #device-table { height: 1fr; }
-    DataTable { background: transparent; border: none; }
-    DataTable > .datatable--header { background: transparent; text-style: bold; }
-    DataTable > .datatable--cursor { background: $surface-active; color: $text; text-style: bold; }
-    DataTable > .datatable--hover { background: $surface-active; }
-    Input { border: solid $panel; }
-    Input:focus { border: round $accent; }
-    Button { margin: 0 1; }
-    .panel-title { color: $accent; text-style: bold; }
-    .muted { color: $muted; }
-    """
+    ENABLE_COMMAND_PALETTE = False
+
+    CSS = APP_CSS
 
     BINDINGS = [
         Binding("1", "tab('cases')", "Cases"),
         Binding("2", "tab('devices')", "Devices"),
-        Binding("3", "tab('audit')", "Audit"),
-        Binding("4", "tab('settings')", "Settings"),
+        Binding("3", "tab('imaging')", "Imaging"),
+        Binding("4", "tab('audit')", "Audit"),
+        Binding("5", "tab('settings')", "Settings"),
         Binding("left", "prev_tab", "Prev tab", show=False),
         Binding("right", "next_tab", "Next tab", show=False),
         Binding("r", "refresh", "Refresh", show=False),
@@ -126,6 +86,7 @@ class TraceApp(App[None]):
         from trace_core.tui.screens.audit import AuditView
         from trace_core.tui.screens.cases import CasesView
         from trace_core.tui.screens.devices import DevicesView
+        from trace_core.tui.screens.imaging import ImagingView
         from trace_core.tui.screens.settings import SettingsView
 
         with TabbedContent(initial="cases"):
@@ -133,14 +94,16 @@ class TraceApp(App[None]):
                 yield CasesView(self._session_manager)
             with TabPane("Devices", id="devices"):
                 yield DevicesView(self._session_manager)
+            with TabPane("Imaging", id="imaging"):
+                yield ImagingView(self._session_manager)
             with TabPane("Audit", id="audit"):
                 yield AuditView(self._session_manager)
             with TabPane("Settings", id="settings"):
                 yield SettingsView(self._session_manager)
-        yield Static(TAB_HINTS["cases"], id="hint")
+        yield Static(_hint_text(TAB_HINTS["cases"]), id="hint")
 
     def on_mount(self) -> None:
-        self.query_one("#hint", Static).update(TAB_HINTS["cases"])
+        self.query_one("#hint", Static).update(_hint_text(TAB_HINTS["cases"]))
         view = self.current_view()
         focus = getattr(view, "focus_default", None)
         if callable(focus):
@@ -170,16 +133,30 @@ class TraceApp(App[None]):
     def action_palette(self) -> None:
         from trace_core.tui.palette import PaletteModal
 
-        self.push_screen(PaletteModal(), self._palette_done)
+        tabs = self.query_one(TabbedContent)
+        self.push_screen(PaletteModal(tabs.active or "cases"), self._palette_done)
 
     def _palette_done(self, command: str | None) -> None:
         if not command:
             return
         from trace_core.tui.actions import resolve_palette_command
+        from trace_core.tui.palette import command_scope
 
         command = resolve_palette_command(command)
+        tabs = self.query_one(TabbedContent)
         if command.startswith("tab-"):
             self.action_tab(command.removeprefix("tab-"))
+            return
+        scope = command_scope(command)
+        if scope and scope in _TAB_ORDER and tabs.active != scope:
+            tabs.active = scope
+            self.call_later(self._run_palette_command, command, scope)
+            return
+        self._run_palette_command(command, tabs.active or "cases")
+
+    def _run_palette_command(self, command: str, target_tab: str) -> None:
+        tabs = self.query_one(TabbedContent)
+        if tabs.active != target_tab:
             return
         view = self.current_view()
         run = getattr(view, "run_command", None)
@@ -200,7 +177,7 @@ class TraceApp(App[None]):
             return
         self._last_tab = tab
         try:
-            self.query_one("#hint", Static).update(TAB_HINTS.get(tab, ""))
+            self.query_one("#hint", Static).update(_hint_text(TAB_HINTS.get(tab, "")))
         except NoMatches:
             pass  # initial activation fires before the hint bar mounts
         try:

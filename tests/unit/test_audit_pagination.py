@@ -326,7 +326,7 @@ async def _audit_tab_on_a_long_ledger(
     seqs = _seed(session_manager, PAGE_ROWS + 25)
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         table = app.query_one("#audit-table", DataTable)
         assert table.row_count == PAGE_ROWS
@@ -341,6 +341,15 @@ async def _wait_scrollable(pilot: Any, table: DataTable, tries: int = 40) -> Non
     assert table.max_scroll_y > 0
 
 
+async def _wait_rows(pilot: Any, table: DataTable, count: int, tries: int = 40) -> None:
+    await pilot.pause()
+    for _ in range(tries):
+        if table.row_count == count:
+            return
+        await pilot.pause()
+    assert table.row_count == count
+
+
 @pytest.mark.unit
 @pytest.mark.anyio
 async def test_audit_view_pages_back_through_every_event(
@@ -351,8 +360,7 @@ async def test_audit_view_pages_back_through_every_event(
         await pilot.pause()
         with _selects(session_manager) as seen:
             table.move_cursor(row=table.row_count - 1)
-            await pilot.pause()
-            assert table.row_count == len(seqs)
+            await _wait_rows(pilot, table, len(seqs))
             keyset = [s for s in seen if "payload_json" not in s and "seq < " in s]
             assert len(keyset) == 1
             detail = [s for s in seen if "payload_json" in s]
@@ -360,8 +368,7 @@ async def test_audit_view_pages_back_through_every_event(
 
             for _ in range(5):
                 await pilot.press("down")
-            await pilot.pause()
-            assert table.row_count == len(seqs)
+            await _wait_rows(pilot, table, len(seqs))
             assert len([s for s in seen if "seq < " in s]) == 1
             assert len([s for s in seen if "payload_json" in s]) == 6
 
@@ -406,7 +413,7 @@ async def test_audit_header_reports_the_whole_matching_ledger_not_the_window(
     seqs = _seed(session_manager, PAGE_ROWS + 25)
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         header = str(app.query_one(f"#{AUDIT_HEADER_ID}", Static).render())
         assert header.rstrip().endswith(f"· {len(seqs)}")
@@ -431,7 +438,7 @@ async def test_audit_table_stays_inside_the_sidebar(
     _seed(session_manager, 60)
     app = TraceApp(session_manager)
     async with app.run_test(size=size) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         table = app.query_one("#audit-table", DataTable)
         left = app.query_one("#audit-left")
@@ -475,7 +482,7 @@ async def test_audit_view_does_not_extend_before_the_table_is_measured(
     _seed(session_manager, PAGE_ROWS + 25)
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         for _ in range(3):
             await pilot.pause()
         table = app.query_one("#audit-table", DataTable)
@@ -492,13 +499,13 @@ async def test_audit_view_detail_is_not_refetched_when_the_tab_is_revisited(
     _seed(session_manager, 5)
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         with _selects(session_manager) as seen:
             for _ in range(2):
-                await pilot.press("4")
+                await pilot.press("5")
                 await pilot.pause()
-                await pilot.press("3")
+                await pilot.press("4")
                 await pilot.pause()
             assert app.query_one("#audit-table", DataTable).row_count == 5
             assert len([s for s in seen if "payload_json" in s]) == 0
@@ -545,7 +552,7 @@ async def test_a_failing_count_is_announced_and_never_shown_as_a_wrong_total(
     monkeypatch.setattr("trace_core.audit.service.AuditService.count_events", _broken)
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         messages = [n.message for n in app._notifications]
         header = str(app.query_one(f"#{AUDIT_HEADER_ID}", Static).render())
@@ -591,6 +598,15 @@ def test_every_event_label_is_short_and_readable() -> None:
         "DEVICE_LINKED": "Device Linked",
         "DEVICE_UNLINKED": "Device Unlinked",
         "DEVICE_RECOGNIZED": "Device Recognized",
+        "IMAGING_RESERVED": "Imaging Reserved",
+        "IMAGING_ABANDONED": "Imaging Abandoned",
+        "IMAGING_STARTED": "Imaging Started",
+        "IMAGING_VERIFYING": "Imaging Verifying",
+        "IMAGING_COMPLETED": "Imaging Completed",
+        "IMAGING_FAILED": "Imaging Failed",
+        "IMAGING_QUARANTINED": "Imaging Quarantined",
+        "IMAGING_SEALED": "Imaging Sealed",
+        "IMAGING_UNSEALED": "Imaging Unsealed",
         "UPDATE_POLICY_OVERRIDE": "Policy Override",
     }
     for action in AuditAction:
@@ -620,7 +636,7 @@ async def test_audit_window_stops_at_five_pages(
     seqs = _seed(session_manager, 1200)
     app = TraceApp(session_manager)
     async with app.run_test(size=(110, 40)) as pilot:
-        await pilot.press("3")
+        await pilot.press("4")
         await pilot.pause()
         await pilot.pause()
         view = app.query_one(AuditView)

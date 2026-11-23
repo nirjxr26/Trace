@@ -182,10 +182,10 @@ def test_the_palette_offers_both_link_commands() -> None:
     assert {"device-link", "device-unlink"} <= names
 
 
-def test_the_footer_hint_names_the_link_key() -> None:
+def test_the_footer_hint_points_to_the_command_palette() -> None:
     from trace_core.tui.app import TAB_HINTS
 
-    assert "l Link" in TAB_HINTS["devices"]
+    assert "Ctrl+P Commands" in TAB_HINTS["devices"]
 
 
 @pytest.mark.anyio
@@ -246,6 +246,7 @@ def test_the_dossier_heading_is_linked_device(session_manager, device_file_env, 
     view = CasesView.__new__(CasesView)
     view._manager = session_manager
     view._device_cache = {}
+    view._imaging_cache = {}
 
     rendered: list[str] = []
     body = _Recorder(rendered)
@@ -284,21 +285,21 @@ def test_every_when_label_is_now_timestamp() -> None:
 
     assert '("Timestamp"' in inspect.getsource(audit_renderers._detail_fields)
     assert '"Timestamp' in inspect.getsource(audit_screen)
-    assert '"Timestamp' in inspect.getsource(devices_screen)
+    assert '"Checked' in inspect.getsource(devices_screen)
 
 
 def test_the_label_columns_stay_aligned_after_the_rename() -> None:
     """`Timestamp` is wider than `When`; a hand-padded column that is not re-padded
     knocks every sibling label out of alignment."""
-    import re
-
+    from trace_core.tui.design.tokens import LABEL_MD
     from trace_core.tui.screens import audit as audit_screen
     from trace_core.tui.screens import devices as devices_screen
 
+    assert LABEL_MD == 16
     for module in (audit_screen, devices_screen):
-        labels = re.findall(r'body\.append\("([A-Za-z ]+)", style="dim"\)', inspect_source(module))
-        widths = {len(x) for x in labels}
-        assert len(widths) == 1, f"{module.__name__} label column is ragged: {labels}"
+        source = inspect_source(module)
+        assert "kv_row(body, label, value, LABEL_MD)" in source
+        assert "LABEL_MD" in source
 
 
 def inspect_source(module) -> str:  # noqa: ANN001
@@ -362,19 +363,19 @@ async def test_the_list_is_a_fixed_scrolling_window(session_manager) -> None:
         listing = app.screen.query_one("#case-pick-list", ListView)
 
         assert len(listing.children) == 25, "every row is still loaded"
-        assert listing.size.height == 14, "a full list fills the fixed window"
+        assert listing.size.height == 8, "a full list fills the fixed window"
         assert listing.show_vertical_scrollbar, "an overflowing list must show a scrollbar"
         assert listing.max_scroll_y > 0, "and must actually be scrollable"
 
-    # A short list is what separates a FIXED height from `height: auto; max-height: 14`:
-    # capped-auto would shrink to three rows, a fixed window stays at fourteen.
+    # A short list distinguishes the fixed-height window from an auto-sized list.
+    # The content area remains eight rows after the vertical padding.
     app2 = TraceApp(session_manager)
     async with app2.run_test(size=(100, 40)) as pilot2:
         app2.push_screen(CasePicker(lambda _t: rows[:3]))
         await pilot2.pause()
         short = app2.screen.query_one("#case-pick-list", ListView)
         assert len(short.children) == 3
-        assert short.size.height == 14, "a short list must still occupy the fixed window"
+        assert short.size.height == 8, "a short list must still occupy the fixed window"
 
 
 def test_the_picker_declares_a_scrollbar_and_filter_padding() -> None:
@@ -385,8 +386,12 @@ def test_the_picker_declares_a_scrollbar_and_filter_padding() -> None:
     from trace_core.tui.forms import CasePicker
 
     css = inspect.getsource(CasePicker)
-    assert "#case-pick-filter { margin-bottom: 1; }" in css
-    assert "scrollbar-size-vertical: 1;" in css
+    assert "#case-pick-head { height: auto; background: $form-bg; padding: 1 3; }" in css
+    assert "#case-pick-search { height: 1; align: center middle; margin: 1 3 0 3; }" in css
+    assert 'yield Static("› ", id="case-pick-caret")' in css
+    assert 'placeholder="search or filter case"' in css
+    assert "#case-pick-list { height: 10;" in css
+    assert "scrollbar-size-vertical: 0;" in css
 
 
 @pytest.mark.anyio

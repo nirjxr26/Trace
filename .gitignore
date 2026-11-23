@@ -4,6 +4,7 @@
 
 # --- Internal Documentation & Process Artifacts ---
 /docs
+/.planning/
 process/
 CODE-AUDIT.md
 DEVICE-UX-FINDINGS.md

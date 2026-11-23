@@ -32,7 +32,7 @@ async def _goto_settings_updates(pilot, app) -> None:  # type: ignore[no-untyped
     from textual.widgets import Static, TabbedContent
 
     for _ in range(10):
-        await pilot.press("4")
+        await pilot.press("5")
         await pilot.pause()
         if app.query_one(TabbedContent).active == "settings":
             break
@@ -62,8 +62,8 @@ async def test_updates_tab_check_and_hint(session_manager: DatabaseSessionManage
         await _goto_settings_updates(pilot, app)
         await _press_until(pilot, app, "c", "1.5.0")
         detail = _text(app.query_one("#settings-detail", Static))
-        assert "Update available         1.5.0" in detail
-        assert "Run `trace update install` to upgrade." in detail
+        assert "Available version" in detail
+        assert "update the trace via standalone CLI" in detail
         assert "restart" not in detail.lower()
         assert "Minimum supported version" not in detail
         assert "Update 1.5.0 available" in _text(app.query_one("#hint", Static))
@@ -82,11 +82,11 @@ async def test_updates_card_shows_version_block(
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         await _goto_settings_updates(pilot, app)
-        await _press_until(pilot, app, "c", "Update available         1.5.0")
+        await _press_until(pilot, app, "c", "Available version")
         detail = _text(app.query_one("#settings-detail", Static))
         assert "Current version" not in detail
-        assert "Update available         1.5.0" in detail
-        assert "Run `trace update install` to upgrade." in detail
+        assert "Available version" in detail
+        assert "update the trace via standalone CLI" in detail
         assert "trace update install --yes" not in detail
         assert "Minimum supported version" not in detail
         assert not app.query("#update-apply"), "the update affordance is the CLI command, not a button"
@@ -109,36 +109,27 @@ async def test_updates_install_guarded_without_update(session_manager: DatabaseS
         assert not hasattr(view, "action_install"), "the TUI must not install updates"
 
 
-async def test_check_spinner_animates_then_clears(session_manager: DatabaseSessionManager) -> None:
-    """The check spinner must animate on its own timer and stop once the check ends.
+async def test_check_has_no_spinner_and_shows_static_status(session_manager: DatabaseSessionManager) -> None:
+    """Update checks show plain text, never an animated spinner widget."""
+    from textual.widgets import Static
 
-    It used to be a static step_line glyph painted into the detail pane, so it never moved.
-    """
     from trace_core.tui.screens.settings import SettingsView
-    from trace_core.tui.widgets import ThothSpinner
 
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         await _goto_settings_updates(pilot, app)
         view = app.query_one(SettingsView)
-        spin = app.query_one("#update-check-spin", ThothSpinner)
+        assert not app.query("#update-check-spin"), "the update spinner must be gone"
 
         view._checking = True
         view._render_detail()
-        await pilot.pause(0.15)
-        assert spin.display, "the spinner must show while a check runs"
-        assert "Checking for updates" in _text(spin)
-
-        seen = set()
-        for _ in range(12):
-            await pilot.pause(0.09)
-            seen.add(_text(spin)[0])
-        assert len(seen) > 1, "the spinner glyph must advance on its own timer"
+        await pilot.pause()
+        assert "Checking for updates" in _text(app.query_one("#settings-detail", Static))
 
         view._checking = False
         view._render_detail()
         await pilot.pause()
-        assert not spin.display, "the spinner must disappear once the check ends"
+        assert "Checking for updates" not in _text(app.query_one("#settings-detail", Static))
 
 
 async def test_tui_offers_no_install_gesture(session_manager: DatabaseSessionManager) -> None:
@@ -198,11 +189,11 @@ async def test_integrity_verify_runs_once_per_ledger_head(session_manager, monke
 
     async def _show_integrity(pilot, app) -> None:  # type: ignore[no-untyped-def]
         for _ in range(10):
-            if "Chain Status" in _text(app.query_one("#settings-detail", Static)):
+            if "Chain status" in _text(app.query_one("#settings-detail", Static)):
                 return
             await pilot.press("down")
             await pilot.pause()
-        assert "Chain Status" in _text(app.query_one("#settings-detail", Static))
+        assert "Chain status" in _text(app.query_one("#settings-detail", Static))
 
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
@@ -253,7 +244,7 @@ async def test_db_snapshot_fetch_runs_once_per_visit(session_manager, monkeypatc
             await pilot.press("up")
             await pilot.pause()
         assert calls == base, f"re-snapshotted on section wiggle: {calls} vs {base}"
-        assert "Online" in _text(app.query_one("#settings-detail", Static))
+        assert "Connected" in _text(app.query_one("#settings-detail", Static))
         from trace_core.tui.screens.settings import SettingsView
 
         for _ in range(10):
@@ -280,8 +271,8 @@ async def test_updates_section_without_a_cache_never_claims_up_to_date(
     async with app.run_test() as pilot:
         await _goto_settings_updates(pilot, app)
         detail = _text(app.query_one("#settings-detail", Static))
-        assert "You're up to date" not in detail
-        assert "No recent check result" in detail
+        assert "Up to date" not in detail
+        assert "Not checked" in detail
         assert "Press c to check for updates" in detail
 
 
@@ -297,8 +288,8 @@ async def test_fresh_cached_result_still_reads_up_to_date(
     async with app.run_test() as pilot:
         await _goto_settings_updates(pilot, app)
         detail = _text(app.query_one("#settings-detail", Static))
-        assert "You're up to date" in detail
-        assert "No recent check result" not in detail
+        assert "Up to date" in detail
+        assert "Not checked" not in detail
 
 
 async def test_refresh_drops_a_removed_check_cache(session_manager: DatabaseSessionManager, temp_storage_root) -> None:
@@ -311,13 +302,13 @@ async def test_refresh_drops_a_removed_check_cache(session_manager: DatabaseSess
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         await _goto_settings_updates(pilot, app)
-        assert "You're up to date" in _text(app.query_one("#settings-detail", Static))
+        assert "Up to date" in _text(app.query_one("#settings-detail", Static))
         cache_path().unlink()
         app.query_one(SettingsView).refresh_data()
         await pilot.pause()
         detail = _text(app.query_one("#settings-detail", Static))
-        assert "You're up to date" not in detail
-        assert "No recent check result" in detail
+        assert "Up to date" not in detail
+        assert "Not checked" in detail
 
 
 async def test_a_failing_section_renderer_names_itself(
@@ -332,7 +323,7 @@ async def test_a_failing_section_renderer_names_itself(
 
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
-        await pilot.press("4")
+        await pilot.press("5")
         await pilot.pause()
         monkeypatch.setattr(SettingsView, "_updates_body", _boom)
         app.query_one("#settings-sections", ListView).focus()
@@ -396,12 +387,14 @@ async def test_integrity_names_a_key_problem_and_not_tampering(
             await _goto_settings_updates(pilot, app)
             detail = app.query_one("#settings-detail", Static)
             for _ in range(20):
-                if "SIGNING KEY PROBLEM" in _text(detail):
+                if "Signature status" in _text(detail):
                     break
                 await pilot.press("down")
                 await pilot.pause()
             text = _text(detail)
-            assert "SIGNING KEY PROBLEM" in text, text
-            assert "TAMPER DETECTED" not in text, text
+            assert "Signature status" in text, text
+            assert "key problem, not evidence of tampering" in text, text
             if mismatch_type == "insecure_key":
-                assert "shipped development key" in text, text
+                assert "Development key" in text, text
+            else:
+                assert "Key unavailable" in text, text

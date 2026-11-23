@@ -71,8 +71,10 @@ def _restrict_windows_acl(path: Path, *, directory: bool) -> None:
 def ensure_dir(path: str | Path, mode: int = 0o700) -> Path:
     """mkdir -p with explicit owner-only mode. Fails loudly instead of inheriting umask."""
     target = Path(path)
+    created = not target.exists()
     target.mkdir(parents=True, exist_ok=True, mode=mode)
-    os.chmod(target, mode)
+    current_mode = target.stat().st_mode & 0o777
+    os.chmod(target, mode if created else current_mode & mode)
     if mode & 0o077 == 0:
         _restrict_windows_acl(target, directory=True)
     return target

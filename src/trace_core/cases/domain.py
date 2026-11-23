@@ -56,6 +56,11 @@ class CaseStatus(StrEnum):
     CLOSED = "CLOSED"
 
 
+def require_no_active_imaging(has_active_imaging: bool) -> None:
+    if has_active_imaging:
+        raise InvariantViolationError("A case with an unresolved imaging operation cannot be closed or archived.")
+
+
 class TransitionError(DomainError):
     """Raised when an illegal case lifecycle state transition is attempted.
 

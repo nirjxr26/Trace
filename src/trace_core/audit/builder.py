@@ -65,6 +65,31 @@ def _case_event(
     return (action, _subject_case(number, sid), details, _ctx(command))
 
 
+def for_imaging_reservation(
+    action: AuditAction, number: str, case_id: UUID, operation_id: UUID
+) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
+    return _case_event(
+        action,
+        number,
+        case_id,
+        {"operation_id": str(operation_id), "case_id": str(case_id)},
+        "imaging reservation",
+    )
+
+
+def for_imaging_event(
+    action: AuditAction,
+    number: str,
+    case_id: UUID,
+    operation_id: UUID,
+    details: dict[str, Any] | None = None,
+) -> tuple[AuditAction, Subject, dict[str, Any], Context]:
+    merged = {"operation_id": str(operation_id), "case_id": str(case_id)}
+    if details:
+        merged.update(details)
+    return _case_event(action, number, case_id, merged, "imaging")
+
+
 def for_case_created(
     number: str,
     sid: UUID,

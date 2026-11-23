@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from rich.text import Text
 from textual.theme import Theme
 
-from trace_core.core.ui.renderers import GUTTER, get_status_style_and_label
+from trace_core.core.ui.renderers import get_status_style_and_label
 from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
 
 TRACE_THEME = Theme(
@@ -26,6 +26,10 @@ TRACE_THEME = Theme(
         "tag": THEME_TOKENS["tag"],
         "surface-active": THEME_TOKENS["surface_active"],
         "surface-elevated": THEME_TOKENS["surface_elevated"],
+        "palette-active": THEME_HEX["palette_active"],
+        "violet": THEME_HEX["violet"],
+        "scrollbar": THEME_HEX["scrollbar"],
+        "form-bg": THEME_HEX["form_bg"],
     },
 )
 
@@ -50,7 +54,6 @@ SELECT_PREFIX = "› "
 
 DOT_OK = THEME_HEX["green"]
 DOT_BAD = THEME_HEX["red"]
-DOT_INFO = THEME_HEX["blue"]
 
 
 def dot_line(ok: bool, label: str):  # type: ignore[no-untyped-def]
@@ -59,16 +62,6 @@ def dot_line(ok: bool, label: str):  # type: ignore[no-untyped-def]
     body = Text()
     body.append(glyph, style=DOT_OK if ok else DOT_BAD)
     body.append(label)
-    return body
-
-
-def download_bar(read: int, total: int, width: int = 28):
-    filled = min(width, read * width // total) if total > 0 else 0
-    body = Text()
-    body.append(GUTTER, style=THEME_HEX["muted"])
-    body.append("[" + "█" * filled + "░" * (width - filled) + "]", style=THEME_HEX["green"])
-    if total > 0:
-        body.append(f" {read * 100 // total}%  {read / (1 << 20):.1f} / {total / (1 << 20):.1f} MB")
     return body
 
 
@@ -90,12 +83,6 @@ def integrity_line(verified: bool | None, checked: int = 0, *, sampled: int | No
         return dot_line(True, "No records to verify")
     scope = f" of {sampled}" if sampled is not None and sampled > checked else ""
     return dot_line(True, f"{checked} newest record{'' if checked == 1 else 's'}{scope} checked · all matched")
-
-
-def append_kv(body: Text, label: str, value: str) -> None:
-    """Single source for `Label     value` detail rows shared by Settings sections."""
-    body.append(f"{label:<10} ", style="dim")
-    body.append(f"{value}\n")
 
 
 def detail_placeholder(has_rows: bool, empty_message: str) -> Text:

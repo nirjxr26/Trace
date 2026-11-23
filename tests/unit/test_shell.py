@@ -256,6 +256,40 @@ def test_shell_edit_clear_rules(service: CaseService, monkeypatch: pytest.Monkey
     assert updated.tags == []
 
 
+def test_shell_imaging_reserves_acquires_and_abandons(
+    service: CaseService,
+    temp_storage,
+    tmp_path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pathlib import Path
+
+    from trace_core.cases.shell_handler import CaseShellCommandHandler
+    from trace_core.core.cli.registry import ShellContext
+    from trace_core.devices import synthetic
+    from trace_core.imaging.domain import ImagingState
+    from trace_core.imaging.service import ImagingService
+
+    case = service.create_case(CaseCreateDto(title="Imaging Shell", lead_examiner="Examiner"))
+    source = synthetic.write_disk(Path(tmp_path) / "fixture.dd", size=1024)
+    handler = CaseShellCommandHandler()
+    context = ShellContext(service=service)
+    monkeypatch.setattr("trace_core.cases.shell_handler.prompt_confirm", lambda *a, **k: True)
+
+    assert handler.execute("imaging-reserve", [case.number], context) is True
+    reserved = ImagingService(service.session_manager).list_for_case(case.number)[0]
+    assert str(reserved.id) in capsys.readouterr().out
+
+    assert handler.execute("imaging-acquire", [case.number, "--source", str(source)], context) is True
+    assert "byte-verified" in capsys.readouterr().out
+    assert ImagingService(service.session_manager).list_for_case(case.number)[0].state is ImagingState.BYTE_VERIFIED
+
+    second = ImagingService(service.session_manager).reserve(case.number)
+    assert handler.execute("imaging-abandon", [str(second.id)], context) is True
+    assert "abandoned" in capsys.readouterr().out
+
+
 def test_shell_review_toggles_the_case_status(
     service: CaseService, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -423,10 +457,8 @@ def test_every_tab_detail_pane_gets_the_same_width_share() -> None:
     blocks = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
     widthed = {sel.strip() for selectors, body in blocks if "width: 2fr" in body for sel in selectors.split(",")}
     padded = {sel.strip() for selectors, body in blocks if "padding: 1 2" in body for sel in selectors.split(",")}
-    right_panes = {sel for sel in padded if sel.endswith("-right")}
-    missing = right_panes - widthed
-    assert not missing, f"detail panes with padding but no width: {missing}"
-    assert {"#cases-right", "#device-right"} <= widthed
+    assert ".pane" in padded
+    assert ".pane-right" in widthed
 
 
 def test_a_multi_word_alias_is_owned_and_completable() -> None:

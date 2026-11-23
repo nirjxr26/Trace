@@ -89,7 +89,7 @@ def test_the_default_gate_consults_the_forensic_operation_provider(
     from trace_core.devices import operation_state
     from trace_core.updates.lifecycle import UpdateLifecycle
 
-    monkeypatch.setattr(operation_state, "forensic_operation_active", lambda: True)
+    monkeypatch.setattr(operation_state, "forensic_operation_active", lambda _manager=None: True)
     manifest, _, art_path, _ = signed_release()
     lifecycle = UpdateLifecycle("tx-p0-default-gate", session_manager)
     with pytest.raises(UpdatePolicyBlockedError, match="forensic operation active"):

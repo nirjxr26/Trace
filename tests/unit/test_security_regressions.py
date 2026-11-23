@@ -5,6 +5,7 @@ Covers: number grammar, anchor containment, markup/ANSI-safe rendering,
 control-character policy. See docs/security/assessment-2026-09-17.md.
 """
 
+import os
 import re
 import shutil
 import subprocess
@@ -884,33 +885,56 @@ def test_atomic_write_is_owner_only(tmp_path) -> None:  # type: ignore[no-untype
     assert_owner_only(out, "0o600")
 
 
-def _windows_sddl(path: Path) -> str:
-    shell = shutil.which("pwsh") or "powershell"
+def _powershell_env() -> dict[str, str]:
+    env = dict(os.environ)
+    system_root = env.get("SystemRoot", r"C:\Windows")
+    env["PSModulePath"] = str(Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0" / "Modules")
+    return env
+
+
+def _powershell_shell() -> str:
+    env = _powershell_env()
+    for shell in (shutil.which("pwsh"), shutil.which("powershell")):
+        if shell is None:
+            continue
+        try:
+            probe = subprocess.run(
+                [shell, "-NoProfile", "-Command", "exit 0"],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+        except OSError:
+            continue
+        if probe.returncode == 0:
+            return shell
+    raise RuntimeError("no usable PowerShell executable found")
+
+
+def _run_powershell(command: str) -> str:
+    shell = _powershell_shell()
     result = subprocess.run(
-        [shell, "-NoProfile", "-Command", f"(Get-Acl -LiteralPath '{path}').Sddl"],
+        [shell, "-NoProfile", "-Command", command],
         capture_output=True,
         text=True,
+        env=_powershell_env(),
     )
     if result.returncode != 0:
-        raise RuntimeError(f"{shell} could not read the ACL of {path}: {result.stderr.strip()}")
+        raise RuntimeError(f"{shell} failed: {result.stderr.strip()}")
     return result.stdout.strip()
 
 
+def _windows_sddl(path: Path) -> str:
+    return _run_powershell(f"(Get-Acl -LiteralPath '{path}').Sddl")
+
+
 def _windows_acl_sids(path: Path) -> set[str]:
-    shell = shutil.which("pwsh") or "powershell"
     command = (
         f"$acl = Get-Acl -LiteralPath '{path}'; "
         "$acl.Access | ForEach-Object { "
         "$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }"
     )
-    result = subprocess.run(
-        [shell, "-NoProfile", "-Command", command],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"{shell} could not read the ACL of {path}: {result.stderr.strip()}")
-    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+    return {line.strip() for line in _run_powershell(command).splitlines() if line.strip()}
 
 
 def test_ensure_dir_strips_broad_principals_on_windows(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -1171,13 +1195,13 @@ async def test_bad_anchor_path_notifies(session_manager: DatabaseSessionManager)
         for _ in range(5):
             body_now = app.query_one("#settings-detail", Static).render()
             text_now = body_now.plain if isinstance(body_now, Text) else str(body_now)
-            if "Chain Status" in text_now or "NOTHING TO VERIFY" in text_now or "No audit" in text_now:
+            if "Chain status" in text_now or "NOTHING TO VERIFY" in text_now or "No audit" in text_now:
                 break
             await pilot.press("down")
             await pilot.pause()
         rendered = app.query_one("#settings-detail", Static).render()
         body = rendered.plain if isinstance(rendered, Text) else str(rendered)
-        assert "Chain Status" in body or "NOTHING TO VERIFY" in body or "No audit" in body
+        assert "Chain status" in body or "NOTHING TO VERIFY" in body or "No audit" in body
         # Service-level typed error for the bad anchor path itself.
         from trace_core.audit.anchor import verify_against_anchor
         from trace_core.audit.service import AuditService
