@@ -5690,3 +5690,8 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Summary: Stage the project, runtime, lockfile, TUI preview, and README version at 0.4.0 and test version consistency. This does not constitute release approval or publish an update; imaging safety and VMware validation remain outstanding.
 - Files: pyproject.toml, uv.lock, src/trace_core/__init__.py, src/trace_core/core/settings.py, src/trace_core/tui/screens/imaging.py, README.md, tests/unit/test_lockfile_parity.py, changelog/nirjxr26/changelog.md.
 - Verification: version parity and focused imaging tests: 39 passed; ruff check . and mypy src tests passed. The previous full suite, before this version bump, had 1674 passed, 21 skipped, and 4 failed. Linux VMware behavior and release update flow remain unverified.
+
+## 2026-11-23
+- Summary: Include release branches in the GitHub Actions CI pull-request target filter.
+- Files: .github/workflows/ci.yml, changelog/nirjxr26/changelog.md.
+- Verification: GitHub Actions trigger behavior pending verification on pull request 28.
