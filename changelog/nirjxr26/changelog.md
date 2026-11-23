@@ -5782,3 +5782,8 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Summary: Match the requested setup layout: blank line after progress lines, blank line after heading, and an indented wider status column for host lists.
 - Files: src/trace_core/mcp/commands.py, tests/mcp/test_commands.py, changelog/nirjxr26/changelog.md.
 - Verification: ruff format --check . and ruff check . passed; pytest tests/mcp -q: 46 passed; live setup output matches requested spacing.
+
+## 2026-11-23
+- Summary: Fix Windows CI failure in MCP stdio tests. GitHub setup-python places trace.exe in the Scripts directory, not beside python.exe. Resolve it via the real executable, then Scripts, then PATH, and add a regression test for that layout.
+- Files: tests/mcp/test_stdio.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . and ruff check . passed; pytest tests/mcp -q: 47 passed.
