@@ -34,7 +34,7 @@ def write_staged_record(staging_dir: str | Path, record: dict[str, Any]) -> Path
 
 
 def read_staged_record(staging_dir: str | Path) -> dict[str, Any] | None:
-    data = read_json_record(staged_record_path(staging_dir))
+    data = read_json_record(staged_record_path(staging_dir), root=staging_dir)
     if data is None or any(k not in data for k in REQUIRED_KEYS):
         return None
     if data.get("staged_schema") != STAGED_SCHEMA:

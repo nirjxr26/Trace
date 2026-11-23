@@ -175,8 +175,9 @@ def test_resume_with_mismatched_checkpoint_evidence_class_is_refused(monkeypatch
     monkeypatch.setattr(
         "trace_core.imaging.service.read_checkpoint", lambda path: {"evidence_class": "HARDWARE_WRITE_BLOCK"}
     )
+    source = _software_source()
     with pytest.raises(ImagingSourceUnavailableError):
-        ImagingService._require_evidence_class_match(_software_source(), (None, None, Path("checkpoint")))
+        ImagingService._require_evidence_class_match(source, (None, None, Path("checkpoint")))
 
 
 def test_evidence_class_requires_hardware_attestation() -> None:

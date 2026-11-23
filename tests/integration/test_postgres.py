@@ -350,9 +350,13 @@ def test_postgres_legacy_unconditional_chain_trigger_is_decommissioned(
                 "ON audit_chain_state FOR EACH ROW EXECUTE FUNCTION audit_chain_state_block_write()"
             )
         )
-    with pytest.raises(DBAPIError):
+
+    def attempt_legacy_trigger_update() -> None:
         with pg_session_manager.engine.begin() as conn:
             conn.execute(text("UPDATE audit_chain_state SET last_seq = last_seq + 1 WHERE id = 1"))
+
+    with pytest.raises(DBAPIError):
+        attempt_legacy_trigger_update()
 
     apply_migrations(pg_session_manager.engine)
 

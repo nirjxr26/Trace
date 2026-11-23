@@ -495,8 +495,9 @@ def test_verify_recovery_keeps_bad_regions(tmp_path: Path, temp_storage: Path, m
         return original_verify(self, *args, **kwargs)
 
     monkeypatch.setattr(ImagingService, "_verify_and_publish", fail_once)
+    operation = service.reserve(number)
     with pytest.raises(RuntimeError, match="verification unavailable"):
-        service.acquire(service.reserve(number).id, str(source))
+        service.acquire(operation.id, str(source))
 
     interrupted = service.list_for_case(number)[0]
     assert interrupted.state is ImagingState.VERIFYING

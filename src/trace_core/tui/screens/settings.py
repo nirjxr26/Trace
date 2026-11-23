@@ -29,20 +29,22 @@ DETAIL_ID = "settings-detail"
 
 # Display cap for raw exception text in section bodies and notifications.
 MAX_ERROR_DETAIL = 500
+AUDIT_INTEGRITY = "Audit Integrity"
+STORAGE_PATHS = "Storage & Paths"
 
 SECTIONS = (
     "Database",
     "Updates",
-    "Audit Integrity",
-    "Storage & Paths",
+    AUDIT_INTEGRITY,
+    STORAGE_PATHS,
     "Diagnostics",
 )
 
 SUBTITLES = {
     "Database": "Connection & migrations",
     "Updates": "Version & status",
-    "Audit Integrity": "Ledger & signature",
-    "Storage & Paths": "Read-only locations",
+    AUDIT_INTEGRITY: "Ledger & signature",
+    STORAGE_PATHS: "Read-only locations",
     "Diagnostics": "Component checks",
 }
 
@@ -152,8 +154,8 @@ class SettingsView(Vertical):
         renderer = {
             "Database": self._database_body,
             "Updates": self._updates_body,
-            "Audit Integrity": self._integrity_body,
-            "Storage & Paths": self._storage_body,
+            AUDIT_INTEGRITY: self._integrity_body,
+            STORAGE_PATHS: self._storage_body,
             "Diagnostics": self._diagnostics_body,
         }.get(section, self._database_body)
         try:
@@ -473,7 +475,7 @@ class SettingsView(Vertical):
         run_guarded(self, _migrate)
 
     def action_verify(self) -> None:
-        if not self._require_section("Audit Integrity"):
+        if not self._require_section(AUDIT_INTEGRITY):
             return
         self._verified = None
         self._render_detail()

@@ -28,6 +28,7 @@ from trace_core.core.ui.renderers import (
 )
 
 case_app = typer.Typer(name="case", help="Create, list, show, edit, review, and close forensic cases.")
+_VERIFIED_OPERATION_HELP = "Byte-verified imaging operation UUID"
 
 
 def _get_service(session_manager: DatabaseSessionManager | None = None) -> CaseService:
@@ -160,7 +161,7 @@ def acquire_imaging(
 
 @case_app.command("imaging-verify")
 def verify_imaging(
-    operation_id: UUID = typer.Argument(..., help="Byte-verified imaging operation UUID"),
+    operation_id: UUID = typer.Argument(..., help=_VERIFIED_OPERATION_HELP),
 ) -> None:
     with capture_cli_errors("Image Verification Failed"):
         from trace_core.imaging.service import ImagingService
@@ -174,7 +175,7 @@ def verify_imaging(
 
 @case_app.command("imaging-seal")
 def seal_imaging(
-    operation_id: UUID = typer.Argument(..., help="Byte-verified imaging operation UUID"),
+    operation_id: UUID = typer.Argument(..., help=_VERIFIED_OPERATION_HELP),
 ) -> None:
     with capture_cli_errors("Image Sealing Failed"):
         from trace_core.audit.helpers import prompt_passphrase
@@ -189,7 +190,7 @@ def seal_imaging(
 
 @case_app.command("imaging-unseal")
 def unseal_imaging(
-    operation_id: UUID = typer.Argument(..., help="Byte-verified imaging operation UUID"),
+    operation_id: UUID = typer.Argument(..., help=_VERIFIED_OPERATION_HELP),
     out: str = typer.Option(..., "--out", help="Output path for the decrypted raw image"),
 ) -> None:
     with capture_cli_errors("Image Unsealing Failed"):

@@ -35,19 +35,7 @@ def _fstab_auto_enabled(fstab: str) -> bool:
     return False
 
 
-def _automount_state() -> str:
-    fstab = _read_text(Path("/etc/fstab"))
-    if fstab is None:
-        return "UNKNOWN"
-    if _fstab_auto_enabled(fstab):
-        return "ENABLED"
-    mounts = _read_text(Path("/proc/self/mounts"))
-    if mounts is None:
-        return "UNKNOWN"
-    for raw in mounts.splitlines():
-        fields = raw.split()
-        if len(fields) > 2 and fields[2] == "autofs":
-            return "ENABLED"
+def _systemd_automount_state() -> str:
     for directory in (
         Path("/etc/systemd/system"),
         Path("/usr/lib/systemd/system"),
@@ -69,31 +57,46 @@ def _automount_state() -> str:
     return "DISABLED"
 
 
-def _raid_lvm_state() -> str:
-    mdadm = _read_text(Path("/etc/mdadm/mdadm.conf"))
-    lvm = _read_text(Path("/etc/lvm/lvm.conf"))
-    if mdadm is None or lvm is None:
+def _automount_state() -> str:
+    fstab = _read_text(Path("/etc/fstab"))
+    if fstab is None:
         return "UNKNOWN"
-    md_auto_disabled = False
-    for raw in mdadm.splitlines():
-        line = raw.strip()
-        fields = line.split("#", 1)[0].split()
+    if _fstab_auto_enabled(fstab):
+        return "ENABLED"
+    mounts = _read_text(Path("/proc/self/mounts"))
+    if mounts is None:
+        return "UNKNOWN"
+    for raw in mounts.splitlines():
+        fields = raw.split()
+        if len(fields) > 2 and fields[2] == "autofs":
+            return "ENABLED"
+    return _systemd_automount_state()
+
+
+def _mdadm_auto_state(text: str) -> str:
+    disabled = False
+    for raw in text.splitlines():
+        fields = raw.strip().split("#", 1)[0].split()
         if fields and fields[0].upper() == "AUTO":
             if [value.lower() for value in fields[1:]] != ["none"]:
                 return "ENABLED"
-            md_auto_disabled = True
-    if not md_auto_disabled:
-        return "UNKNOWN"
-    lvm_auto_found = False
-    for raw in lvm.splitlines():
+            disabled = True
+    return "DISABLED" if disabled else "UNKNOWN"
+
+
+def _lvm_auto_state(text: str) -> str:
+    found = False
+    for raw in text.splitlines():
         line = raw.strip()
         if not line.startswith("auto_activation_volume_list"):
             continue
-        lvm_auto_found = True
+        found = True
         if "[]" not in line:
             return "ENABLED"
-    if not lvm_auto_found:
-        return "ENABLED"
+    return "DISABLED" if found else "ENABLED"
+
+
+def _live_raid_state() -> str:
     mdstat = _read_text(Path("/proc/mdstat"))
     if mdstat is None:
         return "UNKNOWN"
@@ -106,6 +109,20 @@ def _raid_lvm_state() -> str:
     except OSError:
         return "UNKNOWN"
     return "DISABLED"
+
+
+def _raid_lvm_state() -> str:
+    mdadm = _read_text(Path("/etc/mdadm/mdadm.conf"))
+    lvm = _read_text(Path("/etc/lvm/lvm.conf"))
+    if mdadm is None or lvm is None:
+        return "UNKNOWN"
+    md_state = _mdadm_auto_state(mdadm)
+    if md_state != "DISABLED":
+        return md_state
+    lvm_state = _lvm_auto_state(lvm)
+    if lvm_state != "DISABLED":
+        return lvm_state
+    return _live_raid_state()
 
 
 def _write_block_rule(body: str) -> bool:

@@ -248,7 +248,7 @@ async def test_imaging_progress_popup_preview_animates_green_fill() -> None:
         assert "2026-CR-0001 · RAW" in str(popup.query_one("#progress-case", Static).render())
         assert "SanDisk-Cruzer-Blade.raw" in str(popup.query_one("#progress-destination", Static).render())
         assert "Evidence Acquisition" in str(popup.query_one("#progress-title", Static).render())
-        assert "Esc" == str(popup.query_one("#progress-esc", Static).render())
+        assert str(popup.query_one("#progress-esc", Static).render()) == "Esc"
         assert not popup.query("#progress-close")
         assert popup.query_one("#progress-device", Static).region.height == 1
         assert popup.query_one("#progress-device", Static).region.y > popup.query_one("#progress-head").region.y + 1
@@ -271,11 +271,11 @@ async def test_imaging_progress_popup_preview_animates_green_fill() -> None:
         assert after > before
         assert len(rendered.plain.splitlines()) == 1
         assert "██" in rendered.plain
-        assert "62% | ETA: 24s" == str(popup.query_one("#progress-status", Static).render())
+        assert str(popup.query_one("#progress-status", Static).render()) == "62% | ETA: 24s"
         assert "4.6 GB / 7.5 GB" in str(popup.query_one("#progress-bytes", Static).render())
         assert "124 MB/s" in str(popup.query_one("#progress-speed", Static).render())
         assert "00:38" in str(popup.query_one("#progress-elapsed", Static).render())
-        assert "0" == str(popup.query_one("#progress-bad", Static).render())
+        assert str(popup.query_one("#progress-bad", Static).render()) == "0"
 
 
 @pytest.mark.anyio

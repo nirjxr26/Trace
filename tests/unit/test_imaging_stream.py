@@ -53,8 +53,10 @@ def test_copy_raw_rejects_invalid_writes(result: int | None) -> None:
         def write(self, data: Buffer, /) -> int:
             return cast(int, result)
 
+    source = BytesIO(b"abc")
+    destination = InvalidWriter()
     with pytest.raises(OSError, match="did not accept"):
-        copy_raw(BytesIO(b"abc"), InvalidWriter(), 3)
+        copy_raw(source, destination, 3)
 
 
 @pytest.mark.parametrize("size", [0, 1, 1024 * 1024 + 1])
@@ -72,8 +74,10 @@ def test_verify_raw_rejects_wrong_length_or_digest(data: bytes) -> None:
 
 
 def test_verify_raw_rejects_negative_length() -> None:
+    source = BytesIO()
+    digest = hashlib.sha256(b"").hexdigest()
     with pytest.raises(ValueError, match="must not be negative"):
-        verify_raw(BytesIO(), -1, hashlib.sha256(b"").hexdigest())
+        verify_raw(source, -1, digest)
 
 
 def test_verify_raw_propagates_read_failure() -> None:
@@ -81,8 +85,10 @@ def test_verify_raw_propagates_read_failure() -> None:
         def read(self, size: int | None = -1, /) -> bytes:
             raise OSError("read failed")
 
+    source = BrokenReader()
+    digest = hashlib.sha256(b"abc").hexdigest()
     with pytest.raises(OSError, match="read failed"):
-        verify_raw(BrokenReader(), 3, hashlib.sha256(b"abc").hexdigest())
+        verify_raw(source, 3, digest)
 
 
 def test_incomplete_source_read_is_not_eof() -> None:
@@ -90,8 +96,10 @@ def test_incomplete_source_read_is_not_eof() -> None:
         def read(self, size: int | None = -1, /) -> bytes:
             return cast(bytes, None)
 
+    source = IncompleteReader()
+    destination = BytesIO()
     with pytest.raises(BlockingIOError, match="Source read did not complete"):
-        copy_raw(IncompleteReader(), BytesIO(), 1)
+        copy_raw(source, destination, 1)
 
 
 def test_incomplete_image_read_never_verifies_empty_image() -> None:
@@ -99,8 +107,10 @@ def test_incomplete_image_read_never_verifies_empty_image() -> None:
         def read(self, size: int | None = -1, /) -> bytes:
             return cast(bytes, None)
 
+    source = IncompleteReader()
+    digest = hashlib.sha256(b"").hexdigest()
     with pytest.raises(BlockingIOError, match="Image read did not complete"):
-        verify_raw(IncompleteReader(), 0, hashlib.sha256(b"").hexdigest())
+        verify_raw(source, 0, digest)
 
 
 def test_file_copy_flush_and_fresh_readback(tmp_path: Path) -> None:
@@ -123,8 +133,13 @@ def test_exclusive_image_creation_preserves_existing_file(tmp_path: Path) -> Non
     image = tmp_path / "image"
     image.write_bytes(b"existing")
 
-    with pytest.raises(FileExistsError):
+    replacement = BytesIO(b"replacement")
+
+    def attempt_copy() -> None:
         with image.open("xb") as writer:
-            copy_raw(BytesIO(b"replacement"), writer, 11)
+            copy_raw(replacement, writer, 11)
+
+    with pytest.raises(FileExistsError):
+        attempt_copy()
 
     assert image.read_bytes() == b"existing"

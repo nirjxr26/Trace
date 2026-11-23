@@ -266,7 +266,7 @@ def sqlite_sidecars(path: str | Path) -> tuple[Path, Path]:
     return Path(f"{base}-wal"), Path(f"{base}-shm")
 
 
-def read_json_record(path: str | Path) -> dict[str, Any] | None:
+def read_json_record(path: str | Path, root: str | Path | None = None) -> dict[str, Any] | None:
     """Read a JSON object, or None when absent, unreadable, or not an object.
 
     Tolerant read half paired with atomic_write_lines. Callers keep their own field
@@ -274,6 +274,8 @@ def read_json_record(path: str | Path) -> dict[str, Any] | None:
     so they read the file themselves.
     """
     target = Path(path)
+    if root is not None:
+        target = check_contained(target, root)
     if not target.is_file():
         return None
     try:
