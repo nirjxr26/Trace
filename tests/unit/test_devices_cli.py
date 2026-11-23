@@ -363,15 +363,13 @@ def test_both_cards_of_a_tab_share_one_padding() -> None:
 
     css = TraceApp.CSS
     blocks = css.split("}")
-    both_cards = next(b for b in blocks if "#cases-left" in b and "#cases-right" in b)
-    assert both_cards.count("padding:") == 1, "the two cards must take their padding from one rule"
+    shared = next(b for b in blocks if ".pane {" in b)
+    assert shared.count("padding:") == 1, "all panes must take their padding from one rule"
 
-    overrides = {"#cases-right", "#audit-right", "#settings-right", "#device-right"}
     for block in blocks:
-        if block is both_cards or "padding:" not in block:
+        if block is shared or "padding:" not in block:
             continue
-        hit = next((p for p in overrides if p in block), None)
-        assert hit is None, f"{hit} overrides the padding the two cards now share: {block.strip()[:60]}"
+        assert ".pane" not in block, f"a pane overrides the shared padding: {block.strip()[:60]}"
 
 
 def test_the_cases_search_box_has_no_divider_under_it() -> None:

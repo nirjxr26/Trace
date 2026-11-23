@@ -105,16 +105,16 @@ async def test_tui_pilot_flow(seeded_manager: DatabaseSessionManager) -> None:
         labels = [_text(item.query_one(Static)) for item in sections.children]
         assert sum(label.endswith("Storage & Paths") for label in labels) == 1, labels
         assert "Database" in _text(app.query_one("#settings-detail", Static))
-        assert "Online" in _text(app.query_one("#settings-detail", Static))
+        assert "Connected" in _text(app.query_one("#settings-detail", Static))
 
         await pilot.press("down")
         await pilot.pause()
         detail = _text(app.query_one("#settings-detail", Static))
-        assert "Current version" in detail
+        assert "Installed version" in detail
 
         await pilot.press("down")
         await pilot.pause()
-        assert "VALID" in _text(app.query_one("#settings-detail", Static))
+        assert "Valid" in _text(app.query_one("#settings-detail", Static))
 
 
 async def test_modals_back_out_on_escape(seeded_manager: DatabaseSessionManager) -> None:
@@ -344,10 +344,8 @@ async def test_no_dossier_shows_a_scrollbar(session_manager, device_file_env, ke
 
 @pytest.mark.anyio
 async def test_settings_headers_share_row_and_spacing(session_manager) -> None:
-    """The Settings title, its divider, and the section list must sit on the same rows as
-    the detail title, its divider, and the body. The left title carried a 1-row top pad
-    nothing on the right had, so every row below it drifted. Measured from painted
-    cells, so a rule that parses but does not land cannot pass."""
+    """Settings title and subtitle align with the detail title and subtitle, and the
+    section list starts on the same row as the detail body. Measured from painted cells."""
     from trace_core.tui.app import TraceApp
 
     app = TraceApp(session_manager)
@@ -369,11 +367,11 @@ async def test_settings_headers_share_row_and_spacing(session_manager) -> None:
         assert row_with("Settings", 0, 40) == row_with("Database", 40, 120), (
             "the Settings and detail titles must share a row"
         )
-        assert row_with("────", 0, 40) == row_with("────", 40, 120), (
-            "the Settings rule and the detail divider must share a row"
+        assert row_with("System configuration", 0, 40) == row_with("Connection & migrations", 40, 120), (
+            "the Settings and detail subtitles must share a row"
         )
         list_row = row_with("\u203a Database", 0, 40)
-        body_row = row_with("Online", 40, 120)
+        body_row = row_with("Connected", 40, 120)
         assert list_row == body_row, (
             f"section list (row {list_row}) and detail body (row {body_row}) must start together"
         )
@@ -621,7 +619,7 @@ async def test_the_audit_pane_names_a_key_problem_instead_of_a_mismatch_dot(
         monkeypatch.setattr(settings, "secret_key", type(settings.secret_key)(DEV_SECRET_SENTINEL))
         detail = await _audit_detail(app, pilot)
 
-    assert "SIGNING KEY UNAVAILABLE" in detail, (
+    assert "Key unavailable" in detail, (
         "a row whose signature fails only because a different key is active must name the "
         f"key, not render the bare mismatch dot: {detail}"
     )
@@ -714,6 +712,8 @@ async def test_palette_search_boosts_the_active_tab(session_manager: DatabaseSes
         app.push_screen(modal)
         await pilot.pause()
         modal.query_one("#palette-input", Input).value = "seal"
+        await pilot.pause()
+        await pilot.pause()
         await pilot.pause()
         view = modal.query_one("#palette-list", ListView)
         ids = [child.id for child in view.children if child.id]
@@ -888,8 +888,8 @@ async def test_the_audit_detail_self_check_heading_matches_the_row_scope(
     async with _audit_tab_with_one_event(session_manager) as (app, pilot):
         detail = await _audit_detail(app, pilot)
 
-    assert "SELF-CHECK" in detail, detail
-    assert "INTEGRITY" not in detail, detail
+    assert "INTEGRITY VERIFICATION" in detail, detail
+    assert "SELF-CHECK" not in detail, detail
 
 
 async def test_an_error_toast_with_sqlalchemy_text_does_not_crash_the_console(

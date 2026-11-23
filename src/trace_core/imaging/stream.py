@@ -1,6 +1,6 @@
 import hashlib
 from collections.abc import Callable
-from typing import BinaryIO, Protocol
+from typing import Any, BinaryIO, Protocol
 
 from trace_core.imaging.domain import ImagingBadRegion, ImagingInterruptedError, ImagingSourceReadError
 
@@ -11,8 +11,11 @@ CHUNK_SIZE = 1024 * 1024
 class RawSource(Protocol):
     def read(self, size: int, /) -> bytes: ...
 
+    def seek(self, offset: int, /) -> object: ...
+
 
 Progress = Callable[[int, int], None]
+ProgressWithDigest = Callable[[int, int, str], None]
 Cancelled = Callable[[], bool]
 
 
@@ -23,6 +26,8 @@ def copy_raw_with_regions(
     *,
     offset: int = 0,
     progress: Progress | None = None,
+    progress_with_digest: ProgressWithDigest | None = None,
+    digest: Any | None = None,
     cancelled: Cancelled | None = None,
     on_bad_region: Callable[[ImagingBadRegion], None] | None = None,
 ) -> tuple[int, str, tuple[ImagingBadRegion, ...]]:
@@ -31,7 +36,7 @@ def copy_raw_with_regions(
     if offset < 0 or offset > expected_bytes:
         raise ValueError("Resume offset must lie inside the expected byte count.")
 
-    digest = hashlib.sha256()
+    digest = digest if digest is not None else hashlib.sha256()
     bad_regions: list[ImagingBadRegion] = []
     copied = 0
     remaining = expected_bytes - offset
@@ -43,6 +48,7 @@ def copy_raw_with_regions(
         try:
             chunk = source.read(wanted)
         except ImagingSourceReadError as exc:
+            source.seek(offset + copied + wanted)
             chunk = b"\0" * wanted
             region = ImagingBadRegion(offset=offset + copied, length=wanted, cause=str(exc)[:512])
             bad_regions.append(region)
@@ -62,6 +68,8 @@ def copy_raw_with_regions(
             digest.update(chunk[write_offset : write_offset + written])
             copied += written
             write_offset += written
+        if progress_with_digest is not None:
+            progress_with_digest(offset + copied, expected_bytes, digest.hexdigest())
         if progress is not None:
             progress(offset + copied, expected_bytes)
     return copied, digest.hexdigest(), tuple(bad_regions)

@@ -1195,13 +1195,13 @@ async def test_bad_anchor_path_notifies(session_manager: DatabaseSessionManager)
         for _ in range(5):
             body_now = app.query_one("#settings-detail", Static).render()
             text_now = body_now.plain if isinstance(body_now, Text) else str(body_now)
-            if "Chain Status" in text_now or "NOTHING TO VERIFY" in text_now or "No audit" in text_now:
+            if "Chain status" in text_now or "NOTHING TO VERIFY" in text_now or "No audit" in text_now:
                 break
             await pilot.press("down")
             await pilot.pause()
         rendered = app.query_one("#settings-detail", Static).render()
         body = rendered.plain if isinstance(rendered, Text) else str(rendered)
-        assert "Chain Status" in body or "NOTHING TO VERIFY" in body or "No audit" in body
+        assert "Chain status" in body or "NOTHING TO VERIFY" in body or "No audit" in body
         # Service-level typed error for the bad anchor path itself.
         from trace_core.audit.anchor import verify_against_anchor
         from trace_core.audit.service import AuditService

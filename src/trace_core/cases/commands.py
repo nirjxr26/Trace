@@ -113,6 +113,16 @@ def acquire_imaging(
     physical: bool = typer.Option(
         False, "--physical", help="Acquire a real OS device through the write-protection gate"
     ),
+    software_write_block: bool = typer.Option(
+        False,
+        "--allow-software-write-block",
+        help="Use Linux kernel software write blocking; development only, NOT EVIDENTIARY",
+    ),
+    hardware_write_block: bool = typer.Option(
+        False,
+        "--hardware-write-block",
+        help="Attest that a validated hardware write blocker protects the source",
+    ),
     force: bool = typer.Option(False, "--yes", "-y", help=SKIP_CONFIRM_HELP),
 ) -> None:
     with capture_cli_errors("Imaging Acquisition Failed"):
@@ -133,7 +143,13 @@ def acquire_imaging(
             console.print(f"  [dim]{format_bytes(done)} / {format_bytes(total)}[/dim]")
 
         operation = ImagingService().acquire(
-            operation_id, source, fixture_root=fixture_root, allow_real_hardware=physical, progress=_progress
+            operation_id,
+            source,
+            fixture_root=fixture_root,
+            allow_real_hardware=physical,
+            allow_software_write_block=software_write_block,
+            attest_hardware_write_block=hardware_write_block,
+            progress=_progress,
         )
         render_success(f"Image byte-verified for operation {operation.id}.")
         console.print(f"  SHA-256   {operation.acquisition_sha256}")

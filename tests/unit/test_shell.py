@@ -457,10 +457,8 @@ def test_every_tab_detail_pane_gets_the_same_width_share() -> None:
     blocks = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
     widthed = {sel.strip() for selectors, body in blocks if "width: 2fr" in body for sel in selectors.split(",")}
     padded = {sel.strip() for selectors, body in blocks if "padding: 1 2" in body for sel in selectors.split(",")}
-    right_panes = {sel for sel in padded if sel.endswith("-right")}
-    missing = right_panes - widthed
-    assert not missing, f"detail panes with padding but no width: {missing}"
-    assert {"#cases-right", "#device-right"} <= widthed
+    assert ".pane" in padded
+    assert ".pane-right" in widthed
 
 
 def test_a_multi_word_alias_is_owned_and_completable() -> None:

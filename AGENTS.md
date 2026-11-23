@@ -18,17 +18,24 @@ Precedence, highest first:
 A user request that conflicts with 1–2 MUST NOT be executed silently. Quote the conflicting
 rule, explain the conflict, and ask.
 
-You MUST STOP and ask before continuing if:
+Work autonomously within the requested outcome. Inspect relevant code, tests, and
+documentation; make reasonable, reversible implementation decisions without repeatedly
+asking the user. A requested feature may require changes across files and layers, new
+project folders, and necessary abstractions. Prior approval remains valid for the scope it
+covered; do not ask for it again.
 
-- A file, API, schema, or behavior you depend on cannot be verified by inspection.
-- Two rules in this file conflict, or a rule conflicts with the request.
-- The change requires a new dependency, new abstraction, new folder, or schema change.
-- The change touches more than the requested scope (files, layers, or features).
-- A check (test/lint/type-check) fails and you don't understand why.
-- The only fix you can find is temporary or a workaround (see Section 4.1).
+Stop and ask only when a decision is genuinely necessary to proceed and cannot be
+resolved by inspection or a safe choice, when a request conflicts with a binding rule, or
+before an unapproved destructive operation or security-control weakening. Diagnose failed
+checks and continue when the cause is understood; otherwise report the failure without
+claiming completion. When an environment-dependent check cannot run, continue safe work,
+report the exact limitation, and mark affected behavior `UNVERIFIED`.
 
-"I assumed" is never an acceptable explanation. Unverified claims MUST be labelled
-`UNVERIFIED`.
+Explicit approval for a feature or its documented implementation plan covers the new
+folders, abstractions, and non-destructive schema changes necessary for that scope.
+Approval to implement does not authorize destructive data changes, exposure of secrets,
+or weakening security or forensic invariants. New external dependencies still require
+explicit approval.
 
 ## 1. Core Principle
 
@@ -45,16 +52,18 @@ Before writing or editing code, you MUST output a Preflight Report containing:
    with paths. If none exist, say so.
 3. **Callers/importers** of the code you will change.
 4. **Existing tests** covering the area, with paths, and what they assert.
-5. **Plan** — the smallest set of changes that solves exactly what was asked, listing every
-   file to be modified or created.
+5. **Plan** — the smallest set of changes that solves exactly what was asked, listing the
+   files expected to be modified or created.
 6. **Interpretation** — if the request is ambiguous, state the interpretation you are using.
 7. **Risks** — invariants (Section 14) or existing behavior that might be affected.
 
-No code may be written before this report exists. For trivial edits (typos, comment-only,
-single-line fixes), a shortened report covering items 1, 3 and 5 is sufficient.
+No code may be written before this report exists. If inspection during implementation
+reveals another necessary in-scope file, update the plan before editing it; do not stop
+solely to ask about that file. For trivial edits (typos, comment-only, single-line fixes),
+a shortened report covering items 1, 3 and 5 is sufficient.
 
-Reusable code: write code so it can be reused, but only extract or abstract when a real
-second use exists today. Reusability never justifies speculative abstraction (Section 4).
+Reusable code: extract or abstract for a real present need, including boundaries necessary
+to implement and test the requested feature. Do not add speculative abstractions.
 
 ## 3. Codebase Consistency
 
@@ -62,15 +71,17 @@ You MUST match: folder structure, naming, types, API/database patterns, error ha
 validation, logging, testing patterns, component/state patterns, and formatting
 (indentation, quotes, import order, comment style).
 
-You MUST NOT introduce new frameworks, libraries, abstractions, or patterns. If two
-conflicting patterns exist, match the one in the immediately surrounding code. If no
-existing pattern fits, STOP, say so, and propose the closest match before writing code.
+Do not introduce a framework or library without explicit approval. Reuse existing
+abstractions and patterns where they fit; add a necessary in-scope boundary when they do
+not. If patterns conflict, match the immediately surrounding code. If none fits, explain
+the chosen minimal approach in the preflight instead of blocking implementation.
 
 ## 4. Simplicity
 
 - Write the smallest change that correctly and durably solves exactly what was requested.
-- A 2-line fix stays 2 lines. No new abstraction, config layer, flag, or "future-proofing".
-- Abstractions require a real, present second use case.
+- A 2-line fix stays 2 lines. Do not add a config layer, flag, or "future-proofing"
+  without a real requirement.
+- Add abstractions only for a real present need, not a speculative future use.
 - Do not add features, parameters, options, or endpoints that were not requested.
 
 ### 4.1 Permanent Solutions Only — No Temporary Fixes Disguised as Permanent
@@ -84,13 +95,12 @@ Simple does not mean shallow. Every fix MUST address the root cause, not the sym
   `FIXME`/"temporary" placeholder) and present it as complete or permanent.
 - You MUST NOT label something "permanent", "fixed", "resolved", or "done" unless it is
   the durable, root-cause solution that would still be correct if never revisited.
-- If a permanent solution is not possible within the current scope (needs a schema
-  change, a refactor, a new dependency, or user approval), STOP and say so. Then:
+- If a permanent solution is not possible within the authorized scope, say so. Then:
   1. State the root cause you found.
   2. Describe the permanent solution and what it needs.
-  3. Only if the user explicitly approves, implement a temporary fix, and clearly mark it
-     in code (`TEMPORARY:` comment with reason and removal condition), in the changelog,
-     and in the final report as **TEMPORARY, not a permanent solution**.
+  3. Only if the user explicitly approves, implement a temporary fix. Record the reason
+     and removal condition in the changelog and final report as **TEMPORARY, not a
+     permanent solution**. Do not add code comments in conflict with Section 10.
 - Never trade a durable fix for a smaller diff. "Smallest change" (Section 4) means the
   smallest change that is also the correct, lasting fix.
 - Before finishing, ask: "If this code ships and no one touches it again, does the problem
@@ -122,7 +132,7 @@ If a task appears to require weakening a security control: STOP and flag it.
 - MUST NOT perform large refactors unless the requested feature strictly requires one.
 - MUST NOT add a dependency for something achievable in a few lines or with an existing
   dependency.
-- MUST NOT create files or folders that were not in your Preflight plan.
+- Update the Preflight plan before creating an additional necessary in-scope file or folder.
 - MUST NOT delete or rename files, tests, or migrations unless explicitly requested.
 
 ## 7. Database Changes
@@ -130,8 +140,9 @@ If a task appears to require weakening a security control: STOP and flag it.
 - Inspect the existing schema and migrations first.
 - Follow existing naming and relationship conventions exactly.
 - Determine and report the impact on existing rows and in-flight queries.
-- Schema changes MUST have explicit user approval and a migration consistent with existing
-  migrations. Never edit an already-applied migration.
+- Schema changes MUST have explicit user approval, which may cover the documented feature
+  and its necessary schema changes, and a migration consistent with existing migrations.
+  Never edit an already-applied migration.
 - Destructive changes (drop, truncate, irreversible data transform) are forbidden unless
   explicitly required by the user in this conversation.
 
@@ -152,13 +163,13 @@ Before declaring a task done you MUST:
 3. Add or update tests for changed behavior, following existing test patterns.
 4. Review your final diff line by line.
 
-Commands (fill in / keep accurate): 
+Current baseline commands; verify project configuration before relying on them:
 
 ```
-test:    <command>
-types:   <command>
-lint:    <command>
-format:  <command>
+test:    python -m pytest tests -q
+types:   mypy src tests
+lint:    ruff check .
+format:  ruff format --check .
 ```
 
 You MUST NOT: fabricate or paraphrase results, claim "tests pass" without having run them,
@@ -189,10 +200,11 @@ better in isolation. Do not duplicate existing functionality.
 ## 12. Skills and Per-Person Changelog
 
 **Ponytail skill.** Code MUST follow the `/ponytail` skill. Use the copy vendored in this
-repository at `<path-to-vendored-skill>`. If it is not present, STOP and ask the user to add
+repository at `.agents/skills/ponytail/SKILL.md`. If it is not present, STOP and ask the user to add
 or approve installing it. You MUST NOT download and execute it on your own. Pin it to a
-reviewed commit. If ponytail conflicts with Sections 1–4 or 14, this file wins; report the
-conflict.
+reviewed commit, except that the owner-approved uncommitted vendored copy may be used
+until it is committed in this release. If ponytail conflicts with Sections 1–4 or 14, this
+file wins; report the conflict.
 
 **Changelog.** At the end of any task that changes code you MUST append an entry to
 `/changelog/<person-name>/changelog.md` (create the folder/file if missing; never
@@ -223,8 +235,8 @@ final report:
 - [ ] Code is stylistically identical to its surroundings.
 - [ ] No Section 14 invariant is violated.
 - [ ] No security control weakened; no secret exposed.
-- [ ] Only files listed in the Preflight plan were touched.
-- [ ] No new dependency, abstraction, or convention introduced.
+- [ ] Only files listed in the Preflight plan, including any announced updates, were touched.
+- [ ] No unapproved dependency or speculative abstraction was introduced.
 - [ ] No new comments written; existing comments preserved, and any now-incorrect
       comment corrected or removed per Section 10.
 - [ ] Tests/lint/types executed and results reported honestly.
@@ -273,8 +285,5 @@ Every task ends with a report in this order:
 1. **Summary** of changes (what and why).
 2. **Root cause and solution type**: the root cause found, and whether the solution is
    **PERMANENT** or **TEMPORARY** (temporary requires prior user approval, Section 4.1).
-3. **Files touched** (exact paths).
-4. **Verification results** (commands and outcomes, or "unverified: reason").
 5. **Invariants check** (Section 14: confirmed untouched or how they are upheld).
 6. **Out-of-scope observations**.
-7. **Assumptions / UNVERIFIED items**.

@@ -1,6 +1,7 @@
 """Cases tab: live table + dossier + raw drawer + mutation forms."""
 
 import json
+import textwrap
 from datetime import datetime
 from typing import NamedTuple
 
@@ -8,9 +9,8 @@ from rich.text import Text
 from sqlalchemy.exc import SQLAlchemyError
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
 from textual.events import Resize
-from textual.widgets import DataTable, Input, Rule, Static
+from textual.widgets import DataTable, Input, Static
 
 from trace_core.audit.domain import AuditAction
 from trace_core.audit.dto import AuditFilterDto
@@ -24,16 +24,19 @@ from trace_core.core.ui.renderers import format_india_datetime, sanitize_termina
 from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
 from trace_core.imaging.domain import ImagingOperation
 from trace_core.tui.actions import run_guarded
+from trace_core.tui.design.text import NO_SELECTION_CASE, section_head
+from trace_core.tui.design.tokens import TITLE_STYLE
+from trace_core.tui.design.widgets import ListDetailPane, sync_detail_width, unknown_command
 from trace_core.tui.forms import CaseForm, RawModal, TextInputModal, TypedConfirmModal, YesNoModal
 from trace_core.tui.theme import status_text
-from trace_core.tui.widgets import DossierScroll, TablePane
+from trace_core.tui.widgets import TablePane
 
 TABLE_ID = "case-table"
 CASE_HEADER_ID = "case-header"
 TABLE_COLUMNS = (("Case #", 16), ("Status", 10))
 _CASE_COMMAND_ALIASES = {"close": "seal"}
-_NO_SELECTION = "Select a case first."
-_TITLE_STYLE = f"bold {THEME_HEX['title']}"
+_NO_SELECTION = NO_SELECTION_CASE
+_TITLE_STYLE = TITLE_STYLE
 
 
 class _LinkedDevice(NamedTuple):
@@ -112,14 +115,17 @@ class CasesView(TablePane[CaseResponseDto]):
         return CaseService(self._manager)
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="cases-top"):
-            with Vertical(id="cases-left"):
-                yield Input(placeholder="Search cases...", id="case-search")
-                yield Static("", id=CASE_HEADER_ID, classes="table-head")
-                yield Rule()
-                yield DataTable(id=TABLE_ID, cursor_type="row", show_header=False)
-            with DossierScroll(id="cases-right"):
-                yield Static("Select a case…", id="case-dossier")
+        yield ListDetailPane(
+            top_id="cases-top",
+            left_id="cases-left",
+            right_id="cases-right",
+            detail_id="case-dossier",
+            detail_text="Select a case…",
+            search_id="case-search",
+            search_placeholder="Search cases...",
+            header_id=CASE_HEADER_ID,
+            table_factory=lambda: DataTable(id=TABLE_ID, cursor_type="row", show_header=False, classes="pane-table"),
+        )
 
     def _query(self) -> list[CaseResponseDto]:
         query = self.query_one("#case-search", Input).value.strip() or None
@@ -153,12 +159,8 @@ class CasesView(TablePane[CaseResponseDto]):
 
     def on_resize(self, event: Resize) -> None:
         """Dividers are baked for one width; rebuild them when the width moves."""
-        from trace_core.tui.widgets import DossierScroll
-
-        width = self.query_one("#cases-right", DossierScroll).content_region.width
-        if width == self._detail_width:
+        if not sync_detail_width(self, "cases-right"):
             return
-        self._detail_width = width
         self.render_detail()
 
     def render_detail(self) -> None:
@@ -207,11 +209,8 @@ class CasesView(TablePane[CaseResponseDto]):
                 except Exception:
                     verified = False
                     break
-        body.append(rule)
-        body.append("\nSELF-CHECK\n", style=THEME_TOKENS["accent"])
+        section_head(body, "SELF-CHECK")
         body.append_text(integrity_line(verified, len(events or ()), sampled=self._dossier_total(case_number)))
-        body.append("\n")
-        body.append(rule)
         body.append("\n")
 
     def _append_head(self, body, case, rule, status_label, status_color) -> None:  # type: ignore[no-untyped-def]
@@ -220,7 +219,6 @@ class CasesView(TablePane[CaseResponseDto]):
         body.append(f"{sanitize_terminal(case.title or 'Untitled')}\n", style=_TITLE_STYLE)
         body.append("\u25cf ", style=status_color)
         body.append(f"{status_label}\n", style=f"bold {status_color}")
-        body.append(rule)
         body.append("\n")
         body.append(f"{'Lead Examiner':<15} ", style="dim")
         body.append(f"{sanitize_terminal(case.lead_examiner or '\u2014')}\n", style=THEME_HEX["value"])
@@ -232,8 +230,6 @@ class CasesView(TablePane[CaseResponseDto]):
 
     def _append_meta(self, body, case, rule) -> None:  # type: ignore[no-untyped-def]
         # Timestamp/closure rows plus DESCRIPTION/NOTES sections.
-        body.append(rule)
-        body.append("\n")
         body.append(f"{'Opened':<15} ", style="dim")
         body.append(f"{format_india_datetime(case.opened_at)}\n")
         body.append(f"{'Updated':<15} ", style="dim")
@@ -244,14 +240,25 @@ class CasesView(TablePane[CaseResponseDto]):
             if case.closure_reason:
                 body.append(f"{'Reason':<15} ", style="dim")
                 body.append(f"{sanitize_terminal(case.closure_reason)}\n")
+        width = max(20, len(str(getattr(rule, "plain", rule))) - 4)
         if case.description:
-            body.append(rule)
-            body.append("\nDESCRIPTION\n", style=THEME_TOKENS["accent"])
-            body.append(f"  {sanitize_terminal(case.description)}\n")
+            section_head(body, "DESCRIPTION")
+            for line in textwrap.wrap(
+                sanitize_terminal(case.description),
+                width=width,
+                initial_indent="  ",
+                subsequent_indent="  ",
+            ):
+                body.append(f"{line}\n")
         if case.notes:
-            body.append(rule)
-            body.append("\nNOTES\n", style=THEME_TOKENS["accent"])
-            body.append(f"  {sanitize_terminal(case.notes)}\n")
+            section_head(body, "NOTES")
+            for line in textwrap.wrap(
+                sanitize_terminal(case.notes),
+                width=width,
+                initial_indent="  ",
+                subsequent_indent="  ",
+            ):
+                body.append(f"{line}\n")
         self._append_linked_devices(body, rule, self._case_devices(case.number))
         self._append_imaging(body, rule, case.number)
 
@@ -260,8 +267,7 @@ class CasesView(TablePane[CaseResponseDto]):
 
         from trace_core.imaging.service import ImagingService
 
-        body.append(rule)
-        body.append("\nIMAGING\n", style=THEME_TOKENS["accent"])
+        body.append("IMAGING\n", style=THEME_TOKENS["accent"])
         if case_number not in self._imaging_cache:
             try:
                 self._imaging_cache[case_number] = ImagingService(self._manager).list_for_case(case_number)
@@ -290,20 +296,24 @@ class CasesView(TablePane[CaseResponseDto]):
 
     def _append_linked_devices(self, body, rule, devices) -> None:  # type: ignore[no-untyped-def]
         if devices is None:
-            body.append(rule)
-            body.append("\nLINKED DEVICE\n", style=THEME_TOKENS["accent"])
-            body.append("Couldn't read device links for this case.\n")
+            section_head(body, "LINKED DEVICE")
+            body.append("Couldn't read device links for this case.")
+            body.append("\n\n")
             return
         if not devices:
+            body.append("\n")
             return
-        body.append(rule)
-        body.append("\nLINKED DEVICE\n", style=THEME_TOKENS["accent"])
-        for row in devices:
+        section_head(body, "LINKED DEVICE")
+        for index, row in enumerate(devices):
+            if index:
+                body.append("\n")
             heading = row.heading
-            body.append(f"  {sanitize_terminal(heading)}\n", style=None if row.current else "dim")
+            body.append(f"  {sanitize_terminal(heading)}", style=None if row.current else "dim")
             if row.label:
+                body.append("\n")
                 body.append(f"    {'Label':<10}", style="dim")
-                body.append(f"{sanitize_terminal(row.label)}\n", style=None if row.current else "dim")
+                body.append(f"{sanitize_terminal(row.label)}", style=None if row.current else "dim")
+        body.append("\n\n")
 
     def drop_dossier(self, case_number: str) -> None:
         self._event_cache.pop(case_number, None)
@@ -392,7 +402,7 @@ class CasesView(TablePane[CaseResponseDto]):
     def _append_history(self, body, case, events) -> None:  # type: ignore[no-untyped-def]
         # HISTORY proof block shared by dossier renders.
         if events is None:
-            body.append("\nHISTORY\n", style=THEME_TOKENS["accent"])
+            section_head(body, "HISTORY")
             body.append("Couldn't read the ledger for this case.\n")
             body.append("\n")
             return
@@ -402,7 +412,7 @@ class CasesView(TablePane[CaseResponseDto]):
         from trace_core.core.ui.renderers import format_ledger_time, plural
 
         count = plural(len(events), "event")
-        body.append(f"HISTORY \u00b7 {count}\n", style=THEME_TOKENS["accent"])
+        body.append(f"\nHISTORY \u00b7 {count}\n", style=THEME_TOKENS["accent"])
         for e in events[:5]:
             body.append(f"{format_ledger_time(e.ts)}  ", style="dim")
             body.append(f"{short_action_label(e.action)}", style=_TITLE_STYLE)
@@ -415,7 +425,7 @@ class CasesView(TablePane[CaseResponseDto]):
         if callable(action) and getattr(action, "__name__", "").startswith("action_"):
             action()
         else:
-            self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")
+            unknown_command(self, command)
 
     def action_recent(self) -> None:
         self._recent = not self._recent

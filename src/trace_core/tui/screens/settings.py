@@ -14,11 +14,11 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.events import Resize
-from textual.widgets import ListItem, ListView, Rule, Static
+from textual.widgets import ListItem, ListView, Static
 
 from trace_core.audit.dto import VerifyResultDto
-from trace_core.audit.renderers import subject_case_label
 from trace_core.core.database.session import DatabaseSessionManager
+from trace_core.tui.design.widgets import sync_detail_width, unknown_command
 from trace_core.tui.widgets import active_tab
 
 if TYPE_CHECKING:
@@ -33,10 +33,18 @@ MAX_ERROR_DETAIL = 500
 SECTIONS = (
     "Database",
     "Updates",
-    "Integrity",
+    "Audit Integrity",
     "Storage & Paths",
     "Diagnostics",
 )
+
+SUBTITLES = {
+    "Database": "Connection & migrations",
+    "Updates": "Version & status",
+    "Audit Integrity": "Ledger & signature",
+    "Storage & Paths": "Read-only locations",
+    "Diagnostics": "Component checks",
+}
 
 
 class SettingsView(Vertical):
@@ -62,19 +70,16 @@ class SettingsView(Vertical):
         self._verified: tuple[tuple[int, str], VerifyResultDto] | None = None
 
     def compose(self) -> ComposeResult:
-        from trace_core.tui.widgets import ThothSpinner
-
-        with Horizontal(id="settings-top"):
-            with Vertical(id="settings-left"):
+        with Horizontal(id="settings-top", classes="pane-host"):
+            with Vertical(id="settings-left", classes="pane pane-left"):
                 yield Static("Settings", classes="card-title")
-                yield Rule()
+                yield Static("System configuration", classes="card-subtitle")
                 yield ListView(
                     *[ListItem(Static(f"  {name}"), id=f"sec-{i}") for i, name in enumerate(SECTIONS)],
                     id=TABLE_ID,
                 )
-            with Vertical(id="settings-right"):
+            with Vertical(id="settings-right", classes="pane pane-right"):
                 yield Static("", id=DETAIL_ID)
-                yield ThothSpinner("Checking for updates", id="update-check-spin")
 
     def on_mount(self) -> None:
         active = active_tab(self)
@@ -128,10 +133,8 @@ class SettingsView(Vertical):
 
     def on_resize(self, event: Resize) -> None:
         """Dividers are baked for one width; rebuild them when the width moves."""
-        width = self.query_one("#settings-right", Vertical).content_region.width
-        if width == self._detail_width:
+        if not sync_detail_width(self, "settings-right", Vertical):
             return
-        self._detail_width = width
         self._render_detail()
 
     def _render_detail(self) -> None:
@@ -144,15 +147,12 @@ class SettingsView(Vertical):
         from trace_core.core.ui.theme import THEME_HEX, THEME_TOKENS
 
         body = Text()
-        from trace_core.core.ui.renderers import rule_width as rule_span
-
         body.append(f"{section}\n", style=THEME_HEX["blue"])
-        body.append_text(Text("─" * rule_span(int(pane_width or 60), 60), style=THEME_TOKENS["border"]))
-        body.append("\n\n")
+        body.append(f"{SUBTITLES.get(section, '')}\n\n", style=THEME_TOKENS["muted"])
         renderer = {
             "Database": self._database_body,
             "Updates": self._updates_body,
-            "Integrity": self._integrity_body,
+            "Audit Integrity": self._integrity_body,
             "Storage & Paths": self._storage_body,
             "Diagnostics": self._diagnostics_body,
         }.get(section, self._database_body)
@@ -161,15 +161,13 @@ class SettingsView(Vertical):
         except Exception as exc:
             body.append(f"Could not render this section ({exc})", style="dim")
         self.query_one(f"#{DETAIL_ID}", Static).update(body)
-        from trace_core.tui.widgets import ThothSpinner
 
-        try:
-            spin = self.query_one("#update-check-spin", ThothSpinner)
-            spin.display = self._checking
-            if self._checking:
-                spin.set_text("Checking for updates")
-        except Exception:
-            pass
+    @staticmethod
+    def _setting_row(body: Text, label: str, value: str, width: int = 60) -> None:
+        from trace_core.core.ui.renderers import fit_text
+
+        body.append(f"{label:<22}", style="dim")
+        body.append(f"{fit_text(value, max(10, width - 22))}\n")
 
     # --- section bodies (each reuses one service, no view-to-view imports) ---
 
@@ -200,7 +198,7 @@ class SettingsView(Vertical):
             _unreachable(snap.message)
             return
         body.append("● ", style=DOT_OK)
-        body.append("Online\n", style="bold")
+        body.append("Connected\n", style=f"bold {THEME_HEX['green']}")
         body.append(f"{sanitize_terminal(fit_text(snap.masked_url, max(20, width - 4)))}\n", style="dim")
         body.append("\nMigrations\n", style=THEME_HEX["blue"])
         if snap.pending:
@@ -215,6 +213,7 @@ class SettingsView(Vertical):
         from trace_core.core.ui.theme import THEME_HEX
 
         if self._checking:
+            body.append("Checking for updates...\n", style="dim")
             return
         if self._kind == "idle":
             # First paint uses the cached check so the tab never opens empty.
@@ -223,28 +222,37 @@ class SettingsView(Vertical):
             except Exception as exc:
                 prev, current, kind, extra = "", "—", "failed", str(exc)[:MAX_ERROR_DETAIL]
             self._prev, self._current, self._kind, self._extra = prev, current, kind, extra
+        from datetime import UTC, datetime
+
+        from trace_core.updates.cache import read_check_cache
+
         current = sanitize_terminal(self._current or "—")
-        if self._kind == "available" and self._current:
-            if self._extra:
-                body.append(f"{sanitize_terminal(self._extra)}\n", style=THEME_HEX["amber"])
-            body.append(f"Update available         {current}\n", style=THEME_HEX["blue"])
-            body.append("\nRun `trace update install` to upgrade.\n", style="dim")
-            return
-        if self._kind == "deferred" and self._current:
-            body.append(f"Update deferred          {current}\n", style=THEME_HEX["amber"])
-            if self._extra:
-                body.append(f"\n{sanitize_terminal(self._extra)}\n", style="dim")
-            return
-        body.append("Current version\n\n", style="dim")
-        body.append(f"{current}\n\n", style="bold")
-        if self._kind == "failed":
-            body.append("✕ Check failed\n", style=THEME_HEX["amber"])
+        installed = sanitize_terminal(self._prev or "—")
+        available = current if self._kind in {"available", "deferred"} else "—"
+        status = {
+            "available": "Available",
+            "deferred": "Deferred",
+            "failed": "Check failed",
+            "unchecked": "Not checked",
+            "current": "Up to date",
+        }.get(self._kind, "Not checked")
+        cache = read_check_cache(max_age=10**12)
+        checked = "—"
+        if cache is not None:
+            try:
+                checked = datetime.fromtimestamp(float(cache.get("checked_at", 0)), UTC).strftime("%d %b %Y, %H:%M UTC")
+            except (TypeError, ValueError, OSError, OverflowError):
+                pass
+        self._setting_row(body, "Installed version", installed, width)
+        self._setting_row(body, "Available version", available, width)
+        self._setting_row(body, "Update status", status, width)
+        self._setting_row(body, "Last checked", checked, width)
+        if self._kind == "available":
+            body.append("\nupdate the trace via standalone CLI\n", style="dim")
+            body.append("trace update install\n", style=THEME_HEX["blue"])
         elif self._kind == "unchecked":
-            body.append("○ No recent check result\n", style=THEME_HEX["amber"])
             body.append("\nPress c to check for updates.\n", style="dim")
-        else:
-            body.append("✓ You're up to date\n", style=THEME_HEX["green"])
-        if self._extra:
+        if self._extra and self._kind != "available":
             body.append(f"\n{sanitize_terminal(self._extra)}\n", style="dim")
 
     def _verified_ledger(self) -> VerifyResultDto:
@@ -258,83 +266,68 @@ class SettingsView(Vertical):
         self._verified = (svc.head(), res)
         return res
 
-    def _integrity_body(self, body: Text, _width: int) -> None:
-        """Uniform section signature (body, width); this section ignores width."""
+    def _integrity_body(self, body: Text, width: int) -> None:
         from trace_core.audit.service import AuditService
-        from trace_core.core.ui.theme import THEME_HEX
-        from trace_core.tui.theme import DOT_BAD, DOT_OK
+        from trace_core.core.ui.renderers import format_india_datetime
+        from trace_core.tui.theme import DOT_BAD
 
         svc = AuditService(self._manager)
         try:
             res = self._verified_ledger()
         except Exception as exc:
-            body.append(f"Couldn't check your records ({exc})", style="dim")
+            body.append(f"Couldn't check your records ({exc})\n", style="dim")
             return
-        if res.is_valid:
-            if not res.first_seq:
-                # An empty ledger is not a pass. `verify` returns is_valid=True for zero
-                # rows, and a fully truncated ledger looks identical.
-                body.append("⚠ ", style=DOT_BAD)
-                body.append("EMPTY · NOTHING TO VERIFY\n", style="bold")
-                body.append("No audit records are available to verify.\n")
-                body.append("This does not prove the ledger is intact.\n", style="dim")
-                return
-            body.append("● ", style=DOT_OK)
-            body.append("VALID · VERIFIED\n", style=f"bold {DOT_OK}")
-            body.append("Chain Status       VERIFIED\n", style="dim")
-            body.append(f"Events Checked     {res.events_verified}\n")
-            body.append(f"Chain Breaks       {len(res.sequence_gaps)}\n")
-            body.append("This does not prove no records are missing.\n", style="dim")
-        elif res.mismatch_type in ("signing_key", "insecure_key"):
-            body.append("⚠ ", style=DOT_BAD)
-            body.append("SIGNING KEY PROBLEM\n", style="bold")
-            if res.mismatch_type == "insecure_key":
-                body.append("Signed with the shipped development key, which is public.\n", style="dim")
-            else:
-                body.append("The key this ledger was signed with is not the active key.\n", style="dim")
-            body.append(f"Events Checked     {res.events_verified}\n")
-            body.append("This is a key problem, not evidence of tampering.\n", style="dim")
-            return
+        key_problem = res.mismatch_type in ("signing_key", "insecure_key")
+        if not res.first_seq:
+            chain = "Empty"
+        elif key_problem or res.is_valid:
+            chain = "Valid"
         else:
-            body.append("× ", style=DOT_BAD)
-            body.append("TAMPER DETECTED\n", style=f"bold {DOT_BAD}")
-            body.append("Chain Status       MISMATCH\n", style="dim")
-            body.append(f"Events Checked     {res.events_verified}\n")
-            return
+            chain = "Mismatch"
+        if key_problem:
+            signature = "Development key" if res.mismatch_type == "insecure_key" else "Key unavailable"
+        elif not res.first_seq or not res.is_valid:
+            signature = "Not established"
+        else:
+            signature = "Active key"
+        verified = "—"
         try:
-            event = svc.get_by_seq(res.last_seq) if res.last_seq else None
+            seq, _chain = svc.head()
+            head = svc.get_by_seq(seq)
+            if head is not None:
+                verified = format_india_datetime(head.ts)
         except Exception:
-            event = None
-        if event is None:
-            return
-        body.append("\nSelected Event\n", style=THEME_HEX["blue"])
-        body.append(f"Seq {event.seq}  {subject_case_label(event.subject_case_number)}\n", style="dim")
-        body.append(f"Payload Hash   {event.payload_hash}\n", style="dim")
-        body.append(f"Previous Hash  {event.prev_chain}\n", style="dim")
-        body.append(f"Chain Hash     {event.chain_hash}\n", style="dim")
+            pass
+        self._setting_row(body, "Chain status", chain, width)
+        self._setting_row(body, "Events checked", str(res.events_verified), width)
+        self._setting_row(body, "Chain breaks", str(len(res.sequence_gaps)), width)
+        self._setting_row(body, "Signature status", signature, width)
+        self._setting_row(body, "Last verified", verified, width)
+        body.append("\nHash-chain validity is not independent authenticity.\n", style="dim")
+        if key_problem:
+            body.append("This is a key problem, not evidence of tampering.\n", style=DOT_BAD)
 
     def _storage_body(self, body: Text, width: int) -> None:
         from trace_core.core.settings import settings
-        from trace_core.core.ui.renderers import fit_text, sanitize_terminal
+        from trace_core.core.ui.renderers import sanitize_terminal
 
-        rows = [("Storage", str(settings.storage_root))]
+        rows = [("Storage root", str(settings.storage_root))]
         try:
             from trace_updater import updater as updater_mod
 
-            rows.append(("Install", str(updater_mod.install_root())))
+            rows.append(("Install root", str(updater_mod.install_root())))
         except Exception:
-            rows.append(("Install", "—"))
+            rows.append(("Install root", "—"))
         try:
             from trace_core.updates.trust import trust_root
 
-            rows.append(("Trust", str(trust_root())))
+            rows.append(("Trust root", str(trust_root())))
         except Exception:
-            rows.append(("Trust", "—"))
-        from trace_core.tui.theme import append_kv
+            rows.append(("Trust root", "—"))
+        rows.append(("Access", "read-only in TUI"))
 
         for label, value in rows:
-            append_kv(body, label, sanitize_terminal(fit_text(value, max(20, width - 14))))
-        body.append("\nRead-only paths.\n", style="dim")
+            self._setting_row(body, label, sanitize_terminal(value), width)
 
     def _db_checks(self) -> list[tuple[str, bool, str]]:
         try:
@@ -359,12 +352,13 @@ class SettingsView(Vertical):
         checks.extend(self._db_checks())
         name, detail, passed = _storage_check(probe=False)
         checks.append((name, passed, detail))
+        from trace_core.core.ui.theme import THEME_HEX
         from trace_core.tui.theme import DOT_BAD, DOT_OK
 
-        for label, ok, detail in checks:
+        for label, ok, _detail in checks:
             body.append("● " if ok else "× ", style=DOT_OK if ok else DOT_BAD)
-            body.append(f"{label:<12} ", style="bold")
-            body.append(f"{'PASS' if ok else 'FAIL'}  {detail}\n", style="dim")
+            body.append(f"{label:<16} ", style="bold")
+            body.append(f"{'PASS' if ok else 'FAIL'}\n", style=THEME_HEX["green"] if ok else "dim")
 
     # --- actions ---
 
@@ -479,7 +473,7 @@ class SettingsView(Vertical):
         run_guarded(self, _migrate)
 
     def action_verify(self) -> None:
-        if not self._require_section("Integrity"):
+        if not self._require_section("Audit Integrity"):
             return
         self._verified = None
         self._render_detail()
@@ -492,7 +486,7 @@ class SettingsView(Vertical):
         elif command in ("verify", "anchor"):
             self.action_verify()
         else:
-            self.app.notify(f"Command '{command}' is not available on this tab.", severity="warning")
+            unknown_command(self, command)
 
     @on(ListView.Highlighted)
     def _highlighted(self, event: ListView.Highlighted) -> None:

@@ -110,6 +110,20 @@ class ImagingEncryption(BaseModel):
     sealed_size_bytes: int = Field(ge=0)
 
 
+class SoftwareWriteBlock(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    kernel_version: str
+    automount: str
+    raid_lvm: str
+    udev_rules: tuple[str, ...]
+    source_mounted: bool
+    block_device_read_only: bool
+    io_path: str
+    validation: str
+    label: Literal["SOFTWARE-ONLY · NOT EVIDENTIARY"] = "SOFTWARE-ONLY · NOT EVIDENTIARY"
+
+
 class ImagingSource(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -122,6 +136,8 @@ class ImagingSource(BaseModel):
     adapter: str
     synthetic: bool
     inspected_at: datetime
+    software_write_block: SoftwareWriteBlock | None = None
+    hardware_write_block: bool = False
 
     @field_validator("inspected_at")
     @classmethod
@@ -171,6 +187,14 @@ class ImagingOperation(BaseModel):
         return result
 
 
+BASE_MANIFEST_LIMITATIONS: tuple[str, ...] = (
+    "Byte verification proves only that the destination matches the bytes returned by the source reader.",
+    "It does not prove source authenticity, source stability, physical write protection, or admissibility.",
+    "This manifest is not a custody record and is not a substitute for an approved write blocker.",
+    "If bad_regions is non-empty, unreadable source regions were zero-filled; their original bytes were not recovered.",
+)
+
+
 class ImagingManifest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -192,12 +216,10 @@ class ImagingManifest(BaseModel):
     finished_at: datetime
     tool_version: str
     byte_integrity: Literal["verified"] = "verified"
-    limitations: tuple[str, ...] = (
-        "Byte verification proves only that the destination matches the bytes returned by the source reader.",
-        "It does not prove source authenticity, source stability, physical write protection, or admissibility.",
-        "This manifest is not a custody record and is not a substitute for an approved write blocker.",
-        "If bad_regions is non-empty, unreadable source regions were zero-filled; their original bytes were not recovered.",
+    evidence_class: Literal["HARDWARE_WRITE_BLOCK", "SOFTWARE_ONLY", "UNVERIFIED_WRITE_PROTECTION", "FIXTURE"] = (
+        "FIXTURE"
     )
+    limitations: tuple[str, ...] = BASE_MANIFEST_LIMITATIONS
 
     @field_validator("created_at", "finished_at")
     @classmethod
