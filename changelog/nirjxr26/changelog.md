@@ -5705,3 +5705,8 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Summary: Align TUI design assertions with the existing three-row buttons and compact case picker. Check progress animation by the number of green cells rather than the number of style spans, with the preview timer stopped for determinism. Correct obsolete picker-height test comments.
 - Files: tests/unit/test_tui_design_system.py, tests/unit/test_tui_device_link.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
 - Verification: python -m pytest tests/unit/test_tui_design_system.py tests/unit/test_tui_device_link.py tests/unit/test_imaging_ui.py tests/unit/test_security_regressions.py::test_ensure_dir_repairs_a_loose_existing_acl -q: 35 passed on Windows. Full suite and Linux behavior are unverified.
+
+## 2026-11-23
+- Summary: Resolve the Windows-only file-handle conversion through runtime attribute lookup so Linux mypy can analyze the imaging source without changing Windows behavior.
+- Files: src/trace_core/imaging/source.py, changelog/nirjxr26/changelog.md.
+- Verification: mypy --platform linux src tests passed; ruff check . passed; imaging physical and stream tests: 41 passed on Windows. GitHub CI rerun pending.

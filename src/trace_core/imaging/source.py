@@ -159,7 +159,7 @@ class BlockDeviceSource:
                     f"access denied for {self.node} (Win32 error {error}); re-run elevated"
                 )
             try:
-                fd = msvcrt.open_osfhandle(handle, os.O_RDONLY)
+                fd = getattr(msvcrt, "open_osfhandle")(handle, os.O_RDONLY)
             except OSError:
                 close_win32(handle)
                 raise
