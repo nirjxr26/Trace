@@ -130,6 +130,12 @@ class AuditService(BaseService):
             repo = SqlAlchemyAuditRepository(session)
             return repo.list_events(filt)
 
+    def has_hmac_rows(self) -> bool:
+        with _ledger_session(self.session_manager) as session:
+            return (
+                session.scalar(select(AuditEventModel.seq).where(AuditEventModel.key_id.is_(None)).limit(1)) is not None
+            )
+
     def count_events(self, f: AuditFilterDto | None = None) -> int:
         from trace_core.audit.repository import SqlAlchemyAuditRepository
 

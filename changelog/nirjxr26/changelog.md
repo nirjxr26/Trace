@@ -5735,3 +5735,20 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Summary: Use the update manager engine URL for the migration subprocess instead of the global settings URL. The E2E box configures a file-backed SQLite manager independently of settings, so the subprocess must inherit that exact URL to migrate the correct database.
 - Files: src/trace_core/updates/migration.py, tests/updates/test_migration_race.py, changelog/nirjxr26/changelog.md.
 - Verification: ruff format --check ., ruff check ., mypy --platform linux src tests passed; migration race tests: 19 passed on Windows. GitHub E2E update test rerun pending.
+
+## 2026-11-23
+- Summary: Ship the Trace MCP server (	race mcp serve, stdio, SDK mcp==2.3.0) with 28 tools over cases, devices, audit, and install-state: 11 read tools plus 8 write tools and 9 override tools, including confirmation-gated mutations and purge, keys, export/decrypt, update install, recovery, db migrate, and an uninstall refusal for the live server. Security is governed by docs/roadmap/mcp-write-security-review.md.
+- Files: src/trace_core/mcp/{__init__,constants,errors,serialize,identity,schemas,server,services,commands}.py, src/trace_core/mcp/tools/{__init__,cases,audit,devices,system}.py, src/trace_core/audit/service.py, src/trace_core/audit/builder.py, src/trace_core/core/cli/catalog.py, tests/mcp/*, README.md, docs/specs/mcp.md, docs/roadmap/mcp-write-security-review.md, pyproject.toml, uv.lock, requirements.txt, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . passed; ruff check . passed; mypy --platform linux src tests passed; pytest tests/mcp -q: 34 passed; full suite background result: 1698 passed, 21 skipped (PostgreSQL env not configured).
+## 2026-11-23
+- Summary: Add 	race mcp setup and 	race mcp disable so users configure nothing: 	race mcp setup registers the Trace MCP server in Codex, Claude Code, Claude Desktop, and OpenCode automatically; 	race mcp disable removes it, and TRACE_MCP_DISABLED=1 keeps setup a no-op. README documents the one-command setup and turn-off.
+- Files: README.md, src/trace_core/mcp/autoconfig.py, src/trace_core/mcp/commands.py, tests/mcp/test_autoconfig.py, changelog/nirjxr26/changelog.md.
+- Verification: 	race mcp setup ran: codex ok, claude connected, opencode ok, claude-desktop ok; opencode mcp list shows 	race connected. ruff format --check, ruff check, mypy passed. pytest tests/mcp -q: 36 passed.
+## 2026-11-23
+- Summary: Review fixes for the Trace MCP implementation: wrap UpdateLifecycle.run in install_update with stdout redirection for MCP stdout purity, make 	race mcp setup idempotent for Codex/Claude Code/OpenCode via list checks, and harden utoconfig._set_desktop for null mcpServers values.
+- Files: src/trace_core/mcp/services.py, src/trace_core/mcp/autoconfig.py, changelog/nirjxr26/changelog.md.
+- Verification: 	race mcp setup ran with codex ok, claude-code ok, opencode ok, claude-desktop ok; opencode mcp list shows trace connected. ruff format --check, ruff check, mypy passed. pytest tests/mcp -q: 36 passed.
+## 2026-11-23
+- Summary: Broaden 	race mcp setup/disable to preconfigure and turn off the MCP server across Codex, Claude Code, Claude Desktop, OpenCode, Cursor, VS Code (Copilot) ~/.copilot/mcp-config.json, Windsurf ~/.codeium/windsurf/mcp_config.json, and Zed (~/.config/zed/mcp.json, ~/.config/zed/settings.json). JSON writers are shared by setup and disable; idempotency hardened.
+- Files: README.md, src/trace_core/mcp/autoconfig.py, tests/mcp/test_autoconfig.py, changelog/nirjxr26/changelog.md.
+- Verification: 	race mcp setup ran with codex ok, claude-code ok, opencode ok, claude-desktop ok, cursor ok, vscode-copilot ok, windsurf ok, zed ok, zed-settings ok. ruff format --check, ruff check, mypy passed. pytest tests/mcp -q: 37 passed.

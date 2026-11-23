@@ -193,6 +193,37 @@ Every command supports `--help`.
 
 ---
 
+## MCP Server (`trace mcp serve`)
+
+Trace ships an MCP server that a local MCP host can use to read and modify forensic cases over stdio. Configuration is unchanged: `TRACE_DATABASE_URL`, `TRACE_STORAGE_ROOT`, `TRACE_SECRET_KEY`, and friends apply directly.
+
+```bash
+pip install "trace[mcp]"   # adds the optional mcp extra
+trace mcp setup            # register with Codex, Claude Code, Claude Desktop, OpenCode, Cursor, VS Code, Windsurf, Zed
+```
+
+Turn it off anytime with:
+
+```bash
+trace mcp disable
+```
+
+Register with your MCP host:
+
+| Host | Add command |
+|---|---|
+| Codex | `codex mcp add trace -- trace mcp serve` |
+| Claude Code | `claude mcp add trace -- trace mcp serve` |
+| OpenCode | `opencode mcp add --global trace -- trace mcp serve` |
+| Claude Desktop, Cursor, VS Code (Copilot), Windsurf, Zed | `trace mcp setup` registers each in its config file (see list above) |
+| Claude Desktop manual | add `"trace": {"command": "trace", "args": ["mcp", "serve"]}` to `mcpServers` in `claude_desktop_config.json` |
+
+Shorter form: create a `trace-mcp` shim that runs `trace mcp serve`; then `<host> mcp add trace -- trace-mcp` (OpenCode/Codex configs use `command: "trace-mcp"`, no args).
+
+**Security scope (v0.4.1):** the server is local stdio only. Destructive tools (`trace_case_purge`, `trace_audit_keys_*`, `trace_update_install`, `trace_uninstall`, `trace_recovery`, `trace_db_migrate`) are included, but each requires an admin operator and an echo-confirmation field; `trace_uninstall` refuses to uninstall the live MCP server. Hardware inspection/check and imaging remain CLI-only. Per-tool threat review: `docs/roadmap/mcp-write-security-review.md`.
+
+---
+
 ## Exit Codes
 
 | Code | Meaning |

@@ -9,6 +9,7 @@ def feature_apps() -> list[tuple[str, Any]]:
     from trace_core.cases.commands import case_app
     from trace_core.core.cli.db_commands import db_app
     from trace_core.devices.commands import device_app
+    from trace_core.mcp.commands import mcp_app
     from trace_core.updates.commands import update_app
 
     return [
@@ -17,6 +18,7 @@ def feature_apps() -> list[tuple[str, Any]]:
         ("audit", audit_app),
         ("db", db_app),
         ("update", update_app),
+        ("mcp", mcp_app),
     ]
 
 

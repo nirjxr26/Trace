@@ -28,7 +28,9 @@ dependencies = [
 # Floors are compatibility minima only. Production/dev installs MUST use the
 # hash-locked requirements.txt (pyproject -> uv.lock -> requirements.txt chain).
 [project.optional-dependencies]
+mcp = ["mcp>=2.3.0"]
 dev = [
+    "mcp>=2.3.0",
     "pytest>=8.0.0",
     "pytest-cov>=4.1.0",
     "pytest-xdist>=3.8.0",
