@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from trace_core.updates.errors import MigrationCompatibilityError, UpdateInProgressError
@@ -142,6 +144,50 @@ def test_noncontiguous_schema_rejected(session_manager, temp_storage_root):
         conn.execute(text("DELETE FROM schema_migrations WHERE version = 3"))
     with pytest.raises(MigrationCompatibilityError):
         current_schema_version(session_manager)
+
+
+def test_installed_code_migration_uses_fresh_process(monkeypatch):
+    import json
+    import subprocess
+
+    from trace_core.updates.migration import apply_migrations_with_installed_code
+
+    seen = {}
+
+    class Result:
+        returncode = 0
+        stdout = "TRACE_APPLIED=" + json.dumps(["026_imaging_operations", "027_imaging_acquisition"]) + "\n"
+        stderr = ""
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        seen["kwargs"] = kwargs
+        return Result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    applied = apply_migrations_with_installed_code("sqlite:////tmp/trace-e2e.db")
+    assert applied == ["026_imaging_operations", "027_imaging_acquisition"]
+    assert seen["argv"][0] == sys.executable
+    assert "apply_migrations" in seen["argv"][2]
+    assert seen["kwargs"]["env"]["TRACE_DATABASE_URL"] == "sqlite:////tmp/trace-e2e.db"
+
+
+def test_installed_code_migration_fails_closed(monkeypatch):
+    import subprocess
+
+    import pytest
+
+    from trace_core.updates.errors import UpdateError
+    from trace_core.updates.migration import apply_migrations_with_installed_code
+
+    class Result:
+        returncode = 1
+        stdout = ""
+        stderr = "migration failed"
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Result())
+    with pytest.raises(UpdateError, match="migration failed"):
+        apply_migrations_with_installed_code()
 
 
 def test_backup_default_on_for_schema_advance(session_manager, temp_storage_root, tmp_path):

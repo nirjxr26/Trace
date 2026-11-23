@@ -459,7 +459,7 @@ foreach ($cmd in $PythonCandidates) {
                 $parts = $versionOutput.Trim().Split(".")
                 $major = [int]$parts[0]
                 $minor = [int]$parts[1]
-                if ($major -ge 3 -and $minor -ge 12) {
+                if ($major -gt 3 -or ($major -eq 3 -and $minor -ge 12)) {
                     $FoundPython = $cmd
                     Write-Trace ("  [OK] Found Python {0} using '{1}'" -f $versionOutput, $cmd)
                     break
