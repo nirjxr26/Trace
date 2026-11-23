@@ -4,6 +4,6 @@ import sys
 
 import structlog
 
-__version__ = "0.3.6"
+__version__ = "0.4.0"
 
 structlog.configure(logger_factory=structlog.PrintLoggerFactory(file=sys.stderr))

@@ -4,7 +4,7 @@
 
 Local-first forensic case management and device inspection with a tamper-evident chain of custody.
 
-**v0.3.6 · Python 3.12+ · Windows / Linux / macOS · MIT**
+**v0.4.0 · Python 3.12+ · Windows / Linux / macOS · MIT**
 
 </div>
 

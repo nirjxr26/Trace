@@ -4,7 +4,7 @@ import os
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Literal
 from uuid import UUID
 
 from trace_core.audit.builder import for_imaging_event, for_imaging_reservation
@@ -43,6 +43,7 @@ from trace_core.imaging.destination import (
     write_manifest,
 )
 from trace_core.imaging.domain import (
+    BASE_MANIFEST_LIMITATIONS,
     ImagingAcquisitionError,
     ImagingBadRegion,
     ImagingDestinationError,
@@ -65,6 +66,7 @@ from trace_core.imaging.domain import (
     require_eligible_case,
 )
 from trace_core.imaging.repository import SqlAlchemyImagingRepository
+from trace_core.imaging.software_block import preflight_software_write_block
 from trace_core.imaging.source import SourceReader, open_source
 from trace_core.imaging.stream import CHUNK_SIZE, PIECE_SIZE, copy_raw_with_regions, hash_stream
 from trace_core.imaging.vault import ALGORITHM, open_sealed, seal_file
@@ -329,6 +331,8 @@ class ImagingService(BaseService):
         *,
         fixture_root: str | Path | None = None,
         allow_real_hardware: bool = False,
+        allow_software_write_block: bool = False,
+        attest_hardware_write_block: bool = False,
         progress: Progress | None = None,
         cancelled: Cancelled | None = None,
     ) -> ImagingOperation:
@@ -340,14 +344,17 @@ class ImagingService(BaseService):
                 source_node,
                 allow_real_hardware,
                 None if operation.state is ImagingState.PREPARING else operation,
+                allow_software_write_block,
+                attest_hardware_write_block,
             )
             paths = self._operation_paths(operation.case_number, operation.id)
             if operation.state is ImagingState.PREPARING:
                 claimed = self._claim(operation, source, paths)
                 return self._finish_copy(claimed, source, source_stat, paths, 0, progress, cancelled)
+            self._require_evidence_class_match(source, paths)
             if operation.state is ImagingState.INTERRUPTED:
                 offset, _, _ = self._acquiring_state(operation, paths)
-                claimed = self._resume_claim(operation, now_utc())
+                claimed = self._resume_claim(operation, source, now_utc())
                 return self._finish_copy(claimed, source, source_stat, paths, offset, progress, cancelled)
             if operation.state is ImagingState.ACQUIRING:
                 offset, digest, bad_regions = self._acquiring_state(operation, paths)
@@ -399,8 +406,31 @@ class ImagingService(BaseService):
         adapter = FileDevice(root)
         return DeviceService(self.session_manager, enumerator=adapter, inspector=adapter, probe=adapter)
 
+    @staticmethod
+    def _require_write_block_opt_ins(
+        device,
+        source_node: str,
+        allow_real_hardware: bool,
+        allow_software_write_block: bool,
+        attest_hardware_write_block: bool,
+    ) -> None:
+        if device.requires_real_hardware_opt_in and not allow_real_hardware:
+            raise AuthorizationError(f"{source_node} is real hardware; pass --physical to proceed")
+        if allow_software_write_block and not allow_real_hardware:
+            raise AuthorizationError("Software write blocking applies only to physical acquisitions; pass --physical")
+        if attest_hardware_write_block and not allow_real_hardware:
+            raise AuthorizationError("Hardware write blocking applies only to physical acquisitions; pass --physical")
+        if allow_software_write_block and attest_hardware_write_block:
+            raise AuthorizationError("Select either software or hardware write blocking, not both")
+
     def _preflight(
-        self, device_service, source_node: str, allow_real_hardware: bool, operation: ImagingOperation | None
+        self,
+        device_service,
+        source_node: str,
+        allow_real_hardware: bool,
+        operation: ImagingOperation | None,
+        allow_software_write_block: bool = False,
+        attest_hardware_write_block: bool = False,
     ) -> tuple[ImagingSource, os.stat_result | None]:
         devices = device_service.list_devices()
         cleaned = str(source_node).strip()
@@ -414,12 +444,14 @@ class ImagingService(BaseService):
         if len(exact) != 1:
             raise ImagingSourceUnavailableError("The source is absent or ambiguous. Refresh the device list and retry.")
         device = exact[0]
-        if device.requires_real_hardware_opt_in and not allow_real_hardware:
-            raise AuthorizationError(f"{source_node} is real hardware; pass --physical to proceed")
+        self._require_write_block_opt_ins(
+            device, source_node, allow_real_hardware, allow_software_write_block, attest_hardware_write_block
+        )
         inspection = device_service.inspect_device(device.node, allow_real_hardware=allow_real_hardware)
         gate = device_service.check_device(device.node, inspection=inspection, allow_real_hardware=allow_real_hardware)
         if gate.verdict is not WpVerdict.READ_ONLY:
             raise ImagingSourceUnavailableError("The source did not pass the read-only gate.")
+        software_write_block = preflight_software_write_block(device.node) if allow_software_write_block else None
         if device.size_bytes is None:
             raise ImagingSourceUnavailableError("The source does not report a byte size.")
         if operation is not None:
@@ -448,6 +480,8 @@ class ImagingService(BaseService):
             adapter=gate.evidence.adapter_version,
             synthetic=gate.evidence.platform == "fake",
             inspected_at=inspection.inspected_at,
+            software_write_block=software_write_block,
+            hardware_write_block=attest_hardware_write_block,
         )
         return source, source_stat
 
@@ -566,7 +600,9 @@ class ImagingService(BaseService):
         payload = read_checkpoint(checkpoint)
         return ImagingService._bad_regions_from_payload(payload) if payload is not None else ()
 
-    def _resume_claim(self, operation: ImagingOperation, started_at: datetime) -> ImagingOperation:
+    def _resume_claim(
+        self, operation: ImagingOperation, source: ImagingSource, started_at: datetime
+    ) -> ImagingOperation:
         with self.transaction() as uow:
             require_mutator(uow.session, action="resume an imaging acquisition")
             cases = SqlAlchemyCaseRepository(uow.session)
@@ -589,7 +625,7 @@ class ImagingService(BaseService):
                         case.number,
                         case.id,
                         operation.id,
-                        self._start_details(self._source_from_operation(operation), (), resumed=True),
+                        self._start_details(source, (), resumed=True),
                     ),
                     actor,
                 )
@@ -671,6 +707,7 @@ class ImagingService(BaseService):
                     "expected_bytes": operation.expected_bytes or 0,
                     "source_serial": source.serial,
                     "source_node": source.node,
+                    "evidence_class": self._evidence_class(source),
                     "digest": digest,
                     "bad_regions": [region.model_dump() for region in bad_regions],
                     "tool_version": settings.version,
@@ -714,6 +751,7 @@ class ImagingService(BaseService):
                     "expected_bytes": operation.expected_bytes or 0,
                     "source_serial": source.serial,
                     "source_node": source.node,
+                    "evidence_class": ImagingService._evidence_class(source),
                     "digest": digest_state["value"],
                     "bad_regions": [region.model_dump() for region in regions],
                     "tool_version": settings.version,
@@ -802,6 +840,21 @@ class ImagingService(BaseService):
                 raise ImagingReadbackError("The published image did not match the acquisition stream.")
             finished_at = now_utc()
             piecewise = ImagingPiecewise(chunk_size=PIECE_SIZE, count=len(pieces), hashes=pieces)
+            evidence_class = self._evidence_class(source)
+            software_block = source.software_write_block
+            if software_block is not None:
+                limitations = BASE_MANIFEST_LIMITATIONS + (
+                    f"{software_block.label}: kernel {software_block.kernel_version}; "
+                    f"validation {software_block.validation}; software write blocking is not forensic proof.",
+                )
+            elif source.kind is ImagingSourceKind.FILE:
+                limitations = BASE_MANIFEST_LIMITATIONS + ("FIXTURE — NOT EVIDENCE.",)
+            elif evidence_class == "UNVERIFIED_WRITE_PROTECTION":
+                limitations = BASE_MANIFEST_LIMITATIONS + (
+                    "UNVERIFIED WRITE PROTECTION — no hardware write blocker was attested; not evidentiary.",
+                )
+            else:
+                limitations = BASE_MANIFEST_LIMITATIONS
             manifest_model = ImagingManifest(
                 operation_id=operation.id,
                 case_id=operation.case_id,
@@ -817,6 +870,8 @@ class ImagingService(BaseService):
                 created_at=operation.created_at,
                 finished_at=finished_at,
                 tool_version=settings.version,
+                evidence_class=evidence_class,
+                limitations=limitations,
             )
             if manifest.exists():
                 self._check_existing_manifest(manifest, expected, acquisition_sha256, pieces)
@@ -964,18 +1019,28 @@ class ImagingService(BaseService):
         return bound_actor(f"{user}@{host}")
 
     @staticmethod
-    def _source_from_operation(operation: ImagingOperation) -> ImagingSource:
-        return ImagingSource(
-            node=operation.source_node or "",
-            kind=operation.source_kind or ImagingSourceKind.FILE,
-            serial=operation.source_serial or "",
-            model=operation.source_model or "",
-            size_bytes=operation.source_size_bytes or 0,
-            protection=operation.source_protection or "",
-            adapter=operation.source_adapter or "",
-            synthetic=False,
-            inspected_at=operation.source_inspected_at or operation.created_at,
-        )
+    def _evidence_class(
+        source: ImagingSource,
+    ) -> Literal["HARDWARE_WRITE_BLOCK", "SOFTWARE_ONLY", "UNVERIFIED_WRITE_PROTECTION", "FIXTURE"]:
+        if source.software_write_block is not None:
+            return "SOFTWARE_ONLY"
+        if source.kind is ImagingSourceKind.FILE:
+            return "FIXTURE"
+        if source.hardware_write_block:
+            return "HARDWARE_WRITE_BLOCK"
+        return "UNVERIFIED_WRITE_PROTECTION"
+
+    @staticmethod
+    def _require_evidence_class_match(source: ImagingSource, paths: tuple) -> None:
+        checkpoint = paths[2]
+        payload = read_checkpoint(checkpoint)
+        if payload is None:
+            return
+        recorded = payload.get("evidence_class")
+        if recorded != ImagingService._evidence_class(source):
+            raise ImagingSourceUnavailableError(
+                "The resume opt-in does not match the original evidence class; pass the original write-blocking flag."
+            )
 
     @staticmethod
     def _start_details(source: ImagingSource, paths: tuple, *, resumed: bool) -> dict[str, object]:
@@ -992,6 +1057,11 @@ class ImagingService(BaseService):
             "image_relpath": image_relpath,
             "manifest_relpath": manifest_relpath,
             "resumed": resumed,
+            "evidence_class": ImagingService._evidence_class(source),
+            "hardware_write_block": source.hardware_write_block,
+            "software_write_block": (
+                source.software_write_block.model_dump(mode="json") if source.software_write_block is not None else None
+            ),
         }
 
     @staticmethod

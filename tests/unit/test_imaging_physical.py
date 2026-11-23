@@ -258,6 +258,37 @@ def test_cli_physical_flag_reaches_the_service(monkeypatch: pytest.MonkeyPatch) 
 
     assert result.exit_code == 0
     assert seen.get("allow_real_hardware") is True
+    assert seen.get("attest_hardware_write_block") is False
+
+
+def test_cli_hardware_write_block_flag_reaches_the_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    seen: dict[str, object] = {}
+
+    def fake_acquire(self, operation_id, source_node, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(
+            id=operation_id, acquisition_sha256="a" * 64, copied_bytes=0, image_relpath="x", manifest_relpath="y"
+        )
+
+    monkeypatch.setattr(ImagingService, "acquire", fake_acquire)
+    result = CliRunner().invoke(
+        app,
+        [
+            "case",
+            "imaging-acquire",
+            "00000000-0000-0000-0000-000000000001",
+            "--source",
+            NODE,
+            "--physical",
+            "--hardware-write-block",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen.get("attest_hardware_write_block") is True
 
 
 def test_verification_detects_image_corruption(tmp_path: Path, temp_storage: Path) -> None:
@@ -371,6 +402,31 @@ def test_bad_region_is_zero_filled_and_recorded(
     image = _image_path(temp_storage, completed).read_bytes()
     assert image[: 1024 * 1024] == source.read_bytes()[: 1024 * 1024]
     assert image[1024 * 1024 :] == b"\0" * (1024 * 1024)
+
+
+def test_bad_region_does_not_shift_later_source_bytes(
+    tmp_path: Path, temp_storage: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = _manager(tmp_path)
+    number = _case(manager)
+    source = synthetic.write_disk(tmp_path / "disk.dd", size=3 * 1024 * 1024)
+    service = ImagingService(manager)
+    original = FileSource.read
+    calls = {"count": 0}
+
+    def fail_second(self: FileSource, size: int) -> bytes:
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise ImagingSourceReadError("simulated bad sector")
+        return original(self, size)
+
+    monkeypatch.setattr(FileSource, "read", fail_second)
+    completed = service.acquire(service.reserve(number).id, str(source))
+    image = _image_path(temp_storage, completed).read_bytes()
+    original_bytes = source.read_bytes()
+    assert image[: 1024 * 1024] == original_bytes[: 1024 * 1024]
+    assert image[1024 * 1024 : 2 * 1024 * 1024] == b"\0" * (1024 * 1024)
+    assert image[2 * 1024 * 1024 :] == original_bytes[2 * 1024 * 1024 :]
 
 
 def test_sealed_image_roundtrip_and_wrong_passphrase(tmp_path: Path, temp_storage: Path) -> None:

@@ -15,6 +15,8 @@ class SourceReader(Protocol):
 
     def read(self, size: int) -> bytes: ...
 
+    def seek(self, offset: int) -> None: ...
+
     def verify_unchanged(self) -> None: ...
 
     def close(self) -> None: ...
@@ -54,6 +56,14 @@ class FileSource:
             return self._handle.read(size)
         except OSError as exc:
             raise ImagingSourceReadError("The fixture source could not be read.") from exc
+
+    def seek(self, offset: int) -> None:
+        if self._handle is None:
+            raise ImagingSourceReadError("The fixture source is not open.")
+        try:
+            self._handle.seek(offset)
+        except OSError as exc:
+            raise ImagingSourceReadError("The fixture source could not be positioned.") from exc
 
     def verify_unchanged(self) -> None:
         if self._handle is None:
@@ -109,6 +119,14 @@ class BlockDeviceSource:
             return self._handle.read(size)
         except OSError as exc:
             raise ImagingSourceReadError("The physical source could not be read.") from exc
+
+    def seek(self, offset: int) -> None:
+        if self._handle is None:
+            raise ImagingSourceReadError("The physical source is not open.")
+        try:
+            self._handle.seek(offset)
+        except OSError as exc:
+            raise ImagingSourceReadError("The physical source could not be positioned.") from exc
 
     def verify_unchanged(self) -> None:
         if self._handle is None or self._identity is None:

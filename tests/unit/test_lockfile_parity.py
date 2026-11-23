@@ -5,6 +5,21 @@ from pathlib import Path
 ROOT = Path(__file__).parents[2]
 
 
+def test_project_versions_are_consistent() -> None:
+    from trace_core import __version__
+    from trace_core.core.settings import Settings
+
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    trace_package = next(package for package in lock["package"] if package["name"] == "trace")
+    assert (
+        project["project"]["version"]
+        == trace_package["version"]
+        == __version__
+        == Settings.model_fields["version"].default
+    )
+
+
 def _canonical(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 

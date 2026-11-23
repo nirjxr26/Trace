@@ -424,6 +424,8 @@ class CaseShellCommandHandler(BaseShellHandler):
                 source,
                 fixture_root=extract_flag_value(sub_args, "--fixture-root"),
                 allow_real_hardware="--physical" in sub_args,
+                allow_software_write_block="--allow-software-write-block" in sub_args,
+                attest_hardware_write_block="--hardware-write-block" in sub_args,
             )
             render_success(f"Image byte-verified for operation {operation.id}.")
             console.print(f"  SHA-256   {operation.acquisition_sha256}")

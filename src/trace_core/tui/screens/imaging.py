@@ -52,6 +52,7 @@ class ImagingProgressModal(_BaseModal):
     #progress-head { height: auto; align: center middle; background: $form-bg; padding: 1 3; }
     #progress-title { width: 1fr; height: 1; color: $accent; text-style: bold; }
     #progress-esc { width: auto; height: 1; color: $muted; text-align: right; }
+    #progress-software { height: 1; color: $warning; text-style: bold; }
     .progress-body { height: auto; padding: 1 3 1 3; }
     #progress-device { height: 1; color: $text; text-style: bold; text-wrap: nowrap; }
     #progress-case { height: 1; color: $accent; }
@@ -76,6 +77,7 @@ class ImagingProgressModal(_BaseModal):
         case: str = "—",
         destination: str = "—",
         stage: str = "acquiring",
+        software_only: bool = False,
     ) -> None:
         super().__init__()
         self._preview = preview
@@ -83,6 +85,7 @@ class ImagingProgressModal(_BaseModal):
         self._case = case
         self._destination = destination
         self._stage = stage
+        self._software_only = software_only
         self._note = ""
         self._timer: Timer | None = None
         self._done = 0
@@ -97,6 +100,8 @@ class ImagingProgressModal(_BaseModal):
                 yield Static("Evidence Acquisition", id="progress-title")
                 yield Static("Esc", id="progress-esc")
             with Vertical(id="progress-body", classes="progress-body"):
+                if self._software_only:
+                    yield Static("SOFTWARE-ONLY · NOT EVIDENTIARY", id="progress-software")
                 yield Static(self._device, id="progress-device")
                 yield Static(self._case, id="progress-case")
                 yield Static("", id="progress-bytes")
@@ -170,9 +175,7 @@ class ImagingProgressModal(_BaseModal):
         }.get(self._stage, f"{percent}% | ETA: {eta}s")
         color = STAGE_TONES.get(self._stage, STAGE_TONES["acquiring"])
         self.query_one("#progress-bytes", Static).update(f"{format_bytes(done)} / {format_bytes(total)}")
-        self.query_one("#progress-bar", SegmentedProgress).set_progress(
-            done / total if total else 0.0, color
-        )
+        self.query_one("#progress-bar", SegmentedProgress).set_progress(done / total if total else 0.0, color)
         status_widget = self.query_one("#progress-status", Static)
         status_widget.update(status)
         status_widget.styles.color = color
@@ -195,6 +198,7 @@ class ImagingView(TablePane[ImagingOperation]):
         Binding("ctrl+d", "toggle_preview", "Preview data", show=False),
         Binding("ctrl+a", "toggle_advanced", "Advanced details", show=False),
         Binding("ctrl+g", "preview_progress", "Progress popup preview", show=False),
+        Binding("alt+s", "acquire_software", "Software-block acquire", show=False),
     ]
 
     TABLE_ID = TABLE_ID
@@ -364,7 +368,7 @@ class ImagingView(TablePane[ImagingOperation]):
             "manifest_version": "trace-imaging-manifest-v1",
             "format": "RAW",
             "byte_integrity": "verified",
-            "tool_version": "0.3.6",
+            "tool_version": "0.4.0",
             "expected_bytes": 8_000_000_000,
             "copied_bytes": 7_812_345_678,
             "acquisition_sha256": digest,
@@ -419,12 +423,7 @@ class ImagingView(TablePane[ImagingOperation]):
         encryption = encryption_raw if isinstance(encryption_raw, dict) else {}
         digest = str(manifest.get("acquisition_sha256") or operation.acquisition_sha256 or "")
         readback = str(manifest.get("readback_sha256") or operation.readback_sha256 or "")
-        verified = bool(
-            digest
-            and readback
-            and digest == readback
-            and operation.state is ImagingState.BYTE_VERIFIED
-        )
+        verified = bool(digest and readback and digest == readback and operation.state is ImagingState.BYTE_VERIFIED)
         image_path = str(manifest.get("image_relpath") or operation.image_relpath or "")
         manifest_path = operation.manifest_relpath or ""
         sealed = str(encryption.get("sealed_relpath", ""))
@@ -439,11 +438,7 @@ class ImagingView(TablePane[ImagingOperation]):
         body.append(f"RAW acquisition · {operation.case_number}\n\n", style=THEME_TOKENS["accent"])
         verdict = "MATCH REPORTED" if verified else "MISMATCH REPORTED"
         verdict_style = THEME_HEX["green"] if verified else THEME_HEX["red"]
-        complete = (
-            operation.state is ImagingState.BYTE_VERIFIED
-            and copied == expected
-            and not bad_regions
-        )
+        complete = operation.state is ImagingState.BYTE_VERIFIED and copied == expected and not bad_regions
         body.append(
             "COMPLETE" if complete else "PARTIAL",
             style=f"bold {THEME_HEX['green'] if complete else THEME_HEX['amber']}",
@@ -466,6 +461,16 @@ class ImagingView(TablePane[ImagingOperation]):
         field("Serial", operation.source_serial or "")
         field("Capacity", f"{(operation.source_size_bytes or 0):,} bytes")
         field("Write protection", operation.source_protection or "")
+        evidence_class = str(manifest.get("evidence_class") or "")
+        limitations_raw = manifest.get("limitations")
+        limitations = limitations_raw if isinstance(limitations_raw, list) else []
+        limitations_text = " ".join(str(item) for item in limitations if isinstance(item, str))
+        software_only = evidence_class == "SOFTWARE_ONLY" or "SOFTWARE-ONLY · NOT EVIDENTIARY" in limitations_text
+        field("Evidence class", evidence_class or ("SOFTWARE_ONLY" if software_only else "UNCLASSIFIED"))
+        if software_only:
+            body.append("\nSOFTWARE-ONLY · NOT EVIDENTIARY\n\n", style=f"bold {THEME_HEX['red']}")
+        elif evidence_class == "UNVERIFIED_WRITE_PROTECTION":
+            body.append("\nUNVERIFIED WRITE PROTECTION · NOT EVIDENTIARY\n\n", style=f"bold {THEME_HEX['red']}")
         section("ACQUISITION RESULTS")
         field("Source read", f"{source_read:,} bytes")
         field("Image written", f"{copied:,} bytes")
@@ -573,9 +578,14 @@ class ImagingView(TablePane[ImagingOperation]):
         self._begin_acquisition(physical=False)
 
     def action_acquire_physical(self) -> None:
-        self._begin_acquisition(physical=True)
+        self._begin_acquisition(physical=True, hardware_write_block=True)
 
-    def _begin_acquisition(self, *, physical: bool) -> None:
+    def action_acquire_software(self) -> None:
+        self._begin_acquisition(physical=True, software_write_block=True)
+
+    def _begin_acquisition(
+        self, *, physical: bool, software_write_block: bool = False, hardware_write_block: bool = False
+    ) -> None:
         operation = self._selected_operation()
         if operation is None:
             self.app.notify("Select an imaging operation first.", severity="warning")
@@ -584,13 +594,33 @@ class ImagingView(TablePane[ImagingOperation]):
             self.app.notify("Only a reservation or an interrupted image can be acquired.", severity="warning")
             return
         title = "Physical device node" if physical else "Fixture source path"
-        hint = "device node, e.g. \\\\.\\PhysicalDrive1" if physical else "file to acquire"
+        hint = (
+            "Linux device, e.g. /dev/sdb · SOFTWARE-ONLY · NOT EVIDENTIARY"
+            if software_write_block
+            else "device node, e.g. \\\\.\\PhysicalDrive1"
+            if physical
+            else "file to acquire"
+        )
         self.app.push_screen(
             TextInputModal(title, hint, required=True),
-            lambda path: self._start_acquisition(operation.id, path, physical=physical),
+            lambda path: self._start_acquisition(
+                operation.id,
+                path,
+                physical=physical,
+                software_write_block=software_write_block,
+                hardware_write_block=hardware_write_block,
+            ),
         )
 
-    def _start_acquisition(self, operation_id: UUID, path: str | None, *, physical: bool) -> None:
+    def _start_acquisition(
+        self,
+        operation_id: UUID,
+        path: str | None,
+        *,
+        physical: bool,
+        software_write_block: bool = False,
+        hardware_write_block: bool = False,
+    ) -> None:
         if not path:
             return
         prior_cancel = self._cancel
@@ -609,10 +639,13 @@ class ImagingView(TablePane[ImagingOperation]):
             device=(operation.source_model if operation is not None else None) or "—",
             case=f"{operation.case_number} · RAW" if operation is not None and operation.case_number else "RAW",
             destination=path,
+            software_only=software_write_block,
         )
         self.app.push_screen(self._progress_modal)
         self.run_worker(
-            self._acquire_worker(operation_id, path, physical, self._cancel, token),
+            self._acquire_worker(
+                operation_id, path, physical, self._cancel, token, software_write_block, hardware_write_block
+            ),
             name="imaging-acquire",
             group="imaging",
             exclusive=True,
@@ -645,7 +678,14 @@ class ImagingView(TablePane[ImagingOperation]):
         await asyncio.sleep(delay)
 
     async def _acquire_worker(
-        self, operation_id: UUID, path: str, physical: bool, cancel: threading.Event, token: object
+        self,
+        operation_id: UUID,
+        path: str,
+        physical: bool,
+        cancel: threading.Event,
+        token: object,
+        software_write_block: bool = False,
+        hardware_write_block: bool = False,
     ) -> None:
         import time as _time
 
@@ -677,6 +717,8 @@ class ImagingView(TablePane[ImagingOperation]):
                 operation_id,
                 path,
                 allow_real_hardware=physical,
+                allow_software_write_block=software_write_block,
+                attest_hardware_write_block=hardware_write_block,
                 progress=_progress,
                 cancelled=cancel.is_set,
             )
@@ -696,9 +738,7 @@ class ImagingView(TablePane[ImagingOperation]):
                 self._cancel = None
             if operation.case_number:
                 self._case_number = operation.case_number
-            await self._show_acquire_outcome(
-                token, "success", "", "Image byte-verified.", "information", 0.9
-            )
+            await self._show_acquire_outcome(token, "success", "", "Image byte-verified.", "information", 0.9)
         finally:
             if token is self._active_token:
                 self._cancel = None

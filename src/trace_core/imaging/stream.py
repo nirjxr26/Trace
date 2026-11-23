@@ -11,6 +11,8 @@ CHUNK_SIZE = 1024 * 1024
 class RawSource(Protocol):
     def read(self, size: int, /) -> bytes: ...
 
+    def seek(self, offset: int, /) -> object: ...
+
 
 Progress = Callable[[int, int], None]
 ProgressWithDigest = Callable[[int, int, str], None]
@@ -46,6 +48,7 @@ def copy_raw_with_regions(
         try:
             chunk = source.read(wanted)
         except ImagingSourceReadError as exc:
+            source.seek(offset + copied + wanted)
             chunk = b"\0" * wanted
             region = ImagingBadRegion(offset=offset + copied, length=wanted, cause=str(exc)[:512])
             bad_regions.append(region)
