@@ -165,10 +165,11 @@ def test_installed_code_migration_uses_fresh_process(monkeypatch):
         return Result()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    applied = apply_migrations_with_installed_code()
+    applied = apply_migrations_with_installed_code("sqlite:////tmp/trace-e2e.db")
     assert applied == ["026_imaging_operations", "027_imaging_acquisition"]
     assert seen["argv"][0] == sys.executable
     assert "apply_migrations" in seen["argv"][2]
+    assert seen["kwargs"]["env"]["TRACE_DATABASE_URL"] == "sqlite:////tmp/trace-e2e.db"
 
 
 def test_installed_code_migration_fails_closed(monkeypatch):

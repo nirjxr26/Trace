@@ -5730,3 +5730,8 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Summary: Pass the parent process resolved database URL and storage root into the migration subprocess instead of inheriting the raw environment. The inherited environment could override the running process settings and point the subprocess at a different database.
 - Files: src/trace_core/updates/migration.py, changelog/nirjxr26/changelog.md.
 - Verification: ruff format --check ., ruff check ., mypy --platform linux src tests passed; migration race tests: 19 passed on Windows. GitHub E2E update test rerun pending.
+
+## 2026-11-23
+- Summary: Use the update manager engine URL for the migration subprocess instead of the global settings URL. The E2E box configures a file-backed SQLite manager independently of settings, so the subprocess must inherit that exact URL to migrate the correct database.
+- Files: src/trace_core/updates/migration.py, tests/updates/test_migration_race.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check ., ruff check ., mypy --platform linux src tests passed; migration race tests: 19 passed on Windows. GitHub E2E update test rerun pending.

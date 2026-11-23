@@ -109,7 +109,7 @@ def current_schema_version(manager: DatabaseSessionManager) -> int:
     return highest
 
 
-def apply_migrations_with_installed_code() -> list[str]:
+def apply_migrations_with_installed_code(database_url: str | None = None) -> list[str]:
     code = (
         "import json\n"
         "from trace_core.core.database.migrations import apply_migrations, verify_migration_checksums\n"
@@ -121,7 +121,7 @@ def apply_migrations_with_installed_code() -> list[str]:
     from trace_core.core.settings import settings
 
     env = os.environ.copy()
-    env["TRACE_DATABASE_URL"] = settings.database_url
+    env["TRACE_DATABASE_URL"] = database_url or settings.database_url
     env["TRACE_STORAGE_ROOT"] = str(settings.storage_root)
     result = subprocess.run(
         [sys.executable, "-c", code],
@@ -483,7 +483,11 @@ def _run_updater_migration_locked(
             backup_path = backup_database(manager, backup_dir)
         verify_compatibility(manager, schema_min, schema_target)
         mutated = True
-        applied = apply_migrations_with_installed_code() if use_installed_code else apply_migrations(manager.engine)
+        applied = (
+            apply_migrations_with_installed_code(manager.engine.url.render_as_string(hide_password=False))
+            if use_installed_code
+            else apply_migrations(manager.engine)
+        )
         if not use_installed_code:
             verify_migration_checksums(manager.engine)
         after = current_schema_version(manager)
