@@ -450,6 +450,7 @@ class UpdateLifecycle:
                 backup_required=manifest.backup_required,
                 backup_dir=backup_dir or (base / "backups"),
                 backup_waiver=manifest.backup_waiver,
+                use_installed_code=True,
             )
             self.transition(UpdateState.HEALTH_CHECK)
             progress.on_stage(Stage.INSTALL, StageStatus.DONE)

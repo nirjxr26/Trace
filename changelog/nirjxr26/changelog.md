@@ -5720,3 +5720,8 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Summary: Remove the last unused local flagged by SonarCloud PR analysis in the imaging claim helper.
 - Files: src/trace_core/imaging/service.py, changelog/nirjxr26/changelog.md.
 - Verification: ruff format --check and ruff check on service.py passed; mypy --platform linux src tests passed. SonarCloud PR re-analysis pending.
+
+## 2026-11-23
+- Summary: Fix the updater so cross-schema updates apply new migrations with the newly installed code. The old process registry stopped at schema 25 and could not apply migrations 26 and 27, so v0.4.0 updates failed with "schema 25 below target 27". Migration and checksum verification now run in a fresh subprocess after the new wheel is installed; the existing in-process path remains for callers that do not pass use_installed_code. Also correct both installers' Python version check, which rejected Python 4.x, and bump the version to 0.4.1.
+- Files: install.sh, install.ps1, src/trace_core/updates/migration.py, src/trace_core/updates/lifecycle.py, tests/updates/test_migration_race.py, pyproject.toml, uv.lock, src/trace_core/__init__.py, src/trace_core/core/settings.py, src/trace_core/tui/screens/imaging.py, README.md, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check ., ruff check ., mypy --platform linux src tests passed; migration and installer tests: 54 passed on Windows. Full suite and a real Linux cross-schema update are UNVERIFIED.

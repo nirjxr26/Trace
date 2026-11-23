@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -106,6 +107,31 @@ def current_schema_version(manager: DatabaseSessionManager) -> int:
     if applied != list(range(1, highest + 1)):
         raise MigrationCompatibilityError(f"non-contiguous migrations applied: {applied}")
     return highest
+
+
+def apply_migrations_with_installed_code() -> list[str]:
+    code = (
+        "import json\n"
+        "from trace_core.core.database.migrations import apply_migrations, verify_migration_checksums\n"
+        "from trace_core.core.database.session import db_manager\n"
+        "applied = apply_migrations(db_manager.engine)\n"
+        "verify_migration_checksums(db_manager.engine)\n"
+        "print('TRACE_APPLIED=' + json.dumps(applied))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=os.environ.copy(),
+        timeout=600,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise UpdateError(f"database migration failed: {result.stderr.strip()[-500:]}")
+    for line in result.stdout.splitlines():
+        if line.startswith("TRACE_APPLIED="):
+            return json.loads(line.split("=", 1)[1])
+    raise UpdateError("database migration reported no applied-migration result")
 
 
 def verify_compatibility(manager: DatabaseSessionManager, schema_min: int | None, schema_target: int | None) -> None:
@@ -393,6 +419,7 @@ def run_updater_migration(
     backup_required: bool = False,
     backup_dir: str | Path | None = None,
     backup_waiver: str | None = None,
+    use_installed_code: bool = False,
 ) -> dict:
     state, active = marker_state()
     if state == "unreadable":
@@ -418,6 +445,7 @@ def run_updater_migration(
                 backup_required=backup_required,
                 backup_dir=backup_dir,
                 backup_waiver=backup_waiver,
+                use_installed_code=use_installed_code,
             )
     finally:
         # A caller-owned marker is released by whoever reached a terminal state.
@@ -434,6 +462,7 @@ def _run_updater_migration_locked(
     backup_required: bool = False,
     backup_dir: str | Path | None = None,
     backup_waiver: str | None = None,
+    use_installed_code: bool = False,
 ) -> dict:
     from trace_core.core.database.migrations import apply_migrations, verify_migration_checksums
 
@@ -449,8 +478,9 @@ def _run_updater_migration_locked(
             backup_path = backup_database(manager, backup_dir)
         verify_compatibility(manager, schema_min, schema_target)
         mutated = True
-        applied = apply_migrations(manager.engine)
-        verify_migration_checksums(manager.engine)
+        applied = apply_migrations_with_installed_code() if use_installed_code else apply_migrations(manager.engine)
+        if not use_installed_code:
+            verify_migration_checksums(manager.engine)
         after = current_schema_version(manager)
         if schema_target is not None and after < schema_target:
             raise MigrationCompatibilityError(f"schema {after} below target {schema_target}")

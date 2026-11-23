@@ -455,7 +455,7 @@ for cmd in python3.12 python3 python; do
         if [ -n "$PY_VERSION" ]; then
             MAJOR="$(echo "$PY_VERSION" | cut -d. -f1)"
             MINOR="$(echo "$PY_VERSION" | cut -d. -f2)"
-            if [ "$MAJOR" -ge 3 ] && [ "$MINOR" -ge 12 ]; then
+            if [ "$MAJOR" -gt 3 ] || { [ "$MAJOR" -eq 3 ] && [ "$MINOR" -ge 12 ]; }; then
                 FOUND_PYTHON="$cmd"
                 trace_say "  [OK] Found Python $PY_VERSION using '$cmd'"
                 break
