@@ -527,7 +527,7 @@ class ImagingService(BaseService):
         )
 
     def _claim(self, operation: ImagingOperation, source: ImagingSource, paths: tuple) -> ImagingOperation:
-        _, partial, _, _, _, image_relpath, manifest_relpath = paths
+        _, _, _, _, _, image_relpath, manifest_relpath = paths
         with self.transaction() as uow:
             require_mutator(uow.session, action="start an imaging acquisition")
             cases = SqlAlchemyCaseRepository(uow.session)
