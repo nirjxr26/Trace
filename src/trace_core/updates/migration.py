@@ -118,11 +118,16 @@ def apply_migrations_with_installed_code() -> list[str]:
         "verify_migration_checksums(db_manager.engine)\n"
         "print('TRACE_APPLIED=' + json.dumps(applied))\n"
     )
+    from trace_core.core.settings import settings
+
+    env = os.environ.copy()
+    env["TRACE_DATABASE_URL"] = settings.database_url
+    env["TRACE_STORAGE_ROOT"] = str(settings.storage_root)
     result = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
-        env=os.environ.copy(),
+        env=env,
         timeout=600,
         check=False,
     )
