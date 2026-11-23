@@ -61,7 +61,7 @@ def test_shared_css_classes_are_applied() -> None:
         in forms_source
     )
     assert "#case-form #case-heading" in forms_source
-    assert 'yield Label("CREATE CASE", id="case-heading")' in forms_source
+    assert 'yield Label("CREATE CASE" if self._for_create else "EDIT CASE", id="case-heading")' in forms_source
     assert 'classes="modal-field-row"' in forms_source
     assert 'classes="modal-field-label"' in forms_source
     assert 'yield FlatButton("Save", id="save"' in forms_source
@@ -72,11 +72,14 @@ def test_shared_css_classes_are_applied() -> None:
     assert "Button.confirm-button:hover" in APP_CSS
     flat_source = inspect.getsource(FlatButton)
     assert "self.styles.line_pad = 0" in flat_source
-    assert "self.styles.height = 2" in flat_source
+    assert "self.styles.height = 3" in flat_source
     assert 'self.styles.text_align = "center"' in flat_source
     assert 'self.styles.content_align = ("center", "middle")' in flat_source
     assert ".confirm-button" in APP_CSS
-    assert ".confirm-button:hover, .confirm-button:focus { border: none; background: $form-bg; color: $accent; text-style: bold; }" in APP_CSS
+    assert (
+        "Button.confirm-button:hover, Button.confirm-button:focus { border: none; background: $panel; background-tint: transparent; color: $accent; text-style: bold; }"
+        in APP_CSS
+    )
     assert 'yield Static(self._prompt, classes="confirm-prompt")' in forms_source
     assert "#confirm-box { width: 50;" in forms_source
     assert "#yesno-box { width: 50;" in forms_source

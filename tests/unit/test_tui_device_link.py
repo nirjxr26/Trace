@@ -363,19 +363,19 @@ async def test_the_list_is_a_fixed_scrolling_window(session_manager) -> None:
         listing = app.screen.query_one("#case-pick-list", ListView)
 
         assert len(listing.children) == 25, "every row is still loaded"
-        assert listing.size.height == 14, "a full list fills the fixed window"
+        assert listing.size.height == 8, "a full list fills the fixed window"
         assert listing.show_vertical_scrollbar, "an overflowing list must show a scrollbar"
         assert listing.max_scroll_y > 0, "and must actually be scrollable"
 
-    # A short list is what separates a FIXED height from `height: auto; max-height: 14`:
-    # capped-auto would shrink to three rows, a fixed window stays at fourteen.
+    # A short list distinguishes the fixed-height window from an auto-sized list.
+    # The content area remains eight rows after the vertical padding.
     app2 = TraceApp(session_manager)
     async with app2.run_test(size=(100, 40)) as pilot2:
         app2.push_screen(CasePicker(lambda _t: rows[:3]))
         await pilot2.pause()
         short = app2.screen.query_one("#case-pick-list", ListView)
         assert len(short.children) == 3
-        assert short.size.height == 14, "a short list must still occupy the fixed window"
+        assert short.size.height == 8, "a short list must still occupy the fixed window"
 
 
 def test_the_picker_declares_a_scrollbar_and_filter_padding() -> None:
@@ -387,7 +387,7 @@ def test_the_picker_declares_a_scrollbar_and_filter_padding() -> None:
 
     css = inspect.getsource(CasePicker)
     assert "#case-pick-head { height: auto; background: $form-bg; padding: 1 3; }" in css
-    assert "#case-pick-search { height: 1; align: center middle; margin: 1 3 1 3; }" in css
+    assert "#case-pick-search { height: 1; align: center middle; margin: 1 3 0 3; }" in css
     assert 'yield Static("› ", id="case-pick-caret")' in css
     assert 'placeholder="search or filter case"' in css
     assert "#case-pick-list { height: 10;" in css

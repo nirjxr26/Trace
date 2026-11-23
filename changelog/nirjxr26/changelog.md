@@ -5695,3 +5695,13 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Summary: Include release branches in the GitHub Actions CI pull-request target filter.
 - Files: .github/workflows/ci.yml, changelog/nirjxr26/changelog.md.
 - Verification: GitHub Actions trigger behavior pending verification on pull request 28.
+
+## 2026-11-23
+- Summary: Restore restrictive permissions on existing directories passed to ensure_dir without granting permissions absent from their current mode. Include existing formatter-only changes required by CI.
+- Files: src/trace_core/core/fs.py, src/trace_core/tui/design/css.py, tests/unit/test_imaging_ui.py, tests/unit/test_tui_design_system.py, changelog/nirjxr26/changelog.md.
+- Verification: python -m pytest tests/unit/test_security_regressions.py::test_ensure_dir_repairs_a_loose_existing_acl -q: 1 passed on Windows. Full suite, Linux behavior, and remaining TUI failures are unverified.
+
+## 2026-11-23
+- Summary: Align TUI design assertions with the existing three-row buttons and compact case picker. Check progress animation by the number of green cells rather than the number of style spans, with the preview timer stopped for determinism. Correct obsolete picker-height test comments.
+- Files: tests/unit/test_tui_design_system.py, tests/unit/test_tui_device_link.py, tests/unit/test_imaging_ui.py, changelog/nirjxr26/changelog.md.
+- Verification: python -m pytest tests/unit/test_tui_design_system.py tests/unit/test_tui_device_link.py tests/unit/test_imaging_ui.py tests/unit/test_security_regressions.py::test_ensure_dir_repairs_a_loose_existing_acl -q: 35 passed on Windows. Full suite and Linux behavior are unverified.

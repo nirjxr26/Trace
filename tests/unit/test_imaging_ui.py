@@ -229,7 +229,7 @@ async def test_imaging_progress_popup_preview_animates_green_fill() -> None:
     rgb = f"rgb({red},{green},{blue})"
 
     def green_count(rendered: Content) -> int:
-        return sum(1 for span in rendered.spans if rgb in str(span.style))
+        return sum(span.end - span.start for span in rendered.spans if rgb in str(span.style))
 
     app = TraceApp()
     async with app.run_test(size=(80, 24)) as pilot:
@@ -247,9 +247,7 @@ async def test_imaging_progress_popup_preview_animates_green_fill() -> None:
         assert "SanDisk Cruzer Blade" in str(popup.query_one("#progress-device", Static).render())
         assert "2026-CR-0001 · RAW" in str(popup.query_one("#progress-case", Static).render())
         assert "SanDisk-Cruzer-Blade.raw" in str(popup.query_one("#progress-destination", Static).render())
-        assert "Evidence Acquisition" in str(
-            popup.query_one("#progress-title", Static).render()
-        )
+        assert "Evidence Acquisition" in str(popup.query_one("#progress-title", Static).render())
         assert "Esc" == str(popup.query_one("#progress-esc", Static).render())
         assert not popup.query("#progress-close")
         assert popup.query_one("#progress-device", Static).region.height == 1
@@ -258,6 +256,9 @@ async def test_imaging_progress_popup_preview_animates_green_fill() -> None:
         assert labels == ["Read Speed", "Elapsed", "Bad regions"]
         assert str(popup.query_one("#progress-destination-label", Static).render()) == "Destination"
         bar = popup.query_one("#progress-bar", SegmentedProgress)
+        assert popup._timer is not None
+        popup._timer.stop()
+        popup.update_progress(0, popup._preview_total)
         rendered = bar.render()
         assert isinstance(rendered, Content)
         before = green_count(rendered)

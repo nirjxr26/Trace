@@ -1,9 +1,7 @@
 from trace_core.core.ui.theme import THEME_HEX
 from trace_core.tui.design.tokens import PANEL_PADDING
 
-MODAL_CSS_PREFIX = (
-    f"$muted: {THEME_HEX['muted']};\n$elevated: {THEME_HEX['surface_elevated']};\n$form-bg: {THEME_HEX['form_bg']};\n$active-bg: {THEME_HEX['surface_active']};\n"
-)
+MODAL_CSS_PREFIX = f"$muted: {THEME_HEX['muted']};\n$elevated: {THEME_HEX['surface_elevated']};\n$form-bg: {THEME_HEX['form_bg']};\n$active-bg: {THEME_HEX['surface_active']};\n"
 
 APP_CSS = """
 Screen { background: $background; width: 100%; height: 100%; }
