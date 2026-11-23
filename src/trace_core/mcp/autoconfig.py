@@ -1,22 +1,74 @@
+import importlib.metadata
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
+from packaging.version import InvalidVersion, Version
+
 from trace_core.core.fs import atomic_write_lines
+from trace_core.mcp import MCP_PROTOCOL_VERSION
+
+_MCP_MIN_VERSION = "2.3.0"
 
 
 def _disabled() -> bool:
     return os.environ.get("TRACE_MCP_DISABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _mcp_version_ok(version: str) -> bool:
+    try:
+        return Version(version) >= Version(_MCP_MIN_VERSION)
+    except InvalidVersion:
+        return False
+
+
+def _mcp_ready() -> bool:
+    if importlib.util.find_spec("mcp") is None:
+        return False
+    try:
+        installed = importlib.metadata.version("mcp")
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    return _mcp_version_ok(installed)
+
+
+def ensure_mcp_runtime() -> None:
+    if _mcp_ready():
+        return
+    args = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--quiet",
+        "--disable-pip-version-check",
+        "--no-input",
+        f"mcp>={_MCP_MIN_VERSION}",
+    ]
+    result = _run(args)
+    if result.returncode != 0:
+        _run([sys.executable, "-m", "ensurepip", "--upgrade"])
+        result = _run(args)
+    if result.returncode != 0 or not _mcp_ready():
+        raise RuntimeError(
+            f"Could not install MCP support (mcp>={_MCP_MIN_VERSION}) automatically. "
+            'Check network access, then run: python -m pip install "mcp>=2.3.0"'
+        )
+
+
 def trace_exe() -> str:
+    direct = Path(sys.executable).parent / ("trace.exe" if os.name == "nt" else "trace")
+    if direct.exists():
+        return str(direct)
     exe = shutil.which("trace")
     if exe:
         return exe
-    return str(Path(sys.executable).parent / ("trace.exe" if os.name == "nt" else "trace"))
+    return str(direct)
 
 
 def server_args() -> list[str]:
@@ -109,6 +161,48 @@ def _remove_json_entry(path: Path, key: str, name: str) -> None:
         _write_json(path, data)
 
 
+def _opencode_config_path() -> Path:
+    base = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    return base / "opencode" / "opencode.json"
+
+
+def _remove_opencode_trace() -> None:
+    path = _opencode_config_path()
+    data = _read_json(path)
+    mcp = data.get("mcp")
+    if not isinstance(mcp, dict):
+        return
+    changed = False
+    if "trace" in mcp:
+        mcp.pop("trace")
+        changed = True
+    servers = mcp.get("servers")
+    if isinstance(servers, dict) and "trace" in servers:
+        servers.pop("trace")
+        changed = True
+    if changed:
+        _write_json(path, data)
+
+
+def _set_opencode_trace() -> None:
+    path = _opencode_config_path()
+    data = _read_json(path)
+    mcp = data.setdefault("mcp", {})
+    if not isinstance(mcp, dict):
+        mcp = {}
+        data["mcp"] = mcp
+    servers = mcp.setdefault("servers", {})
+    if not isinstance(servers, dict):
+        servers = {}
+        mcp["servers"] = servers
+    servers["trace"] = {
+        "type": "local",
+        "command": [trace_exe(), *server_args()],
+        "protocol": MCP_PROTOCOL_VERSION,
+    }
+    _write_json(path, data)
+
+
 def _json_targets() -> list[tuple[str, Path, str, bool]]:
     base = Path.home()
     return [
@@ -120,9 +214,14 @@ def _json_targets() -> list[tuple[str, Path, str, bool]]:
     ]
 
 
-def setup() -> list[str]:
+def setup(on_progress: Callable[[str], None] | None = None) -> list[str]:
     if _disabled():
         return ["disabled"]
+    if on_progress:
+        on_progress("Checking MCP support. This may take a moment...")
+    ensure_mcp_runtime()
+    if on_progress:
+        on_progress("Registering hosts. This may take a few seconds...")
     done: list[str] = []
     if _which("codex"):
         result = _run(["codex", "mcp", "add", "trace", "--", trace_exe(), *server_args()])
@@ -133,9 +232,8 @@ def setup() -> list[str]:
         ok = result.returncode == 0 or _has_trace("claude")
         done.append(f"claude-code:{'ok' if ok else 'failed'}")
     if _which("opencode"):
-        result = _run(["opencode", "mcp", "add", "--global", "trace", "--", trace_exe(), *server_args()])
-        ok = result.returncode == 0 or _has_trace("opencode")
-        done.append(f"opencode:{'ok' if ok else 'failed'}")
+        _set_opencode_trace()
+        done.append("opencode:ok")
     _set_desktop("trace", disabled=False)
     done.append("claude-desktop:ok")
     for name, path, key, _zed_style in _json_targets():
@@ -144,12 +242,16 @@ def setup() -> list[str]:
     return done
 
 
-def disable() -> list[str]:
+def disable(on_progress: Callable[[str], None] | None = None) -> list[str]:
+    if on_progress:
+        on_progress("Removing host configuration. This may take a few seconds...")
     done: list[str] = []
-    for name, cli in (("codex", "codex"), ("claude-code", "claude"), ("opencode", "opencode")):
+    for name, cli in (("codex", "codex"), ("claude-code", "claude")):
         if _which(cli):
             _run([cli, "mcp", "remove", "trace"])
             done.append(f"{name}:removed")
+    _remove_opencode_trace()
+    done.append("opencode:removed")
     _set_desktop("trace", disabled=True)
     done.append("claude-desktop:removed")
     for name, path, key, _zed_style in _json_targets():

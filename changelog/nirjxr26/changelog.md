@@ -5752,3 +5752,33 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Summary: Broaden 	race mcp setup/disable to preconfigure and turn off the MCP server across Codex, Claude Code, Claude Desktop, OpenCode, Cursor, VS Code (Copilot) ~/.copilot/mcp-config.json, Windsurf ~/.codeium/windsurf/mcp_config.json, and Zed (~/.config/zed/mcp.json, ~/.config/zed/settings.json). JSON writers are shared by setup and disable; idempotency hardened.
 - Files: README.md, src/trace_core/mcp/autoconfig.py, tests/mcp/test_autoconfig.py, changelog/nirjxr26/changelog.md.
 - Verification: 	race mcp setup ran with codex ok, claude-code ok, opencode ok, claude-desktop ok, cursor ok, vscode-copilot ok, windsurf ok, zed ok, zed-settings ok. ruff format --check, ruff check, mypy passed. pytest tests/mcp -q: 37 passed.
+
+## 2026-11-23
+- Summary: Make `trace mcp setup` the only step users need. It installs or upgrades `mcp>=2.3.0` in the current interpreter before registering MCP hosts, so no extra installer or manual dependency step exists. Installing the dependency alone never replaces trace.exe, so the Windows file-lock failure cannot occur. Setup now prints a readable host-by-host OK/FAILED list; `trace mcp disable` stays config-only.
+- Files: src/trace_core/mcp/autoconfig.py, src/trace_core/mcp/commands.py, tests/mcp/test_autoconfig.py, tests/mcp/test_commands.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . (276 files), ruff check ., mypy --platform linux src tests (272 files) passed; pytest tests/mcp -q: 42 passed; live `trace mcp setup` reported all nine hosts OK; fresh stdio probe through the configured trace.CMD listed 28 tools and a clean trace_status call.
+
+## 2026-11-23
+- Summary: Make `trace mcp disable` print the same readable host list as setup, with REMOVED status. Both setup and disable now print a waiting line before subprocess work. Host registration now resolves the real trace.exe beside sys.executable instead of the .CMD shim, which OpenCode reported as exit 255.
+- Files: src/trace_core/mcp/autoconfig.py, src/trace_core/mcp/commands.py, tests/mcp/test_autoconfig.py, tests/mcp/test_commands.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . (276 files), ruff check ., mypy --platform linux src tests (272 files) passed; pytest tests/mcp -q: 43 passed; live disable and setup output captured; configuration now points at .venv\Scripts\trace.exe; opencode mcp list reports trace connected with 28 tools.
+
+## 2026-11-23
+- Summary: Fix `trace mcp disable` for OpenCode CLI v2.3.2, which has no `mcp remove` subcommand. Disable now edits opencode.json directly and removes both mcp.trace and mcp.servers.trace, so the reported REMOVED status matches the saved config.
+- Files: src/trace_core/mcp/autoconfig.py, tests/mcp/test_autoconfig.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . (276 files), ruff check ., mypy --platform linux src tests (272 files) passed; pytest tests/mcp -q: 44 passed; live disable reported all hosts REMOVED; secret-free config checks showed no trace entry in Codex, Claude Code, Claude Desktop, Cursor, VS Code Copilot, Windsurf, Zed, or OpenCode; opencode mcp list no longer lists trace.
+
+## 2026-11-23
+- Summary: Fix OpenCode v2 registration. OpenCode v2 requires `command` to be one array containing the executable and args, and needs `protocol: 2026-07-28` for this server. The old command-plus-args shape was skipped as malformed by OpenCode config normalization. `trace mcp setup` now writes the v2 shape.
+- Files: src/trace_core/mcp/autoconfig.py, tests/mcp/test_autoconfig.py, changelog/nirjxr26/changelog.md.
+- Verification: live `trace mcp setup` reported all nine hosts OK; `opencode mcp list` reports `trace connected`; Code Mode exposes all 28 trace tools.
+
+## 2026-11-23
+- Summary: Colorize MCP host status output: OK prints green, REMOVED prints red, all other statuses and host names stay uncolored. ANSI codes are emitted only when the terminal supports them.
+- Files: src/trace_core/mcp/commands.py, tests/mcp/test_commands.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . and ruff check . passed; pytest tests/mcp -q: 46 passed.
+
+## 2026-11-23
+- Summary: Match the requested setup layout: blank line after progress lines, blank line after heading, and an indented wider status column for host lists.
+- Files: src/trace_core/mcp/commands.py, tests/mcp/test_commands.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . and ruff check . passed; pytest tests/mcp -q: 46 passed; live setup output matches requested spacing.
