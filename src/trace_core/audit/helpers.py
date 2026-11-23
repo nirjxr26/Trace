@@ -372,9 +372,21 @@ def fetch_case_with_history(case_svc, identifier: str, limit: int = 6):  # type:
     return case, events
 
 
-def _device_identity(event: AuditEventDto, details: dict, record: Any) -> tuple[str, str | None]:
+def _device_name(label: Any, node: str, model: Any, capacity: Any, serial: Any) -> str:
     from trace_core.devices.renderers import device_heading, display_node
 
+    if label:
+        name = str(label)
+    elif node:
+        name = device_heading(node, model, capacity) if (model or capacity) else display_node(node)
+    elif serial:
+        name = str(serial)
+    else:
+        name = ""
+    return name
+
+
+def _device_identity(event: AuditEventDto, details: dict, record: Any) -> tuple[str, str | None]:
     node = str(details["node"]) if details.get("node") else ""
     label = details.get("label")
     model = details.get("model") or (record.model if record is not None else None)
@@ -384,15 +396,7 @@ def _device_identity(event: AuditEventDto, details: dict, record: Any) -> tuple[
     serial = details.get("serial") or event.subject_device_serial
     if serial is None and record is not None:
         serial = record.serial
-    if label:
-        name = str(label)
-    elif node:
-        name = device_heading(node, model, capacity) if (model or capacity) else display_node(node)
-    elif serial:
-        name = str(serial)
-    else:
-        name = ""
-    return name, str(serial) if serial else None
+    return _device_name(label, node, model, capacity, serial), str(serial) if serial else None
 
 
 def _node_link_context(
@@ -413,10 +417,8 @@ def _node_link_context(
     return label, event.subject_case_number or (cases or None)
 
 
-def device_audit_info(svc: AuditService, events: list[AuditEventDto]) -> dict[int, "DeviceAuditInfo"]:
+def _collected_event_details(events: list[AuditEventDto]) -> tuple[dict[int, dict], set[str]]:
     from trace_core.audit.events import parse_details
-    from trace_core.audit.renderers import DeviceAuditInfo
-    from trace_core.devices.helpers import do_observed_devices
 
     details_by_seq: dict[int, dict] = {}
     nodes: set[str] = set()
@@ -427,6 +429,33 @@ def device_audit_info(svc: AuditService, events: list[AuditEventDto]) -> dict[in
         details_by_seq[e.seq] = details
         if details.get("node"):
             nodes.add(str(details["node"]))
+    return details_by_seq, nodes
+
+
+def _device_info_from_event(
+    svc: AuditService,
+    e: AuditEventDto,
+    details: dict,
+    node: str,
+    observed: dict,
+    links: dict[str, list[Any]],
+) -> "DeviceAuditInfo | None":
+    from trace_core.audit.renderers import DeviceAuditInfo
+
+    name, serial = _device_identity(e, details, observed.get(node) if node else None)
+    link_label, case_number = _node_link_context(svc, e, node, links)
+    if link_label and not details.get("label"):
+        name = str(link_label)
+    if not name:
+        return None
+    return DeviceAuditInfo(name=name, serial=serial, case_number=case_number)
+
+
+def device_audit_info(svc: AuditService, events: list[AuditEventDto]) -> dict[int, "DeviceAuditInfo"]:
+    from trace_core.audit.renderers import DeviceAuditInfo
+    from trace_core.devices.helpers import do_observed_devices
+
+    details_by_seq, nodes = _collected_event_details(events)
     if not details_by_seq:
         return {}
 
@@ -442,13 +471,9 @@ def device_audit_info(svc: AuditService, events: list[AuditEventDto]) -> dict[in
         if not details:
             continue
         node = str(details["node"]) if details.get("node") else ""
-        name, serial = _device_identity(e, details, observed.get(node) if node else None)
-        link_label, case_number = _node_link_context(svc, e, node, links)
-        if link_label and not details.get("label"):
-            name = str(link_label)
-        if not name:
-            continue
-        info[e.seq] = DeviceAuditInfo(name=name, serial=serial, case_number=case_number)
+        item = _device_info_from_event(svc, e, details, node, observed, links)
+        if item is not None:
+            info[e.seq] = item
     return info
 
 

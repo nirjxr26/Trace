@@ -132,8 +132,10 @@ def test_reservation_rejects_closed_and_archived_cases(
 
 
 def test_unknown_reservation_cannot_be_abandoned(session_manager: DatabaseSessionManager) -> None:
+    imaging = ImagingService(session_manager)
+    operation_id = uuid4()
     with pytest.raises(NotFoundError):
-        ImagingService(session_manager).abandon(uuid4())
+        imaging.abandon(operation_id)
 
 
 def test_denied_reservation_does_not_create_operation(
@@ -145,8 +147,9 @@ def test_denied_reservation_does_not_create_operation(
         raise AuthorizationError("denied")
 
     monkeypatch.setattr("trace_core.imaging.service.require_mutator", deny)
+    imaging = ImagingService(session_manager)
     with pytest.raises(AuthorizationError, match="denied"):
-        ImagingService(session_manager).reserve(case.number)
+        imaging.reserve(case.number)
 
     assert not forensic_operation_active(session_manager)
     assert not AuditService(session_manager).list_events(AuditFilterDto(action=AuditAction.IMAGING_RESERVED))
@@ -172,8 +175,9 @@ def test_failed_audit_rolls_back_reservation(
         raise RuntimeError("audit unavailable")
 
     monkeypatch.setattr(AuditService, "record", fail_record)
+    imaging = ImagingService(session_manager)
     with pytest.raises(RuntimeError, match="audit unavailable"):
-        ImagingService(session_manager).reserve(case.number)
+        imaging.reserve(case.number)
 
     monkeypatch.undo()
     assert service.close_case(case.number, reason="finished").status.value == "CLOSED"

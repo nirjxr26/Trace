@@ -63,7 +63,7 @@ def _binding_path(staging_dir: Path, name: str) -> Path:
 
 
 def _read_binding(staging_dir: Path, name: str) -> dict | None:
-    return read_json_record(_binding_path(staging_dir, name))
+    return read_json_record(_binding_path(staging_dir, name), root=staging_dir)
 
 
 def stage_artifact(
@@ -225,7 +225,8 @@ def prune_retention(base: str | Path, keep_backups: int = RETENTION_BACKUPS) -> 
 
 
 def read_release_meta(base: str | Path, version: str) -> dict | None:
-    return read_json_record(releases_root(base) / version / "release.json")
+    root = releases_root(base)
+    return read_json_record(root / version / "release.json", root=root)
 
 
 def _set_active(base: str | Path, version: str) -> None:
@@ -236,8 +237,7 @@ def _set_active(base: str | Path, version: str) -> None:
 def activate(base: str | Path, version: str) -> None:
     with update_lock():
         root = releases_root(base)
-        target = root / version
-        check_contained(target, root)
+        target = check_contained(root / version, root)
         if not target.is_dir() or not any(target.iterdir()):
             raise FileNotFoundError(f"release {version} is not a complete staged release")
         current = read_active(base)
@@ -253,8 +253,7 @@ def rollback(base: str | Path) -> str:
         previous = read_previous(base)
         if not previous:
             raise FileNotFoundError("no previous version to restore")
-        target = root / previous
-        check_contained(target, root)
+        target = check_contained(root / previous, root)
         if not target.is_dir() or not any(target.iterdir()):
             raise FileNotFoundError(f"previous release {previous} is not intact")
         _set_active(base, previous)

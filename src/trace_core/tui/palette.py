@@ -11,6 +11,7 @@ from trace_core.core.cli.completion import filter_completions
 from trace_core.tui.forms import _BaseModal
 
 _CONFIRM_HINT = "y/N confirm"
+PALETTE_LIST_SELECTOR = "#palette-list"
 
 COMMANDS: list[tuple[str, str, str]] = [
     # (command id, label, hint)
@@ -145,37 +146,22 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
         search.cursor_blink = False
         search.focus()
 
-    async def _fill(self, query: str) -> None:
-        scoped = [command for command in _BY_ID if command_scope(command) == self._active_tab]
-        rows: list[tuple[str, str]] = []
-        context = self.query_one("#palette-context", Static)
-        if query:
-            ordered = scoped + [command for command in _BY_ID if command not in scoped]
-            candidates: list[tuple[str, str]] = []
-            for command in ordered:
-                label, hint = _BY_ID[command]
-                group, key = COMMAND_META[command]
-                candidates.append((f"{command} {label} {hint} {key} {group}", command))
-            matches = [command for _, command in filter_completions(candidates, query, limit=12)]
-            context.update(f"Results · {len(matches)}   {self._active_tab.title()}")
-            if not matches:
-                rows.append(("head", f'No commands match "{query}"'))
-            else:
-                rows.append(("head", "Results"))
-                rows.extend(("cmd", command) for command in matches)
-        else:
-            context.update(f"{self._active_tab.title()} · {len(scoped)} actions here")
-            rows.append(("head", "In this tab"))
-            rows.extend(("cmd", command) for command in scoped)
-            for group in GROUP_ORDER:
-                if group.lower() == self._active_tab:
-                    continue
-                members = [command for command, meta in COMMAND_META.items() if meta[0] == group]
-                if members:
-                    rows.append(("head", group))
-                    rows.extend(("cmd", command) for command in members)
-        view = self.query_one("#palette-list", ListView)
-        await view.clear()
+    def _search_rows(self, query: str, scoped: list[str], context: Static) -> list[tuple[str, str]]:
+        ordered = scoped + [command for command in _BY_ID if command not in scoped]
+        candidates: list[tuple[str, str]] = []
+        for command in ordered:
+            label, hint = _BY_ID[command]
+            group, key = COMMAND_META[command]
+            candidates.append((f"{command} {label} {hint} {key} {group}", command))
+        matches = [command for _, command in filter_completions(candidates, query, limit=12)]
+        context.update(f"Results · {len(matches)}   {self._active_tab.title()}")
+        if not matches:
+            return [("head", f'No commands match "{query}"')]
+        rows: list[tuple[str, str]] = [("head", "Results")]
+        rows.extend(("cmd", command) for command in matches)
+        return rows
+
+    def _append_rows(self, view: ListView, rows: list[tuple[str, str]]) -> None:
         for kind, value in rows:
             if kind == "head":
                 view.append(ListItem(Static(value, classes="group-label"), disabled=True, classes="group-head"))
@@ -193,13 +179,33 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
                     classes="cmd-row",
                 )
             )
+
+    async def _fill(self, query: str) -> None:
+        scoped = [command for command in _BY_ID if command_scope(command) == self._active_tab]
+        context = self.query_one("#palette-context", Static)
+        if query:
+            rows = self._search_rows(query, scoped, context)
+        else:
+            context.update(f"{self._active_tab.title()} · {len(scoped)} actions here")
+            rows = [("head", "In this tab")]
+            rows.extend(("cmd", command) for command in scoped)
+            for group in GROUP_ORDER:
+                if group.lower() == self._active_tab:
+                    continue
+                members = [command for command, meta in COMMAND_META.items() if meta[0] == group]
+                if members:
+                    rows.append(("head", group))
+                    rows.extend(("cmd", command) for command in members)
+        view = self.query_one(PALETTE_LIST_SELECTOR, ListView)
+        await view.clear()
+        self._append_rows(view, rows)
         view.index = next((index for index, item in enumerate(view.children) if not item.disabled), None)
 
     def action_list_down(self) -> None:
-        self.query_one("#palette-list", ListView).action_cursor_down()
+        self.query_one(PALETTE_LIST_SELECTOR, ListView).action_cursor_down()
 
     def action_list_up(self) -> None:
-        self.query_one("#palette-list", ListView).action_cursor_up()
+        self.query_one(PALETTE_LIST_SELECTOR, ListView).action_cursor_up()
 
     @on(Input.Changed)
     async def _typed(self, event: Input.Changed) -> None:
@@ -207,7 +213,7 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
 
     @on(Input.Submitted)
     def _submitted(self, event: Input.Submitted) -> None:
-        view = self.query_one("#palette-list", ListView)
+        view = self.query_one(PALETTE_LIST_SELECTOR, ListView)
         highlighted = view.highlighted_child
         target = highlighted.id if highlighted is not None else None
         self.dismiss(target or None)

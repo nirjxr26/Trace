@@ -6,6 +6,7 @@ from trace_core.imaging.domain import ImagingBadRegion, ImagingInterruptedError,
 
 PIECE_SIZE = 4 * 1024 * 1024
 CHUNK_SIZE = 1024 * 1024
+IMAGE_READ_FAILED = "Image read did not complete."
 
 
 class RawSource(Protocol):
@@ -17,6 +18,43 @@ class RawSource(Protocol):
 Progress = Callable[[int, int], None]
 ProgressWithDigest = Callable[[int, int, str], None]
 Cancelled = Callable[[], bool]
+
+
+def _read_chunk(
+    source: RawSource,
+    wanted: int,
+    absolute_offset: int,
+    allowed: int,
+    bad_regions: list[ImagingBadRegion],
+    on_bad_region: Callable[[ImagingBadRegion], None] | None,
+) -> bytes:
+    try:
+        chunk = source.read(wanted)
+    except ImagingSourceReadError as exc:
+        source.seek(absolute_offset + wanted)
+        chunk = b"\0" * wanted
+        region = ImagingBadRegion(offset=absolute_offset, length=wanted, cause=str(exc)[:512])
+        bad_regions.append(region)
+        if on_bad_region is not None:
+            on_bad_region(region)
+    if chunk is None:
+        raise BlockingIOError("Source read did not complete.")
+    if not chunk:
+        raise EOFError("Source ended before the expected byte count.")
+    if len(chunk) > allowed:
+        raise OSError("Source returned more bytes than requested.")
+    return chunk
+
+
+def _write_chunk(chunk: bytes, destination: BinaryIO, digest: Any) -> int:
+    written_total = 0
+    while written_total < len(chunk):
+        written = destination.write(chunk[written_total:])
+        if written is None or written <= 0 or written > len(chunk) - written_total:
+            raise OSError("Destination did not accept the requested bytes.")
+        digest.update(chunk[written_total : written_total + written])
+        written_total += written
+    return written_total
 
 
 def copy_raw_with_regions(
@@ -45,29 +83,8 @@ def copy_raw_with_regions(
         if cancelled is not None and cancelled():
             raise ImagingInterruptedError("Acquisition cancelled; a resume checkpoint was written.")
         wanted = min(CHUNK_SIZE, remaining - copied)
-        try:
-            chunk = source.read(wanted)
-        except ImagingSourceReadError as exc:
-            source.seek(offset + copied + wanted)
-            chunk = b"\0" * wanted
-            region = ImagingBadRegion(offset=offset + copied, length=wanted, cause=str(exc)[:512])
-            bad_regions.append(region)
-            if on_bad_region is not None:
-                on_bad_region(region)
-        if chunk is None:
-            raise BlockingIOError("Source read did not complete.")
-        if not chunk:
-            raise EOFError("Source ended before the expected byte count.")
-        if len(chunk) > remaining - copied:
-            raise OSError("Source returned more bytes than requested.")
-        write_offset = 0
-        while write_offset < len(chunk):
-            written = destination.write(chunk[write_offset:])
-            if written is None or written <= 0 or written > len(chunk) - write_offset:
-                raise OSError("Destination did not accept the requested bytes.")
-            digest.update(chunk[write_offset : write_offset + written])
-            copied += written
-            write_offset += written
+        chunk = _read_chunk(source, wanted, offset + copied, remaining - copied, bad_regions, on_bad_region)
+        copied += _write_chunk(chunk, destination, digest)
         if progress_with_digest is not None:
             progress_with_digest(offset + copied, expected_bytes, digest.hexdigest())
         if progress is not None:
@@ -85,7 +102,7 @@ def hash_stream(stream: BinaryIO) -> str:
     while True:
         chunk = stream.read(CHUNK_SIZE)
         if chunk is None:
-            raise BlockingIOError("Image read did not complete.")
+            raise BlockingIOError(IMAGE_READ_FAILED)
         if not chunk:
             break
         digest.update(chunk)
@@ -101,7 +118,7 @@ def verify_raw(image: BinaryIO, expected_bytes: int, expected_sha256: str) -> bo
     while True:
         chunk = image.read(CHUNK_SIZE)
         if chunk is None:
-            raise BlockingIOError("Image read did not complete.")
+            raise BlockingIOError(IMAGE_READ_FAILED)
         if not chunk:
             break
         count += len(chunk)
@@ -125,7 +142,7 @@ def verify_raw_with_pieces(
     while True:
         chunk = image.read(piece_size)
         if chunk is None:
-            raise BlockingIOError("Image read did not complete.")
+            raise BlockingIOError(IMAGE_READ_FAILED)
         if not chunk:
             break
         count += len(chunk)

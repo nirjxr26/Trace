@@ -20,6 +20,7 @@ from trace_core.tui.design.widgets import FlatButton, ModalFrame
 from trace_core.tui.theme import SELECT_PREFIX
 
 ESCAPES: list[Binding | tuple[str, str] | tuple[str, str, str]] = [("escape", "dismiss_cancel", "Back")]
+CASE_PICK_LIST_SELECTOR = "#case-pick-list"
 
 
 class _BaseModal(ModalScreen):
@@ -484,10 +485,10 @@ class CasePicker(_BaseModal):
             self._rows = self._load(term.strip())
         except Exception as exc:  # boundary: a failed lookup must not kill the modal
             self._rows = []
-            self.query_one("#case-pick-list", ListView).clear()
+            self.query_one(CASE_PICK_LIST_SELECTOR, ListView).clear()
             self.query_one("#case-pick-empty", Static).update(f"  {exc}")
             return
-        listing = self.query_one("#case-pick-list", ListView)
+        listing = self.query_one(CASE_PICK_LIST_SELECTOR, ListView)
         listing.clear()
         for number, title in self._rows:
             listing.append(ListItem(Label(f"{number:<22}{title}".rstrip())))
@@ -516,7 +517,7 @@ class CasePicker(_BaseModal):
         if self._rows:
             self.dismiss(self._rows[0][0])
 
-    @on(ListView.Selected, "#case-pick-list")
+    @on(ListView.Selected, CASE_PICK_LIST_SELECTOR)
     def _chosen(self, event: ListView.Selected) -> None:
         self._flush_pending()
         if event.list_view.index is not None and 0 <= event.list_view.index < len(self._rows):
@@ -529,5 +530,5 @@ class CasePicker(_BaseModal):
         so the list could be focused but never traversed.
         """
         if event.key == "down" and self.query_one("#case-pick-filter", Input).has_focus:
-            self.query_one("#case-pick-list", ListView).focus()
+            self.query_one(CASE_PICK_LIST_SELECTOR, ListView).focus()
             event.stop()

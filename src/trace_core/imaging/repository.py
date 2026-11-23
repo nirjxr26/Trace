@@ -74,7 +74,6 @@ class SqlAlchemyImagingRepository:
         operation_id: UUID,
         source: ImagingSource,
         expected_bytes: int,
-        partial_relpath: str,
         image_relpath: str,
         manifest_relpath: str,
         started_at: datetime,

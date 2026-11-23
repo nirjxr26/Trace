@@ -943,9 +943,13 @@ def test_a_legacy_chain_state_trigger_is_dropped_on_startup(
                 "BEGIN SELECT RAISE(ABORT, 'audit_chain_state only moves forward'); END"
             )
         )
-    with pytest.raises(sqlalchemy.exc.IntegrityError):
+
+    def attempt_chain_state_update() -> None:
         with session_manager.engine.begin() as c:
             c.execute(sqlalchemy.text("UPDATE audit_chain_state SET last_seq = last_seq + 1 WHERE id = 1"))
+
+    with pytest.raises(sqlalchemy.exc.IntegrityError):
+        attempt_chain_state_update()
 
     apply_migrations(session_manager.engine)
 

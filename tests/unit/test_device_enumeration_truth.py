@@ -68,6 +68,7 @@ def test_the_windows_adapter_refuses_off_platform_instead_of_reporting_nothing(
     from trace_core.devices._subprocess import HelperFailure
 
     monkeypatch.setattr(win32, "_windll", lambda: None)
+    device = win32.Win32Device()
     with pytest.raises(HelperFailure) as caught:
-        win32.Win32Device().list_block_devices()
+        device.list_block_devices()
     assert "Windows" in caught.value.detail

@@ -79,6 +79,9 @@ _FAILED_STATES = {
     ImagingState.QUARANTINED,
 }
 _CHECKPOINT_BYTES = 64 * 1024 * 1024
+_VIEW_IMAGING = "view imaging operations"
+_IMAGING_OPERATION = "Imaging operation"
+_PARTIAL_MISMATCH = "The partial image does not match the resume checkpoint."
 Progress = Callable[[int, int], None]
 CheckpointProgress = Callable[[int, int, str], None]
 Cancelled = Callable[[], bool]
@@ -91,7 +94,7 @@ class ImagingService(BaseService):
 
     def list_for_case(self, case_identifier: str) -> list[ImagingOperation]:
         with self.transaction() as uow:
-            require_role(uow.session, ROLE_ADMIN, ROLE_AUDITOR, ROLE_INVESTIGATOR, action="view imaging operations")
+            require_role(uow.session, ROLE_ADMIN, ROLE_AUDITOR, ROLE_INVESTIGATOR, action=_VIEW_IMAGING)
             cases = SqlAlchemyCaseRepository(uow.session)
             case = cases.resolve(case_identifier)
             if case is not None:
@@ -104,16 +107,16 @@ class ImagingService(BaseService):
 
     def list_recent(self, limit: int = 100) -> list[ImagingOperation]:
         with self.transaction() as uow:
-            require_role(uow.session, ROLE_ADMIN, ROLE_AUDITOR, ROLE_INVESTIGATOR, action="view imaging operations")
+            require_role(uow.session, ROLE_ADMIN, ROLE_AUDITOR, ROLE_INVESTIGATOR, action=_VIEW_IMAGING)
             return SqlAlchemyImagingRepository(uow.session).list_recent(limit)
 
     def manifest_for(self, operation_id: UUID) -> dict[str, object]:
         root = Path(settings.storage_root)
         with self.transaction() as uow:
-            require_role(uow.session, ROLE_ADMIN, ROLE_AUDITOR, ROLE_INVESTIGATOR, action="view imaging operations")
+            require_role(uow.session, ROLE_ADMIN, ROLE_AUDITOR, ROLE_INVESTIGATOR, action=_VIEW_IMAGING)
             operation = SqlAlchemyImagingRepository(uow.session).get(operation_id)
             if operation is None:
-                raise NotFoundError("Imaging operation", str(operation_id))
+                raise NotFoundError(_IMAGING_OPERATION, str(operation_id))
             if operation.manifest_relpath is None:
                 raise ImagingDestinationError("The operation has no recorded manifest.")
             manifest = check_contained(root / operation.manifest_relpath, root, what="imaging manifest")
@@ -152,7 +155,7 @@ class ImagingService(BaseService):
             require_role(uow.session, ROLE_ADMIN, ROLE_AUDITOR, ROLE_INVESTIGATOR, action="verify an image")
             operation = SqlAlchemyImagingRepository(uow.session).get(operation_id)
             if operation is None:
-                raise NotFoundError("Imaging operation", str(operation_id))
+                raise NotFoundError(_IMAGING_OPERATION, str(operation_id))
             if operation.state is not ImagingState.BYTE_VERIFIED:
                 raise InvalidCaseStateError("Only a byte-verified image can be re-verified.")
             if operation.manifest_relpath is None or operation.image_relpath is None:
@@ -185,6 +188,24 @@ class ImagingService(BaseService):
             )
             return verified
 
+    @staticmethod
+    def _seal_inputs(operation: ImagingOperation | None, operation_id: UUID) -> tuple[ImagingOperation, str]:
+        if operation is None:
+            raise NotFoundError(_IMAGING_OPERATION, str(operation_id))
+        if operation.state is not ImagingState.BYTE_VERIFIED or operation.image_relpath is None:
+            raise InvalidCaseStateError("Only a byte-verified image can be sealed.")
+        digest = operation.acquisition_sha256
+        if not digest:
+            raise ImagingDestinationError("The operation has no acquisition digest.")
+        return operation, digest
+
+    @staticmethod
+    def _cleanup_seal_files(sealed: Path | None, seal_meta: Path | None) -> None:
+        if sealed is not None:
+            sealed.unlink(missing_ok=True)
+        if seal_meta is not None:
+            seal_meta.unlink(missing_ok=True)
+
     def seal_image(self, operation_id: UUID, passphrase: str) -> ImagingEncryption:
         root = Path(settings.storage_root)
         sealed: Path | None = None
@@ -194,19 +215,16 @@ class ImagingService(BaseService):
             with self.transaction() as uow:
                 require_mutator(uow.session, action="seal an image")
                 operation = SqlAlchemyImagingRepository(uow.session).get(operation_id)
-                if operation is None:
-                    raise NotFoundError("Imaging operation", str(operation_id))
-                if operation.state is not ImagingState.BYTE_VERIFIED or operation.image_relpath is None:
-                    raise InvalidCaseStateError("Only a byte-verified image can be sealed.")
-                digest = operation.acquisition_sha256
-                if not digest:
-                    raise ImagingDestinationError("The operation has no acquisition digest.")
+                operation, digest = self._seal_inputs(operation, operation_id)
                 case_dir, _, _, image, _, _, _ = self._operation_paths(operation.case_number, operation.id)
                 sealed = image.with_name("image.raw.sealed")
                 seal_meta = case_dir / "seal.json"
                 if seal_meta.exists() or sealed.exists():
                     raise ImagingDestinationError("This image is already sealed.")
-                image_path = check_contained(root / operation.image_relpath, root, what="imaging artifact")
+                image_relpath = operation.image_relpath
+                if image_relpath is None:
+                    raise ImagingDestinationError("The operation has no recorded image artifacts.")
+                image_path = check_contained(root / image_relpath, root, what="imaging artifact")
                 created_files = True
                 sealed_size, header = seal_file(image_path, sealed, passphrase, digest)
                 if header.get("alg") != ALGORITHM:
@@ -236,10 +254,7 @@ class ImagingService(BaseService):
                 return encryption
         except BaseException:
             if created_files:
-                if sealed is not None:
-                    sealed.unlink(missing_ok=True)
-                if seal_meta is not None:
-                    seal_meta.unlink(missing_ok=True)
+                self._cleanup_seal_files(sealed, seal_meta)
             raise
 
     def open_sealed_image(self, operation_id: UUID, passphrase: str, out: str | Path) -> Path:
@@ -251,7 +266,7 @@ class ImagingService(BaseService):
                 require_mutator(uow.session, action="unseal an image")
                 operation = SqlAlchemyImagingRepository(uow.session).get(operation_id)
                 if operation is None:
-                    raise NotFoundError("Imaging operation", str(operation_id))
+                    raise NotFoundError(_IMAGING_OPERATION, str(operation_id))
                 if operation.state is not ImagingState.BYTE_VERIFIED:
                     raise InvalidCaseStateError("Only a byte-verified image can be unsealed.")
                 case_dir, _, _, _, _, _, _ = self._operation_paths(operation.case_number, operation.id)
@@ -295,7 +310,7 @@ class ImagingService(BaseService):
             imaging = SqlAlchemyImagingRepository(uow.session)
             candidate = imaging.get(operation_id)
             if candidate is None:
-                raise NotFoundError("Imaging operation", str(operation_id))
+                raise NotFoundError(_IMAGING_OPERATION, str(operation_id))
             case = SqlAlchemyCaseRepository(uow.session).lock_for_imaging(candidate.case_id)
             if case is None:
                 raise CaseNotFoundError(candidate.case_number)
@@ -304,7 +319,7 @@ class ImagingService(BaseService):
             except ValueError as exc:
                 raise InvalidCaseStateError(str(exc)) from exc
             if operation is None:
-                raise NotFoundError("Imaging operation", str(operation_id))
+                raise NotFoundError(_IMAGING_OPERATION, str(operation_id))
             user, host = current_identity()
             actor = bound_actor(f"{user}@{host}")
             if candidate.state is ImagingState.PREPARING:
@@ -384,7 +399,7 @@ class ImagingService(BaseService):
             require_mutator(uow.session, action="acquire an image")
             operation = SqlAlchemyImagingRepository(uow.session).get(operation_id)
             if operation is None:
-                raise NotFoundError("Imaging operation", str(operation_id))
+                raise NotFoundError(_IMAGING_OPERATION, str(operation_id))
             if operation.state not in {
                 ImagingState.PREPARING,
                 ImagingState.INTERRUPTED,
@@ -423,16 +438,8 @@ class ImagingService(BaseService):
         if allow_software_write_block and attest_hardware_write_block:
             raise AuthorizationError("Select either software or hardware write blocking, not both")
 
-    def _preflight(
-        self,
-        device_service,
-        source_node: str,
-        allow_real_hardware: bool,
-        operation: ImagingOperation | None,
-        allow_software_write_block: bool = False,
-        attest_hardware_write_block: bool = False,
-    ) -> tuple[ImagingSource, os.stat_result | None]:
-        devices = device_service.list_devices()
+    @staticmethod
+    def _resolve_source_device(devices, source_node: str):
         cleaned = str(source_node).strip()
         exact = [device for device in devices if device.node == cleaned]
         if not exact:
@@ -443,7 +450,31 @@ class ImagingService(BaseService):
                 exact = [device for device in devices if Path(device.node).absolute() == requested.absolute()]
         if len(exact) != 1:
             raise ImagingSourceUnavailableError("The source is absent or ambiguous. Refresh the device list and retry.")
-        device = exact[0]
+        return exact[0]
+
+    @staticmethod
+    def _fixture_source_stat(device) -> os.stat_result:
+        try:
+            stat = os.stat(device.node)
+        except OSError as exc:
+            raise ImagingSourceUnavailableError(
+                "The fixture source could not be inspected before acquisition."
+            ) from exc
+        if stat.st_size != device.size_bytes:
+            raise ImagingSourceChangedError("The fixture source changed size before acquisition.")
+        return stat
+
+    def _preflight(
+        self,
+        device_service,
+        source_node: str,
+        allow_real_hardware: bool,
+        operation: ImagingOperation | None,
+        allow_software_write_block: bool = False,
+        attest_hardware_write_block: bool = False,
+    ) -> tuple[ImagingSource, os.stat_result | None]:
+        devices = device_service.list_devices()
+        device = self._resolve_source_device(devices, source_node)
         self._require_write_block_opt_ins(
             device, source_node, allow_real_hardware, allow_software_write_block, attest_hardware_write_block
         )
@@ -462,14 +493,7 @@ class ImagingService(BaseService):
         kind = ImagingSourceKind(device.kind.value)
         source_stat: os.stat_result | None = None
         if kind is ImagingSourceKind.FILE:
-            try:
-                source_stat = os.stat(device.node)
-            except OSError as exc:
-                raise ImagingSourceUnavailableError(
-                    "The fixture source could not be inspected before acquisition."
-                ) from exc
-            if source_stat.st_size != device.size_bytes:
-                raise ImagingSourceChangedError("The fixture source changed size before acquisition.")
+            source_stat = self._fixture_source_stat(device)
         source = ImagingSource(
             node=device.node,
             kind=kind,
@@ -503,7 +527,7 @@ class ImagingService(BaseService):
         )
 
     def _claim(self, operation: ImagingOperation, source: ImagingSource, paths: tuple) -> ImagingOperation:
-        case_dir, partial, _, _, _, image_relpath, manifest_relpath = paths
+        _, partial, _, _, _, image_relpath, manifest_relpath = paths
         with self.transaction() as uow:
             require_mutator(uow.session, action="start an imaging acquisition")
             cases = SqlAlchemyCaseRepository(uow.session)
@@ -517,20 +541,19 @@ class ImagingService(BaseService):
             imaging = SqlAlchemyImagingRepository(uow.session)
             current = imaging.get(operation.id)
             if current is None:
-                raise NotFoundError("Imaging operation", str(operation.id))
+                raise NotFoundError(_IMAGING_OPERATION, str(operation.id))
             if current.state is not ImagingState.PREPARING:
                 raise InvalidCaseStateError("Only a preparing imaging reservation can start acquisition.")
             claimed = imaging.claim_for_acquisition(
                 operation.id,
                 source,
                 source.size_bytes,
-                relative_locator(Path(settings.storage_root), partial),
                 image_relpath,
                 manifest_relpath,
                 now_utc(),
             )
             if claimed is None:
-                raise NotFoundError("Imaging operation", str(operation.id))
+                raise NotFoundError(_IMAGING_OPERATION, str(operation.id))
             actor = self._actor()
             uow.before_commit(
                 AuditService(self.session_manager).record_hook(
@@ -562,7 +585,7 @@ class ImagingService(BaseService):
         if not isinstance(offset, int) or offset < 0 or offset > expected:
             raise ImagingDestinationError("The resume checkpoint has an invalid offset.")
         if partial.stat().st_size != offset:
-            raise ImagingDestinationError("The partial image does not match the resume checkpoint.")
+            raise ImagingDestinationError(_PARTIAL_MISMATCH)
         return payload
 
     def _acquiring_state(
@@ -575,9 +598,9 @@ class ImagingService(BaseService):
             raise ImagingDestinationError("The checkpoint has no completed-copy digest.")
         partial = paths[1]
         if not partial.is_file() or partial.stat().st_size != offset:
-            raise ImagingDestinationError("The partial image does not match the resume checkpoint.")
+            raise ImagingDestinationError(_PARTIAL_MISMATCH)
         if self._partial_digest(partial) != digest:
-            raise ImagingDestinationError("The partial image does not match the resume checkpoint.")
+            raise ImagingDestinationError(_PARTIAL_MISMATCH)
         return offset, digest, self._bad_regions_from_payload(payload)
 
     @staticmethod
@@ -616,7 +639,7 @@ class ImagingService(BaseService):
             imaging = SqlAlchemyImagingRepository(uow.session)
             claimed = imaging.resume_claim(operation.id, started_at)
             if claimed is None:
-                raise NotFoundError("Imaging operation", str(operation.id))
+                raise NotFoundError(_IMAGING_OPERATION, str(operation.id))
             actor = self._actor()
             uow.before_commit(
                 AuditService(self.session_manager).record_hook(
@@ -631,6 +654,37 @@ class ImagingService(BaseService):
                 )
             )
             return claimed
+
+    @staticmethod
+    def _prepare_writer(case_dir: Path, partial: Path, offset: int, initial_digest: str, hasher) -> BinaryIO:
+        if offset == 0:
+            try:
+                case_dir.mkdir(exist_ok=False, mode=0o700)
+            except FileExistsError as exc:
+                raise ImagingDestinationExistsError("The imaging operation directory already exists.") from exc
+            except OSError as exc:
+                raise ImagingDestinationError("The imaging operation directory could not be created.") from exc
+            return create_partial(partial)
+        if not case_dir.is_dir() or not partial.is_file():
+            raise ImagingDestinationError("The partial image disappeared before resume.")
+        remaining = offset
+        with partial.open("rb") as handle:
+            while remaining > 0:
+                chunk = handle.read(min(CHUNK_SIZE, remaining))
+                if not chunk:
+                    raise ImagingDestinationError(_PARTIAL_MISMATCH)
+                hasher.update(chunk)
+                remaining -= len(chunk)
+        if hasher.hexdigest() != initial_digest:
+            raise ImagingDestinationError(_PARTIAL_MISMATCH)
+        return append_partial(partial)
+
+    @staticmethod
+    def _check_synthetic_source(
+        source: ImagingSource, stream_digest: str, new_regions: tuple[ImagingBadRegion, ...], offset: int
+    ) -> None:
+        if source.synthetic and not new_regions and source.serial != f"SYNTH-{stream_digest[:32]}" and offset == 0:
+            raise ImagingSourceChangedError("The fixture source no longer matches its preflight identity.")
 
     def _acquire_bytes(
         self,
@@ -656,28 +710,7 @@ class ImagingService(BaseService):
         hasher = hashlib.sha256()
         try:
             ensure_dir(case_dir.parent)
-            if offset == 0:
-                try:
-                    case_dir.mkdir(exist_ok=False, mode=0o700)
-                except FileExistsError as exc:
-                    raise ImagingDestinationExistsError("The imaging operation directory already exists.") from exc
-                except OSError as exc:
-                    raise ImagingDestinationError("The imaging operation directory could not be created.") from exc
-                writer = create_partial(partial)
-            else:
-                if not case_dir.is_dir() or not partial.is_file():
-                    raise ImagingDestinationError("The partial image disappeared before resume.")
-                remaining = offset
-                with partial.open("rb") as handle:
-                    while remaining > 0:
-                        chunk = handle.read(min(CHUNK_SIZE, remaining))
-                        if not chunk:
-                            raise ImagingDestinationError("The partial image does not match the resume checkpoint.")
-                        hasher.update(chunk)
-                        remaining -= len(chunk)
-                if hasher.hexdigest() != initial_digest:
-                    raise ImagingDestinationError("The partial image does not match the resume checkpoint.")
-                writer = append_partial(partial)
+            writer = self._prepare_writer(case_dir, partial, offset, initial_digest, hasher)
             reader.open(offset)
             self._guard_destination(partial, source)
             copied, stream_digest, new_regions = copy_raw_with_regions(
@@ -696,8 +729,7 @@ class ImagingService(BaseService):
             writer = None
             reader.verify_unchanged()
             reader.close()
-            if source.synthetic and not new_regions and source.serial != f"SYNTH-{stream_digest[:32]}" and offset == 0:
-                raise ImagingSourceChangedError("The fixture source no longer matches its preflight identity.")
+            self._check_synthetic_source(source, stream_digest, new_regions, offset)
             digest = stream_digest
             bad_regions = tuple(live_regions)
             write_checkpoint(
@@ -797,7 +829,7 @@ class ImagingService(BaseService):
             require_mutator(uow.session, action="verify an imaging acquisition")
             updated = SqlAlchemyImagingRepository(uow.session).mark_verifying(operation.id, copied, acquisition_sha256)
             if updated is None:
-                raise NotFoundError("Imaging operation", str(operation.id))
+                raise NotFoundError(_IMAGING_OPERATION, str(operation.id))
             uow.before_commit(
                 AuditService(self.session_manager).record_hook(
                     lambda: for_imaging_event(
@@ -824,7 +856,7 @@ class ImagingService(BaseService):
         paths: tuple,
         bad_regions: tuple[ImagingBadRegion, ...] = (),
     ) -> ImagingOperation:
-        _, partial, checkpoint, image, manifest, image_relpath, manifest_relpath = paths
+        _, partial, checkpoint, image, manifest, image_relpath, _ = paths
         expected = operation.expected_bytes or 0
         acquisition_sha256 = operation.acquisition_sha256
         if acquisition_sha256 is None:
@@ -940,7 +972,7 @@ class ImagingService(BaseService):
                 operation.id, readback_bytes, readback_sha256, finished_at
             )
             if updated is None:
-                raise NotFoundError("Imaging operation", str(operation.id))
+                raise NotFoundError(_IMAGING_OPERATION, str(operation.id))
             uow.before_commit(
                 AuditService(self.session_manager).record_hook(
                     lambda: for_imaging_event(
@@ -971,7 +1003,7 @@ class ImagingService(BaseService):
             imaging = SqlAlchemyImagingRepository(uow.session)
             current = imaging.get(operation.id)
             if current is None:
-                raise NotFoundError("Imaging operation", str(operation.id))
+                raise NotFoundError(_IMAGING_OPERATION, str(operation.id))
             if current.state in _FAILED_STATES:
                 return current
             chosen = target or (
@@ -979,7 +1011,7 @@ class ImagingService(BaseService):
             )
             updated = imaging.mark_failure(operation.id, chosen, failure, now_utc())
             if updated is None:
-                raise NotFoundError("Imaging operation", str(operation.id))
+                raise NotFoundError(_IMAGING_OPERATION, str(operation.id))
             action = (
                 AuditAction.IMAGING_QUARANTINED if chosen is ImagingState.QUARANTINED else AuditAction.IMAGING_FAILED
             )

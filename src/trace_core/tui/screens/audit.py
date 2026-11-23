@@ -194,7 +194,12 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         from trace_core.tui.theme import DOT_BAD
 
         section_head(body, "INTEGRITY VERIFICATION")
-        chain = "Valid" if hash_ok is True else ("Mismatch" if hash_ok is False else "Not verified")
+        if hash_ok is True:
+            chain = "Valid"
+        elif hash_ok is False:
+            chain = "Mismatch"
+        else:
+            chain = "Not verified"
         self._detail_row(body, "Chain status", chain)
         signature = "Verified" if event.signature and intact is True and not key_problem else "Not verified"
         self._detail_row(body, "Signature", signature)
@@ -203,26 +208,10 @@ class AuditView(TablePane[AuditEventSummaryDto]):
             self._detail_row(body, "Signing key", signing)
             body.append("This is a key problem, not evidence of tampering.\n", style=DOT_BAD)
 
-    def render_detail(self) -> None:
-        from datetime import UTC
-        from zoneinfo import ZoneInfo
-
-        from trace_core.audit.renderers import format_change_value
+    @staticmethod
+    def _detail_verification(e: AuditEventDto) -> tuple[bool | None, bool | None, str]:
         from trace_core.audit.verifier import row_key_problem, verify_event
-        from trace_core.core.ui.renderers import fit_text
-        from trace_core.devices.renderers import device_heading, format_bytes
 
-        e = self._selected_event()
-        if e is None:
-            from trace_core.tui.theme import detail_placeholder
-
-            self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(
-                detail_placeholder(bool(self._items), "No audit events found — create or close a case.")
-            )
-            return
-        details = parse_details(e.payload_json)
-        unreadable = details is None
-        details = details or {}
         try:
             intact = verify_event(
                 e.payload_json,
@@ -256,12 +245,11 @@ class AuditView(TablePane[AuditEventSummaryDto]):
                 )
             except Exception:
                 key_problem = ""
+        return intact, hash_ok, key_problem
 
-        body = Text()
-
-        utc = e.ts.astimezone(UTC).strftime("%H:%M:%S UTC")
-        ist = e.ts.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S IST")
-        reason = str(details.get("reason") or "").strip()
+    def _append_event_details(
+        self, body: Text, e: AuditEventDto, reason: str, utc: str, ist: str, unreadable: bool
+    ) -> None:
         body.append(f"#{e.seq} · {action_title(e.action.value)}\n", style=THEME_TOKENS["accent"])
         body.append(f"{reason or 'No reason recorded'}\n", style="dim")
         section_head(body, "EVENT DETAILS")
@@ -273,6 +261,10 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         self._detail_row(body, "Reason", reason)
         if unreadable:
             body.append("unreadable — details cannot be shown\n", style="dim")
+
+    def _append_subject_device(self, body: Text, e: AuditEventDto, details: dict) -> str:
+        from trace_core.devices.renderers import device_heading, format_bytes
+
         section_head(body, "SUBJECT DEVICE")
         node = str(details.get("node") or "")
         if node:
@@ -286,6 +278,12 @@ class AuditView(TablePane[AuditEventSummaryDto]):
             self._detail_row(body, "Evidence label", str(details.get("label") or ""))
         else:
             body.append("  No subject device recorded.\n", style="dim")
+        return node
+
+    def _append_recorded_changes(self, body: Text, details: dict) -> None:
+        from trace_core.audit.renderers import format_change_value
+        from trace_core.core.ui.renderers import fit_text
+
         changed = details.get("changed", [])
         if changed:
             section_head(body, f"RECORDED CHANGES · {len(changed)}")
@@ -294,13 +292,40 @@ class AuditView(TablePane[AuditEventSummaryDto]):
                 old = fit_text(format_change_value(before.get(field)), 42)
                 new = fit_text(format_change_value(after.get(field)), 42)
                 self._detail_row(body, field.replace("_", " ").title(), f"{old} → {new}")
-        self._append_integrity(body, e, intact, hash_ok, key_problem)
+
+    def _append_related_records(self, body: Text, e: AuditEventDto, details: dict, node: str) -> None:
         section_head(body, "RELATED RECORDS")
         related = self._observed().get(node) if node else None
         device = str(details.get("model") or (related.model if related else ""))
         self._detail_row(body, "Case", subject_case_label(e.subject_case_number))
         self._detail_row(body, "Device", device)
         self._detail_row(body, "Imaging", str(details.get("operation_id") or ""))
+
+    def render_detail(self) -> None:
+        from datetime import UTC
+        from zoneinfo import ZoneInfo
+
+        e = self._selected_event()
+        if e is None:
+            from trace_core.tui.theme import detail_placeholder
+
+            self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(
+                detail_placeholder(bool(self._items), "No audit events found — create or close a case.")
+            )
+            return
+        details = parse_details(e.payload_json)
+        unreadable = details is None
+        details = details or {}
+        intact, hash_ok, key_problem = self._detail_verification(e)
+        body = Text()
+        utc = e.ts.astimezone(UTC).strftime("%H:%M:%S UTC")
+        ist = e.ts.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S IST")
+        reason = str(details.get("reason") or "").strip()
+        self._append_event_details(body, e, reason, utc, ist, unreadable)
+        node = self._append_subject_device(body, e, details)
+        self._append_recorded_changes(body, details)
+        self._append_integrity(body, e, intact, hash_ok, key_problem)
+        self._append_related_records(body, e, details, node)
         self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(body)
 
     def run_command(self, command: str) -> None:
