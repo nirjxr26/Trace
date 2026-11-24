@@ -1,6 +1,8 @@
+import asyncio
 from typing import Annotated
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.context import Context
 from pydantic import Field
 
 from trace_core.audit.domain import AuditAction
@@ -73,8 +75,12 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         return execute(ctx, TOOL_AUDIT_GET, lambda: _get(ctx, seq))
 
     @mcp_tool(server, TOOL_AUDIT_VERIFY, annotations=READ_ONLY, description="Verify the audit ledger hash chain.")
-    def trace_audit_verify() -> dict:
-        return execute(ctx, TOOL_AUDIT_VERIFY, lambda: _verify(ctx))
+    async def trace_audit_verify(mcp_ctx: Context) -> dict:
+        await mcp_ctx.report_progress(0, 1, "Verifying ledger")
+        payload = await asyncio.to_thread(lambda: execute(ctx, TOOL_AUDIT_VERIFY, lambda: _verify(ctx)))
+        message = "Verification failed" if payload.is_error else "Verified"
+        await mcp_ctx.report_progress(1, 1, message)
+        return payload
 
     @mcp_tool(
         server,

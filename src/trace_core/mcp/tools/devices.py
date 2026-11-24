@@ -120,7 +120,7 @@ def _links(ctx: ServerContext, case_number: str | None, node: str | None, limit:
         links = service.links_for_case(case_number, limit)
     else:
         assert node is not None
-        links = service.links_for_node(node)
+        links = service.links_for_node(node)[:limit]
     return to_result([CaseDeviceLinkDto.from_domain(link).model_dump(mode="json") for link in links])
 
 

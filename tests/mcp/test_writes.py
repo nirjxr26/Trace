@@ -24,6 +24,9 @@ def test_case_lifecycle_through_mcp(mcp_manager: DatabaseSessionManager, mcp_cli
 
     blocked = mcp_client.call("trace_case_update", {"identifier": number, "title": "again"})
     assert blocked.is_error is True
+    reopened = mcp_client.call("trace_case_review", {"identifier": number})
+    assert reopened.is_error is True
+    assert "INVALID_STATE" in reopened.content[0].text
 
 
 def test_confirmation_mismatch_prevents_close(mcp_client: ClientHarness) -> None:

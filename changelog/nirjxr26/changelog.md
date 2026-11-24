@@ -5787,3 +5787,8 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Summary: Fix Windows CI failure in MCP stdio tests. GitHub setup-python places trace.exe in the Scripts directory, not beside python.exe. Resolve it via the real executable, then Scripts, then PATH, and add a regression test for that layout.
 - Files: tests/mcp/test_stdio.py, changelog/nirjxr26/changelog.md.
 - Verification: ruff format --check . and ruff check . passed; pytest tests/mcp -q: 47 passed.
+
+## 2026-11-24
+- Summary: Implement the remaining MCP phases except remote HTTP. Add read-only resources and prompt templates, progress notifications for audit verification, version 0.5.0 bump, README scope cleanup, and expanded limits/context/state tests.
+- Files: README.md, pyproject.toml, src/trace_core/__init__.py, src/trace_core/core/settings.py, src/trace_core/mcp/server.py, src/trace_core/mcp/tools/audit.py, src/trace_core/mcp/tools/cases.py, src/trace_core/mcp/tools/devices.py, src/trace_core/mcp/autoconfig.py, src/trace_core/mcp/resources.py, src/trace_core/mcp/prompts.py, src/trace_core/tui/screens/imaging.py, tests/mcp/test_context.py, tests/mcp/test_limits.py, tests/mcp/test_autoconfig.py, tests/mcp/test_tool_registry.py, tests/mcp/test_writes.py, uv.lock, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . and ruff check . passed; mypy --platform linux src tests passed; pytest tests/mcp -q: 61 passed; full suite 1739 passed, 21 skipped; live stdio probe through real trace.exe confirmed 28 tools, 1 static resource, 4 templates, 3 prompts, and case create/review/resource read. Two review iterations resolved 12 findings.

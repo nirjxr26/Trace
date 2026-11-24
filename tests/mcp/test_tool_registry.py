@@ -1,7 +1,13 @@
 from conftest import ClientHarness  # type: ignore[import-not-found]
 
-from trace_core.mcp.constants import ALL_TOOLS
+from trace_core.mcp.constants import ALL_TOOLS, TOOL_AUDIT_VERIFY
 from trace_core.mcp.tools import DESTRUCTIVE, OPEN_WORLD_READ, READ_ONLY, WRITE
+
+
+def test_progress_context_is_not_in_tool_schema(mcp_client: ClientHarness) -> None:
+    tools = {tool.name: tool for tool in mcp_client.list_tools()}
+    properties = tools[TOOL_AUDIT_VERIFY].input_schema.get("properties", {})
+    assert "mcp_ctx" not in properties
 
 
 def test_all_registered_tools_have_strict_schemas(mcp_client: ClientHarness) -> None:

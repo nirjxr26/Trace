@@ -14,6 +14,7 @@ from trace_core.core.fs import atomic_write_lines
 from trace_core.mcp import MCP_PROTOCOL_VERSION
 
 _MCP_MIN_VERSION = "2.3.0"
+_MCP_REQUIREMENT = "mcp>=2.3.0,<3"
 
 
 def _disabled() -> bool:
@@ -48,7 +49,7 @@ def ensure_mcp_runtime() -> None:
         "--quiet",
         "--disable-pip-version-check",
         "--no-input",
-        f"mcp>={_MCP_MIN_VERSION}",
+        _MCP_REQUIREMENT,
     ]
     result = _run(args)
     if result.returncode != 0:
@@ -57,7 +58,7 @@ def ensure_mcp_runtime() -> None:
     if result.returncode != 0 or not _mcp_ready():
         raise RuntimeError(
             f"Could not install MCP support (mcp>={_MCP_MIN_VERSION}) automatically. "
-            'Check network access, then run: python -m pip install "mcp>=2.3.0"'
+            f'Check network access, then run: python -m pip install "{_MCP_REQUIREMENT}"'
         )
 
 
@@ -232,8 +233,18 @@ def setup(on_progress: Callable[[str], None] | None = None) -> list[str]:
         ok = result.returncode == 0 or _has_trace("claude")
         done.append(f"claude-code:{'ok' if ok else 'failed'}")
     if _which("opencode"):
-        _set_opencode_trace()
-        done.append("opencode:ok")
+        try:
+            _set_opencode_trace()
+            done.append("opencode:ok")
+        except OSError:
+            result = _run(["opencode", "mcp", "add", "--global", "trace", "--", trace_exe(), *server_args()])
+            ok = result.returncode == 0 or _has_trace("opencode")
+            if ok:
+                try:
+                    _set_opencode_trace()
+                except OSError:
+                    pass
+            done.append(f"opencode:{'ok' if ok else 'failed'}")
     _set_desktop("trace", disabled=False)
     done.append("claude-desktop:ok")
     for name, path, key, _zed_style in _json_targets():

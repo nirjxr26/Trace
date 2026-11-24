@@ -59,7 +59,7 @@ def test_ensure_mcp_runtime_installs_when_missing(monkeypatch) -> None:
     autoconfig.ensure_mcp_runtime()
     assert len(calls) == 1
     assert calls[0][1:4] == ["-m", "pip", "install"]
-    assert "mcp>=2.3.0" in calls[0]
+    assert "mcp>=2.3.0,<3" in calls[0]
 
 
 def test_ensure_mcp_runtime_reports_failure(monkeypatch) -> None:
@@ -69,7 +69,7 @@ def test_ensure_mcp_runtime_reports_failure(monkeypatch) -> None:
         "_run",
         lambda args: subprocess.CompletedProcess(args, 1, "", "boom"),
     )
-    with pytest.raises(RuntimeError, match="mcp>=2.3.0"):
+    with pytest.raises(RuntimeError, match="mcp>=2.3.0,<3"):
         autoconfig.ensure_mcp_runtime()
 
 
@@ -82,6 +82,28 @@ def test_set_opencode_trace_writes_protocol(tmp_path, monkeypatch) -> None:
     assert entry["protocol"] == "2026-07-28"
     assert entry["command"] == ["trace", "mcp", "serve"]
     assert "args" not in entry
+
+
+def test_setup_opencode_falls_back_when_json_write_fails(monkeypatch) -> None:
+    monkeypatch.setattr(autoconfig, "_mcp_ready", lambda: True)
+    monkeypatch.setattr(autoconfig, "_which", lambda name: name == "opencode")
+    calls: list[list[str]] = []
+
+    def fail_write() -> None:
+        raise OSError("read-only config")
+
+    def fake_run(args: list[str]):  # type: ignore[no-untyped-def]
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(autoconfig, "_set_desktop", lambda name, disabled: None)
+    monkeypatch.setattr(autoconfig, "_json_targets", lambda: [])
+    monkeypatch.setattr(autoconfig, "_set_opencode_trace", fail_write)
+    monkeypatch.setattr(autoconfig, "_run", fake_run)
+
+    result = autoconfig.setup()
+    assert "opencode:ok" in result
+    assert calls == [["opencode", "mcp", "add", "--global", "trace", "--", autoconfig.trace_exe(), "mcp", "serve"]]
 
 
 def test_remove_opencode_trace(tmp_path, monkeypatch) -> None:

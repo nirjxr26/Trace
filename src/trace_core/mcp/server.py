@@ -26,12 +26,15 @@ class ServerContext:
 
 
 def build_server(session_manager: DatabaseSessionManager | None = None, *, transport: str = "stdio") -> MCPServer:
+    from trace_core.mcp import prompts, resources
     from trace_core.mcp.tools import register_all
 
     manager = session_manager or db_manager
     server = MCPServer(SERVER_NAME, version=__version__)
     ctx = ServerContext(manager, transport)
     register_all(server, ctx)
+    resources.register(server, ctx)
+    prompts.register(server)
     return server
 
 

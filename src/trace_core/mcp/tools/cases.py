@@ -159,7 +159,7 @@ def _list(
         offset=offset,
     )
     if recent:
-        filter_dto = filter_dto.with_recent()
+        filter_dto = filter_dto.model_copy(update={"recent": True})
     items = CaseService(ctx.session_manager).list_cases(filter_dto)
     return to_result(
         {
