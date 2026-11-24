@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import tempfile
 from collections.abc import Callable, Iterable
 from enum import StrEnum
@@ -10,6 +11,7 @@ from typing import IO, Any
 
 _USER_SID: str | None = None
 _TIGHTENED: dict[str, tuple[int, int]] = {}
+_RECORD_PART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 
 
 def _current_user_sid() -> str:
@@ -272,17 +274,36 @@ def read_json_record(path: str | Path, root: str | Path | None = None) -> dict[s
     Tolerant read half paired with atomic_write_lines. Callers keep their own field
     validation, and any that must tell "absent" from "corrupt" need that distinction,
     so they read the file themselves.
+
+    `root` is mandatory in practice: every caller supplies it. Containment is checked
+    again immediately before both filesystem probes so a TOCTOU swap cannot turn a
+    previously-safe target into an oracle or an out-of-root read.
     """
-    target = Path(path)
-    if root is not None:
-        target = check_contained(target, root)
-    if not target.is_file():
-        return None
+    base = Path(root) if root is not None else Path(path).parent
     try:
+        target = check_contained(path, base)
+        if not _safe_record_parts(target, base):
+            return None
+        if not check_contained(target, base).is_file():
+            return None
+        target = check_contained(target, base)
         data = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _safe_record_parts(target: Path, base: Path) -> bool:
+    """Reject path segments that a JSON field could turn into a traversal payload.
+
+    Containment already resolves symlinks. This adds a literal-name gate so a value
+    like `..%2f` decoded into a segment never reaches `is_file` or `read_text`.
+    """
+    try:
+        relative = target.relative_to(base.resolve())
+    except ValueError:
+        return False
+    return all(_RECORD_PART_RE.fullmatch(part) for part in relative.parts)
 
 
 def _acquire(handle: int, blocking: bool) -> bool:

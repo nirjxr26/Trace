@@ -186,7 +186,7 @@ def _export(ctx: ServerContext, filename: str, encrypt: bool, overwrite: bool, c
 
 def _decrypt(ctx: ServerContext, filename: str, overwrite: bool, confirm: str | None) -> dict:
     checked(AuditDecryptArgs, {"filename": filename, "overwrite": overwrite, "confirm": confirm})
-    return to_result(services.decrypt_bundle(ctx.session_manager, filename, overwrite))
+    return to_result(services.decrypt_bundle(filename, overwrite))
 
 
 def _keys_init(ctx: ServerContext, label: str) -> dict:

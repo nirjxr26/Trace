@@ -41,7 +41,7 @@ def export_bundle(manager: DatabaseSessionManager, filename: str, encrypt: bool,
     }
 
 
-def decrypt_bundle(manager: DatabaseSessionManager, filename: str, overwrite: bool) -> dict[str, Any]:
+def decrypt_bundle(filename: str, overwrite: bool) -> dict[str, Any]:
     from trace_core.audit.helpers import do_decrypt, plain_destination
     from trace_core.core.fs import check_contained
 
