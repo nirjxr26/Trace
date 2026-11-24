@@ -40,9 +40,23 @@ def create_db_engine(database_url: str | None = None) -> Engine:
 
     # PostgreSQL / other production DBs
     engine_kwargs["pool_pre_ping"] = True
-    engine_kwargs["pool_size"] = 5
-    engine_kwargs["max_overflow"] = 10
-    return create_engine(url, connect_args=connect_args, **engine_kwargs)
+    engine_kwargs["pool_size"] = settings.db_pool_size
+    engine_kwargs["max_overflow"] = settings.db_max_overflow
+    engine_kwargs["pool_recycle"] = settings.db_pool_recycle
+    engine_kwargs["pool_timeout"] = settings.db_pool_timeout
+    engine = create_engine(url, connect_args=connect_args, **engine_kwargs)
+
+    @event.listens_for(engine, "connect")
+    def set_postgres_timeout(dbapi_connection: Any, connection_record: Any) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute(
+                "SELECT set_config('statement_timeout', %s, false)", (str(settings.db_statement_timeout_ms),)
+            )
+        finally:
+            cursor.close()
+
+    return engine
 
 
 _READY_CACHE: dict[str, bool] = {}

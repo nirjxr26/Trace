@@ -85,7 +85,7 @@ def test_audit_verify_progress_reports_failure(mcp_manager: DatabaseSessionManag
     from trace_core.core.errors import AuditTamperError
     from trace_core.mcp.tools import audit as audit_tools
 
-    def fail(ctx):  # type: ignore[no-untyped-def]
+    def fail(ctx, on_progress=None):  # type: ignore[no-untyped-def]
         raise AuditTamperError("chain broken")
 
     monkeypatch.setattr(audit_tools, "_verify", fail)
@@ -100,7 +100,7 @@ def test_audit_verify_progress_reports_failure(mcp_manager: DatabaseSessionManag
 
     result = asyncio.run(run())
     assert result.is_error is True
-    assert seen == ["Verifying ledger", "Verification failed"]
+    assert seen == ["Scanning ledger", "Verification failed"]
 
 
 def test_resource_reads_do_not_write_ledger(mcp_manager: DatabaseSessionManager) -> None:

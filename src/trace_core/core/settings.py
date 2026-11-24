@@ -86,6 +86,14 @@ class Settings(BaseSettings):
     # real-device access.
     device_adapter: Literal["auto", "file", "linux", "win32"] = Field(default="auto", alias="TRACE_DEVICE_ADAPTER")
 
+    # PostgreSQL pool. Defaults serve one workstation; multi-client deployments can
+    # raise them without code changes. SQLite ignores all of these.
+    db_pool_size: int = Field(default=5, ge=1, le=100, alias="TRACE_DB_POOL_SIZE")
+    db_max_overflow: int = Field(default=10, ge=0, le=200, alias="TRACE_DB_MAX_OVERFLOW")
+    db_pool_recycle: int = Field(default=1800, ge=0, le=86400, alias="TRACE_DB_POOL_RECYCLE")
+    db_pool_timeout: int = Field(default=30, ge=1, le=300, alias="TRACE_DB_POOL_TIMEOUT")
+    db_statement_timeout_ms: int = Field(default=300000, ge=1000, le=3600000, alias="TRACE_DB_STATEMENT_TIMEOUT_MS")
+
     model_config = SettingsConfigDict(
         env_file=_ENV_FILES,
         env_file_encoding="utf-8",

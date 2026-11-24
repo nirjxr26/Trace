@@ -150,13 +150,14 @@ class AuditService(BaseService):
         with _ledger_session(self.session_manager) as session:
             return SqlAlchemyAuditRepository(session).list_event_summaries(filt)
 
-    def verify(self) -> VerifyResultDto:
+    def verify(self, on_progress=None) -> VerifyResultDto:  # type: ignore[no-untyped-def]
         with _ledger_session(self.session_manager) as session:
             stmt = select(AuditEventModel).order_by(AuditEventModel.seq.asc())
             from trace_core.audit.helpers import bind_head_to_tail
             from trace_core.audit.verifier import verify_rows
 
-            return bind_head_to_tail(session, verify_rows(session.scalars(stmt).yield_per(500)))
+            result = verify_rows(session.scalars(stmt).yield_per(500), on_progress=on_progress)
+            return bind_head_to_tail(session, result)
 
     def export(self, out_path: str | Path) -> Path:
         out = Path(out_path)

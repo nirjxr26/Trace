@@ -16,6 +16,16 @@ def test_json_entry_add_and_remove(tmp_path) -> None:
     assert "trace" not in autoconfig._read_json(path)["mcpServers"]
 
 
+def test_malformed_host_config_is_preserved(tmp_path) -> None:
+    path = tmp_path / "mcp.json"
+    malformed = '{"mcpServers": {'
+    path.write_text(malformed, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="delimiter|Unterminated|Expecting"):
+        autoconfig._add_json_entry(path, "mcpServers", "trace", {"command": "trace", "args": ["mcp", "serve"]})
+    assert path.read_text(encoding="utf-8") == malformed
+
+
 def test_setup_disabled(monkeypatch) -> None:
     monkeypatch.setenv("TRACE_MCP_DISABLED", "1")
     assert autoconfig.setup() == ["disabled"]
