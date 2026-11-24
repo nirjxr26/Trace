@@ -5735,3 +5735,60 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Summary: Use the update manager engine URL for the migration subprocess instead of the global settings URL. The E2E box configures a file-backed SQLite manager independently of settings, so the subprocess must inherit that exact URL to migrate the correct database.
 - Files: src/trace_core/updates/migration.py, tests/updates/test_migration_race.py, changelog/nirjxr26/changelog.md.
 - Verification: ruff format --check ., ruff check ., mypy --platform linux src tests passed; migration race tests: 19 passed on Windows. GitHub E2E update test rerun pending.
+
+## 2026-11-23
+- Summary: Ship the Trace MCP server (	race mcp serve, stdio, SDK mcp==2.3.0) with 28 tools over cases, devices, audit, and install-state: 11 read tools plus 8 write tools and 9 override tools, including confirmation-gated mutations and purge, keys, export/decrypt, update install, recovery, db migrate, and an uninstall refusal for the live server. Security is governed by docs/roadmap/mcp-write-security-review.md.
+- Files: src/trace_core/mcp/{__init__,constants,errors,serialize,identity,schemas,server,services,commands}.py, src/trace_core/mcp/tools/{__init__,cases,audit,devices,system}.py, src/trace_core/audit/service.py, src/trace_core/audit/builder.py, src/trace_core/core/cli/catalog.py, tests/mcp/*, README.md, docs/specs/mcp.md, docs/roadmap/mcp-write-security-review.md, pyproject.toml, uv.lock, requirements.txt, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . passed; ruff check . passed; mypy --platform linux src tests passed; pytest tests/mcp -q: 34 passed; full suite background result: 1698 passed, 21 skipped (PostgreSQL env not configured).
+## 2026-11-23
+- Summary: Add 	race mcp setup and 	race mcp disable so users configure nothing: 	race mcp setup registers the Trace MCP server in Codex, Claude Code, Claude Desktop, and OpenCode automatically; 	race mcp disable removes it, and TRACE_MCP_DISABLED=1 keeps setup a no-op. README documents the one-command setup and turn-off.
+- Files: README.md, src/trace_core/mcp/autoconfig.py, src/trace_core/mcp/commands.py, tests/mcp/test_autoconfig.py, changelog/nirjxr26/changelog.md.
+- Verification: 	race mcp setup ran: codex ok, claude connected, opencode ok, claude-desktop ok; opencode mcp list shows 	race connected. ruff format --check, ruff check, mypy passed. pytest tests/mcp -q: 36 passed.
+## 2026-11-23
+- Summary: Review fixes for the Trace MCP implementation: wrap UpdateLifecycle.run in install_update with stdout redirection for MCP stdout purity, make 	race mcp setup idempotent for Codex/Claude Code/OpenCode via list checks, and harden utoconfig._set_desktop for null mcpServers values.
+- Files: src/trace_core/mcp/services.py, src/trace_core/mcp/autoconfig.py, changelog/nirjxr26/changelog.md.
+- Verification: 	race mcp setup ran with codex ok, claude-code ok, opencode ok, claude-desktop ok; opencode mcp list shows trace connected. ruff format --check, ruff check, mypy passed. pytest tests/mcp -q: 36 passed.
+## 2026-11-23
+- Summary: Broaden 	race mcp setup/disable to preconfigure and turn off the MCP server across Codex, Claude Code, Claude Desktop, OpenCode, Cursor, VS Code (Copilot) ~/.copilot/mcp-config.json, Windsurf ~/.codeium/windsurf/mcp_config.json, and Zed (~/.config/zed/mcp.json, ~/.config/zed/settings.json). JSON writers are shared by setup and disable; idempotency hardened.
+- Files: README.md, src/trace_core/mcp/autoconfig.py, tests/mcp/test_autoconfig.py, changelog/nirjxr26/changelog.md.
+- Verification: 	race mcp setup ran with codex ok, claude-code ok, opencode ok, claude-desktop ok, cursor ok, vscode-copilot ok, windsurf ok, zed ok, zed-settings ok. ruff format --check, ruff check, mypy passed. pytest tests/mcp -q: 37 passed.
+
+## 2026-11-23
+- Summary: Make `trace mcp setup` the only step users need. It installs or upgrades `mcp>=2.3.0` in the current interpreter before registering MCP hosts, so no extra installer or manual dependency step exists. Installing the dependency alone never replaces trace.exe, so the Windows file-lock failure cannot occur. Setup now prints a readable host-by-host OK/FAILED list; `trace mcp disable` stays config-only.
+- Files: src/trace_core/mcp/autoconfig.py, src/trace_core/mcp/commands.py, tests/mcp/test_autoconfig.py, tests/mcp/test_commands.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . (276 files), ruff check ., mypy --platform linux src tests (272 files) passed; pytest tests/mcp -q: 42 passed; live `trace mcp setup` reported all nine hosts OK; fresh stdio probe through the configured trace.CMD listed 28 tools and a clean trace_status call.
+
+## 2026-11-23
+- Summary: Make `trace mcp disable` print the same readable host list as setup, with REMOVED status. Both setup and disable now print a waiting line before subprocess work. Host registration now resolves the real trace.exe beside sys.executable instead of the .CMD shim, which OpenCode reported as exit 255.
+- Files: src/trace_core/mcp/autoconfig.py, src/trace_core/mcp/commands.py, tests/mcp/test_autoconfig.py, tests/mcp/test_commands.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . (276 files), ruff check ., mypy --platform linux src tests (272 files) passed; pytest tests/mcp -q: 43 passed; live disable and setup output captured; configuration now points at .venv\Scripts\trace.exe; opencode mcp list reports trace connected with 28 tools.
+
+## 2026-11-23
+- Summary: Fix `trace mcp disable` for OpenCode CLI v2.3.2, which has no `mcp remove` subcommand. Disable now edits opencode.json directly and removes both mcp.trace and mcp.servers.trace, so the reported REMOVED status matches the saved config.
+- Files: src/trace_core/mcp/autoconfig.py, tests/mcp/test_autoconfig.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . (276 files), ruff check ., mypy --platform linux src tests (272 files) passed; pytest tests/mcp -q: 44 passed; live disable reported all hosts REMOVED; secret-free config checks showed no trace entry in Codex, Claude Code, Claude Desktop, Cursor, VS Code Copilot, Windsurf, Zed, or OpenCode; opencode mcp list no longer lists trace.
+
+## 2026-11-23
+- Summary: Fix OpenCode v2 registration. OpenCode v2 requires `command` to be one array containing the executable and args, and needs `protocol: 2026-07-28` for this server. The old command-plus-args shape was skipped as malformed by OpenCode config normalization. `trace mcp setup` now writes the v2 shape.
+- Files: src/trace_core/mcp/autoconfig.py, tests/mcp/test_autoconfig.py, changelog/nirjxr26/changelog.md.
+- Verification: live `trace mcp setup` reported all nine hosts OK; `opencode mcp list` reports `trace connected`; Code Mode exposes all 28 trace tools.
+
+## 2026-11-23
+- Summary: Colorize MCP host status output: OK prints green, REMOVED prints red, all other statuses and host names stay uncolored. ANSI codes are emitted only when the terminal supports them.
+- Files: src/trace_core/mcp/commands.py, tests/mcp/test_commands.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . and ruff check . passed; pytest tests/mcp -q: 46 passed.
+
+## 2026-11-23
+- Summary: Match the requested setup layout: blank line after progress lines, blank line after heading, and an indented wider status column for host lists.
+- Files: src/trace_core/mcp/commands.py, tests/mcp/test_commands.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . and ruff check . passed; pytest tests/mcp -q: 46 passed; live setup output matches requested spacing.
+
+## 2026-11-23
+- Summary: Fix Windows CI failure in MCP stdio tests. GitHub setup-python places trace.exe in the Scripts directory, not beside python.exe. Resolve it via the real executable, then Scripts, then PATH, and add a regression test for that layout.
+- Files: tests/mcp/test_stdio.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . and ruff check . passed; pytest tests/mcp -q: 47 passed.
+
+## 2026-11-24
+- Summary: Implement the remaining MCP phases except remote HTTP. Add read-only resources and prompt templates, progress notifications for audit verification, version 0.5.0 bump, README scope cleanup, and expanded limits/context/state tests.
+- Files: README.md, pyproject.toml, src/trace_core/__init__.py, src/trace_core/core/settings.py, src/trace_core/mcp/server.py, src/trace_core/mcp/tools/audit.py, src/trace_core/mcp/tools/cases.py, src/trace_core/mcp/tools/devices.py, src/trace_core/mcp/autoconfig.py, src/trace_core/mcp/resources.py, src/trace_core/mcp/prompts.py, src/trace_core/tui/screens/imaging.py, tests/mcp/test_context.py, tests/mcp/test_limits.py, tests/mcp/test_autoconfig.py, tests/mcp/test_tool_registry.py, tests/mcp/test_writes.py, uv.lock, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check . and ruff check . passed; mypy --platform linux src tests passed; pytest tests/mcp -q: 61 passed; full suite 1739 passed, 21 skipped; live stdio probe through real trace.exe confirmed 28 tools, 1 static resource, 4 templates, 3 prompts, and case create/review/resource read. Two review iterations resolved 12 findings.

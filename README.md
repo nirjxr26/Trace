@@ -4,7 +4,7 @@
 
 Local-first forensic case management and device inspection with a tamper-evident chain of custody.
 
-**v0.4.1 · Python 3.12+ · Windows / Linux / macOS · MIT**
+**v0.5.0 · Python 3.12+ · Windows / Linux / macOS · MIT**
 
 </div>
 
@@ -190,6 +190,48 @@ Trace reads configuration from environment variables, a `.env` file in the repos
 | `trace uninstall [--purge-data]` | Removal |
 
 Every command supports `--help`.
+
+---
+
+## MCP Server (`trace mcp serve`)
+
+Trace ships a local stdio MCP server: 28 tools, read-only resources, and prompt templates. `trace mcp setup` installs the `mcp>=2.3.0` SDK when needed and registers Trace with Codex, Claude Code, Claude Desktop, OpenCode, Cursor, VS Code Copilot, Windsurf, and Zed. Configuration is unchanged: `TRACE_DATABASE_URL`, `TRACE_STORAGE_ROOT`, `TRACE_SECRET_KEY`, and friends apply directly.
+
+```bash
+trace mcp setup
+```
+
+Turn it off anytime with:
+
+```bash
+trace mcp disable
+```
+
+The host launches `trace mcp serve` itself from saved config, so it survives an IDE restart. `TRACE_MCP_DISABLED=1` makes setup a no-op.
+
+Manual host entry, for hosts not listed above. OpenCode v2 uses one array:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "trace": {"type": "local", "command": ["trace", "mcp", "serve"], "protocol": "2026-07-28"}
+    }
+  }
+}
+```
+
+Earlier hosts use `command` plus `args` under `mcpServers.trace`:
+
+```json
+{
+  "mcpServers": {
+    "trace": {"command": "trace", "args": ["mcp", "serve"]}
+  }
+}
+```
+
+**Security scope (v0.5.0):** local stdio only; no HTTP listener. Every call requires an active operator. Writes go through services and the domain layer, and audit entries are written inside the DB transaction. Destructive tools (`trace_case_purge`, `trace_audit_keys_*`, `trace_update_install`, `trace_uninstall`, `trace_recovery`, `trace_db_migrate`) need an admin operator and an echo-confirmation field; `trace_uninstall` refuses to uninstall the live MCP server. Confirmation fields are echo checks, not human approval prompts. Read-only resources cover `trace://system/status`, `trace://cases/{number}`, `trace://cases/{number}/audit`, `trace://audit/{seq}`, and `trace://devices/{serial}/history`. Prompt templates are `case_triage`, `audit_integrity_report`, and `device_intake_checklist`. Long `trace_audit_verify` calls report progress to hosts that request it. Hardware inspection, write-protection checks, and imaging remain CLI/TUI-only. This section is the shipped user-facing scope.
 
 ---
 

@@ -1,6 +1,9 @@
 """Audit event builder: turns domain mutations into ledger payloads. No hashing here."""
 
 import sys
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 from uuid import UUID
 
@@ -36,12 +39,24 @@ def _resolve_command(command: str | None, argv_cmd: str) -> str:
     return command or ""
 
 
+_command_override: ContextVar[str | None] = ContextVar("mcp_command_override", default=None)
+
+
+@contextmanager
+def command_context(command: str) -> Generator[None, None, None]:
+    token = _command_override.set(command)
+    try:
+        yield
+    finally:
+        _command_override.reset(token)
+
+
 def _ctx(command: str | None) -> Context:
     from trace_core.core.operators import current_identity
 
     os_user, host = current_identity()
     argv_cmd = _get_argv()
-    resolved = _resolve_command(command, argv_cmd)
+    resolved = _resolve_command(_command_override.get() or command, argv_cmd)
     return Context(
         host=host,
         trace_version=settings.version,
