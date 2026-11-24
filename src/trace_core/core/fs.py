@@ -16,18 +16,65 @@ _RECORD_PART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 
 def _current_user_sid() -> str:
     global _USER_SID
-    if _USER_SID is None:
-        import csv
-        import subprocess
+    if _USER_SID is not None:
+        return _USER_SID
+    if os.name == "nt":
+        import ctypes
+        import ctypes.wintypes as wintypes
+        import struct
 
-        result = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True, check=False)
-        if result.returncode != 0:
-            raise OSError("cannot resolve the current user SID")
-        rows = list(csv.reader(result.stdout.splitlines())) if result.stdout.strip() else []
-        row = rows[0] if rows else []
-        if len(row) < 2 or not row[1].startswith("S-"):
-            raise OSError("cannot resolve the current user SID")
-        _USER_SID = row[1].strip()
+        try:
+            windll: Any = ctypes.WinDLL  # type: ignore[attr-defined]
+            advapi32 = windll("advapi32", use_last_error=True)
+            kernel32 = windll("kernel32", use_last_error=True)
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            kernel32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+            kernel32.OpenProcessToken.restype = wintypes.BOOL
+            advapi32.GetTokenInformation.argtypes = [
+                wintypes.HANDLE,
+                ctypes.c_int,
+                ctypes.c_void_p,
+                wintypes.DWORD,
+                ctypes.POINTER(wintypes.DWORD),
+            ]
+            advapi32.GetTokenInformation.restype = wintypes.BOOL
+            advapi32.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_wchar_p)]
+            advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+            token = wintypes.HANDLE()
+            if not kernel32.OpenProcessToken(kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)):
+                raise OSError("cannot open process token")
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+            kernel32.LocalFree.restype = ctypes.c_void_p
+            try:
+                size = wintypes.DWORD()
+                advapi32.GetTokenInformation(token, 1, None, 0, ctypes.byref(size))
+                buffer = ctypes.create_string_buffer(size.value)
+                if not advapi32.GetTokenInformation(token, 1, buffer, size.value, ctypes.byref(size)):
+                    raise OSError("cannot read process token")
+                sid_pointer = ctypes.c_void_p(struct.unpack_from("P", buffer.raw, 0)[0])
+                sid_text = ctypes.c_wchar_p()
+                if not advapi32.ConvertSidToStringSidW(sid_pointer, ctypes.byref(sid_text)) or not sid_text.value:
+                    raise OSError("cannot convert user SID")
+                _USER_SID = str(sid_text.value)
+                kernel32.LocalFree(sid_text)
+                return _USER_SID
+            finally:
+                kernel32.CloseHandle(token)
+        except (AttributeError, OSError, ValueError, struct.error):
+            pass
+    import csv
+    import subprocess
+
+    result = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise OSError("cannot resolve the current user SID")
+    rows = list(csv.reader(result.stdout.splitlines())) if result.stdout.strip() else []
+    row = rows[0] if rows else []
+    if len(row) < 2 or not row[1].startswith("S-"):
+        raise OSError("cannot resolve the current user SID")
+    _USER_SID = row[1].strip()
     return _USER_SID
 
 
@@ -43,31 +90,40 @@ def _restrict_windows_acl(path: Path, *, directory: bool) -> None:
         return
     import subprocess
 
-    inherit = "(OI)(CI)F" if directory else "F"
+    sid = _current_user_sid()
+    rights = "(OI)(CI)F" if directory else "F"
     commands = (
         ["icacls", str(path), "/reset"],
+        ["icacls", str(path), "/inheritance:r"],
         [
             "icacls",
             str(path),
-            "/inheritance:r",
             "/grant:r",
-            f"*{_current_user_sid()}:{inherit}",
-            f"*S-1-5-18:{inherit}",
-            f"*S-1-5-32-544:{inherit}",
+            f"*{sid}:{rights}",
+            f"*S-1-5-18:{rights}",
+            f"*S-1-5-32-544:{rights}",
         ],
     )
+    if directory and path.is_dir():
+        commands += (
+            [
+                "icacls",
+                str(path),
+                "/T",
+                "/remove:g",
+                "*S-1-1-0",
+                "*S-1-5-32-545",
+                "*S-1-5-11",
+            ],
+        )
     for argv in commands:
         result = subprocess.run(argv, capture_output=True, text=True, check=False)
-        _TIGHTENED[str(path)] = marker
         if result.returncode != 0:
-            from structlog import get_logger
+            from trace_core.core.logging import get_logger
 
             get_logger().warning("owner-only ACL not applied", path=str(path), error=result.stderr.strip())
             return
-    if directory and path.is_dir():
-        for entry in path.iterdir():
-            if entry.is_file():
-                _restrict_windows_acl(entry, directory=False)
+    _TIGHTENED[str(path)] = marker
 
 
 def ensure_dir(path: str | Path, mode: int = 0o700) -> Path:
@@ -268,18 +324,14 @@ def sqlite_sidecars(path: str | Path) -> tuple[Path, Path]:
     return Path(f"{base}-wal"), Path(f"{base}-shm")
 
 
-def read_json_record(path: str | Path, root: str | Path | None = None) -> dict[str, Any] | None:
+def read_json_record(path: str | Path, root: str | Path) -> dict[str, Any] | None:
     """Read a JSON object, or None when absent, unreadable, or not an object.
 
-    Tolerant read half paired with atomic_write_lines. Callers keep their own field
-    validation, and any that must tell "absent" from "corrupt" need that distinction,
-    so they read the file themselves.
-
-    `root` is mandatory in practice: every caller supplies it. Containment is checked
-    again immediately before both filesystem probes so a TOCTOU swap cannot turn a
-    previously-safe target into an oracle or an out-of-root read.
+    `root` is mandatory. A caller that derived part of `path` from file content must
+    validate that content before calling; containment alone cannot sanitize a tainted
+    path. Containment is rechecked before each filesystem probe for TOCTOU safety.
     """
-    base = Path(root) if root is not None else Path(path).parent
+    base = Path(root)
     try:
         target = check_contained(path, base)
         if not _safe_record_parts(target, base):

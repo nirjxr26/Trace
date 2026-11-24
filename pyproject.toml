@@ -42,7 +42,7 @@ dev = [
 ]
 
 [project.scripts]
-trace = "trace_core.cli.main:app"
+trace = "trace_core.cli.entry:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

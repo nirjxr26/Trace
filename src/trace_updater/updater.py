@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -225,9 +226,7 @@ def prune_retention(base: str | Path, keep_backups: int = RETENTION_BACKUPS) -> 
 
 
 def read_release_meta(base: str | Path, version: str) -> dict | None:
-    from trace_core.updates.verifier import is_safe_filename
-
-    if not isinstance(version, str) or not is_safe_filename(version):
+    if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}", version):
         return None
     root = releases_root(base)
     return read_json_record(root / version / "release.json", root=root)

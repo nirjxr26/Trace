@@ -117,7 +117,7 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         overwrite: bool = False,
         confirm: Annotated[str | None, Field(max_length=64)] = None,
     ) -> dict:
-        return execute(ctx, TOOL_AUDIT_DECRYPT, lambda: _decrypt(ctx, filename, overwrite, confirm))
+        return execute(ctx, TOOL_AUDIT_DECRYPT, lambda: _decrypt(filename, overwrite, confirm))
 
     @mcp_tool(
         server,
@@ -194,7 +194,7 @@ def _export(ctx: ServerContext, filename: str, encrypt: bool, overwrite: bool, c
     return to_result(services.export_bundle(ctx.session_manager, filename, encrypt, overwrite))
 
 
-def _decrypt(ctx: ServerContext, filename: str, overwrite: bool, confirm: str | None) -> dict:
+def _decrypt(filename: str, overwrite: bool, confirm: str | None) -> dict:
     checked(AuditDecryptArgs, {"filename": filename, "overwrite": overwrite, "confirm": confirm})
     return to_result(services.decrypt_bundle(filename, overwrite))
 

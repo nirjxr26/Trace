@@ -4,11 +4,12 @@ import os
 from pathlib import Path
 from typing import Any, Literal
 
-import structlog
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-logger = structlog.get_logger()
+from trace_core.core.logging import get_logger
+
+logger = get_logger()
 
 DEV_SECRET_SENTINEL = "trace-local-dev-key-change-in-production"
 # Shipped default database URL. Named once so the guard below cannot drift from the
@@ -101,19 +102,9 @@ class Settings(BaseSettings):
     )
 
     def model_post_init(self, __context: Any) -> None:
-        from trace_core.core.fs import ensure_dir
-
         known = {str(field.alias).upper() for field in type(self).model_fields.values() if field.alias}
         for name in sorted(_unknown_trace_settings(known)):
             logger.warning("Unknown TRACE_ setting ignored", setting=name)
-        try:
-            ensure_dir(self.storage_root)
-        except OSError as exc:
-            logger.warning(
-                "Could not initialize storage directory",
-                path=str(self.storage_root),
-                error=str(exc),
-            )
         if self.database_url == DEV_DATABASE_URL and self.debug:
             logger.warning(
                 "Using shipped default database credentials; set TRACE_DATABASE_URL "
@@ -124,6 +115,18 @@ class Settings(BaseSettings):
                 raise ValueError("Refusing production startup on shipped default database credentials.")
             if self.secret_key.get_secret_value() == DEV_SECRET_SENTINEL:
                 raise ValueError("Refusing production startup on shipped default secret key.")
+
+    def ensure_storage(self) -> None:
+        from trace_core.core.fs import ensure_dir
+
+        try:
+            ensure_dir(self.storage_root)
+        except OSError as exc:
+            logger.warning(
+                "Could not initialize storage directory",
+                path=str(self.storage_root),
+                error=str(exc),
+            )
 
 
 settings = Settings()

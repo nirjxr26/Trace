@@ -1,20 +1,28 @@
 """Typer CLI for audit ledger."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import typer
 
 from trace_core.audit.dto import AuditFilterDto
-from trace_core.audit.service import AuditService
 from trace_core.core.cli.error_handler import capture_cli_errors
 from trace_core.core.cli.exit_codes import EXIT_ERROR
 from trace_core.core.cli.output import OUTPUT_HELP
-from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.ui.renderers import render_error_card, render_output, render_success
+
+if TYPE_CHECKING:
+    from trace_core.audit.service import AuditService
+    from trace_core.core.database.session import DatabaseSessionManager
 
 audit_app = typer.Typer(name="audit", help="Inspect, verify, and export tamper-evident audit ledger.")
 
 
 def _get_service(mgr: DatabaseSessionManager | None = None) -> AuditService:
     """Service factory. BaseService.__init__ already falls back to the global db_manager."""
+    from trace_core.audit.service import AuditService
+
     return AuditService(mgr)
 
 

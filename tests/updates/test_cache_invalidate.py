@@ -28,6 +28,9 @@ def test_cache_invalidates_on_content_change(signed_release, temp_storage_root, 
 def test_structlog_is_bound_to_stderr_not_stdout() -> None:
     import structlog
 
+    from trace_core.core.logging import configure_logging
+
+    configure_logging()
     assert structlog.get_config()["logger_factory"]._file is sys.stderr
 
 
