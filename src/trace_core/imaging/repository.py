@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from trace_core.core.clock import now_utc
 from trace_core.imaging.domain import (
+    BlockerMode,
     ImagingFailure,
     ImagingOperation,
     ImagingSource,
@@ -77,11 +78,13 @@ class SqlAlchemyImagingRepository:
         image_relpath: str,
         manifest_relpath: str,
         started_at: datetime,
+        blocker_mode: BlockerMode,
     ) -> ImagingOperation | None:
         model = self.session.get(ImagingOperationModel, operation_id)
         if model is None:
             return None
         require_transition(ImagingState(model.state), ImagingState.ACQUIRING)
+        model.blocker_mode = blocker_mode.value
         model.source_node = source.node
         model.source_kind = source.kind.value
         model.source_serial = source.serial

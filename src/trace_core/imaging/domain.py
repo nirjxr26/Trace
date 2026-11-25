@@ -25,6 +25,11 @@ class ImagingSourceKind(StrEnum):
     OS = "OS"
 
 
+class BlockerMode(StrEnum):
+    HARDWARE = "HARDWARE"
+    NONE = "NONE"
+
+
 class ImagingFailure(StrEnum):
     INTERRUPTED = "INTERRUPTED"
     SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
@@ -138,6 +143,7 @@ class ImagingSource(BaseModel):
     inspected_at: datetime
     software_write_block: SoftwareWriteBlock | None = None
     hardware_write_block: bool = False
+    blocker_mode: BlockerMode = BlockerMode.NONE
 
     @field_validator("inspected_at")
     @classmethod
@@ -173,6 +179,7 @@ class ImagingOperation(BaseModel):
     image_relpath: str | None = None
     manifest_relpath: str | None = None
     failure_category: ImagingFailure | None = None
+    blocker_mode: BlockerMode = BlockerMode.NONE
     started_at: datetime | None = None
     finished_at: datetime | None = None
 
@@ -186,6 +193,10 @@ class ImagingOperation(BaseModel):
             raise ImagingTransitionError("An imaging operation requires UTC timestamps.")
         return result
 
+
+NO_BLOCKER_LIMITATION = (
+    "NO WRITE BLOCKER · NOT EVIDENTIARY — no hardware write blocker was used; not for evidentiary purposes."
+)
 
 BASE_MANIFEST_LIMITATIONS: tuple[str, ...] = (
     "Byte verification proves only that the destination matches the bytes returned by the source reader.",
@@ -219,6 +230,7 @@ class ImagingManifest(BaseModel):
     evidence_class: Literal["HARDWARE_WRITE_BLOCK", "SOFTWARE_ONLY", "UNVERIFIED_WRITE_PROTECTION", "FIXTURE"] = (
         "FIXTURE"
     )
+    blocker_mode: BlockerMode = BlockerMode.NONE
     limitations: tuple[str, ...] = BASE_MANIFEST_LIMITATIONS
 
     @field_validator("created_at", "finished_at")

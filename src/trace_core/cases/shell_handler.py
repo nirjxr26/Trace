@@ -41,7 +41,7 @@ CASE_ACTIONS = [
     ("deselect", "Clear active case context"),
     ("imaging", "List imaging operations"),
     ("imaging-reserve", "Reserve an imaging operation"),
-    ("imaging-acquire", "Acquire a fixture file or physical device (--physical)"),
+    ("imaging-acquire", "Acquire a fixture file or physical device (--physical, --no-write-blocker)"),
     ("imaging-abandon", "Abandon an unresolved operation"),
 ]
 
@@ -411,6 +411,9 @@ class CaseShellCommandHandler(BaseShellHandler):
         if not source:
             print_cancelled("Acquisition")
             return
+        no_write_blocker = "--no-write-blocker" in sub_args
+        if no_write_blocker:
+            console.print("[bold red]NO WRITE BLOCKER · NOT EVIDENTIARY[/bold red]")
         with capture_cli_errors("Imaging Acquisition", exit_on_error=False):
             imaging = ImagingService(service.session_manager)
             preparing = [
@@ -426,8 +429,10 @@ class CaseShellCommandHandler(BaseShellHandler):
                 allow_real_hardware="--physical" in sub_args,
                 allow_software_write_block="--allow-software-write-block" in sub_args,
                 attest_hardware_write_block="--hardware-write-block" in sub_args,
+                no_write_blocker=no_write_blocker,
             )
             render_success(f"Image byte-verified for operation {operation.id}.")
+            console.print(f"  Blocker     {operation.blocker_mode.value}")
             console.print(f"  SHA-256   {operation.acquisition_sha256}")
             console.print(f"  Bytes     {operation.copied_bytes}")
             console.print(f"  Image     {operation.image_relpath}")

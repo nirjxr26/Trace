@@ -54,7 +54,7 @@ class ImagingProgressModal(_BaseModal):
     #progress-head { height: auto; align: center middle; background: $form-bg; padding: 1 3; }
     #progress-title { width: 1fr; height: 1; color: $accent; text-style: bold; }
     #progress-esc { width: auto; height: 1; color: $muted; text-align: right; }
-    #progress-software { height: 1; color: $warning; text-style: bold; }
+    #progress-software, #progress-no-blocker { height: 1; color: $error; text-style: bold; }
     .progress-body { height: auto; padding: 1 3 1 3; }
     #progress-device { height: 1; color: $text; text-style: bold; text-wrap: nowrap; }
     #progress-case { height: 1; color: $accent; }
@@ -80,6 +80,7 @@ class ImagingProgressModal(_BaseModal):
         destination: str = "—",
         stage: str = "acquiring",
         software_only: bool = False,
+        no_blocker: bool = False,
     ) -> None:
         super().__init__()
         self._preview = preview
@@ -88,6 +89,7 @@ class ImagingProgressModal(_BaseModal):
         self._destination = destination
         self._stage = stage
         self._software_only = software_only
+        self._no_blocker = no_blocker
         self._note = ""
         self._timer: Timer | None = None
         self._done = 0
@@ -104,6 +106,8 @@ class ImagingProgressModal(_BaseModal):
             with Vertical(id="progress-body", classes="progress-body"):
                 if self._software_only:
                     yield Static("SOFTWARE-ONLY · NOT EVIDENTIARY", id="progress-software")
+                if self._no_blocker:
+                    yield Static("NO WRITE BLOCKER · NOT EVIDENTIARY", id="progress-no-blocker")
                 yield Static(self._device, id="progress-device")
                 yield Static(self._case, id="progress-case")
                 yield Static("", id="progress-bytes")
@@ -191,6 +195,7 @@ class ImagingView(TablePane[ImagingOperation]):
         Binding("n", "reserve", "Reserve"),
         Binding("a", "acquire", "Acquire"),
         Binding("p", "acquire_physical", "Physical"),
+        Binding("b", "acquire_no_blocker", "No blocker (NOT EVIDENTIARY)"),
         Binding("v", "verify", "Verify"),
         Binding("s", "seal", "Seal"),
         Binding("u", "unseal", "Unseal"),
@@ -509,6 +514,8 @@ class ImagingView(TablePane[ImagingOperation]):
         kv_row(body, "Serial", operation.source_serial or "", LABEL_LG)
         kv_row(body, "Capacity", f"{(operation.source_size_bytes or 0):,} bytes", LABEL_LG)
         kv_row(body, "Write protection", operation.source_protection or "", LABEL_LG)
+        blocker_mode = str(manifest.get("blocker_mode") or operation.blocker_mode.value)
+        kv_row(body, "Blocker mode", blocker_mode, LABEL_LG)
         evidence_class = str(manifest.get("evidence_class") or "")
         limitations_raw = manifest.get("limitations")
         limitations = limitations_raw if isinstance(limitations_raw, list) else []
@@ -522,6 +529,8 @@ class ImagingView(TablePane[ImagingOperation]):
         )
         if software_only:
             body.append("\nSOFTWARE-ONLY · NOT EVIDENTIARY\n\n", style=f"bold {THEME_HEX['red']}")
+        elif "NO WRITE BLOCKER · NOT EVIDENTIARY" in limitations_text:
+            body.append("\nNO WRITE BLOCKER · NOT EVIDENTIARY\n\n", style=f"bold {THEME_HEX['red']}")
         elif evidence_class == "UNVERIFIED_WRITE_PROTECTION":
             body.append("\nUNVERIFIED WRITE PROTECTION · NOT EVIDENTIARY\n\n", style=f"bold {THEME_HEX['red']}")
 
@@ -676,8 +685,16 @@ class ImagingView(TablePane[ImagingOperation]):
     def action_acquire_software(self) -> None:
         self._begin_acquisition(physical=True, software_write_block=True)
 
+    def action_acquire_no_blocker(self) -> None:
+        self._begin_acquisition(physical=True, no_write_blocker=True)
+
     def _begin_acquisition(
-        self, *, physical: bool, software_write_block: bool = False, hardware_write_block: bool = False
+        self,
+        *,
+        physical: bool,
+        software_write_block: bool = False,
+        hardware_write_block: bool = False,
+        no_write_blocker: bool = False,
     ) -> None:
         operation = self._selected_operation()
         if operation is None:
@@ -689,6 +706,8 @@ class ImagingView(TablePane[ImagingOperation]):
         title = "Physical device node" if physical else "Fixture source path"
         if software_write_block:
             hint = "Linux device, e.g. /dev/sdb · SOFTWARE-ONLY · NOT EVIDENTIARY"
+        elif no_write_blocker:
+            hint = "device node, e.g. \\\\.\\PhysicalDrive1 · NO WRITE BLOCKER · NOT EVIDENTIARY"
         elif physical:
             hint = "device node, e.g. \\\\.\\PhysicalDrive1"
         else:
@@ -701,6 +720,7 @@ class ImagingView(TablePane[ImagingOperation]):
                 physical=physical,
                 software_write_block=software_write_block,
                 hardware_write_block=hardware_write_block,
+                no_write_blocker=no_write_blocker,
             ),
         )
 
@@ -712,6 +732,7 @@ class ImagingView(TablePane[ImagingOperation]):
         physical: bool,
         software_write_block: bool = False,
         hardware_write_block: bool = False,
+        no_write_blocker: bool = False,
     ) -> None:
         if not path:
             return
@@ -732,11 +753,19 @@ class ImagingView(TablePane[ImagingOperation]):
             case=f"{operation.case_number} · RAW" if operation is not None and operation.case_number else "RAW",
             destination=path,
             software_only=software_write_block,
+            no_blocker=no_write_blocker,
         )
         self.app.push_screen(self._progress_modal)
         self.run_worker(
             self._acquire_worker(
-                operation_id, path, physical, self._cancel, token, software_write_block, hardware_write_block
+                operation_id,
+                path,
+                physical,
+                self._cancel,
+                token,
+                software_write_block,
+                hardware_write_block,
+                no_write_blocker,
             ),
             name="imaging-acquire",
             group="imaging",
@@ -778,6 +807,7 @@ class ImagingView(TablePane[ImagingOperation]):
         token: object,
         software_write_block: bool = False,
         hardware_write_block: bool = False,
+        no_write_blocker: bool = False,
     ) -> None:
         import time as _time
 
@@ -811,6 +841,7 @@ class ImagingView(TablePane[ImagingOperation]):
                 allow_real_hardware=physical,
                 allow_software_write_block=software_write_block,
                 attest_hardware_write_block=hardware_write_block,
+                no_write_blocker=no_write_blocker,
                 progress=_progress,
                 cancelled=cancel.is_set,
             )
