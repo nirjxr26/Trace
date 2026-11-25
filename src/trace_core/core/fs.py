@@ -92,7 +92,7 @@ def _restrict_windows_acl(path: Path, *, directory: bool) -> None:
 
     sid = _current_user_sid()
     rights = "(OI)(CI)F" if directory else "F"
-    commands = (
+    commands: list[list[str]] = [
         ["icacls", str(path), "/reset"],
         ["icacls", str(path), "/inheritance:r"],
         [
@@ -103,9 +103,9 @@ def _restrict_windows_acl(path: Path, *, directory: bool) -> None:
             f"*S-1-5-18:{rights}",
             f"*S-1-5-32-544:{rights}",
         ],
-    )
+    ]
     if directory and path.is_dir():
-        commands += (
+        commands.append(
             [
                 "icacls",
                 str(path),
