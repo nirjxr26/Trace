@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from trace_core.audit.domain import GENESIS_CHAIN, chain_hash, payload_hash
 from trace_core.audit.dto import VerifyResultDto
@@ -176,7 +176,7 @@ def _row_mismatch(m: AuditEventModel, prev_chain: str) -> tuple[str, str, str] |
     return None
 
 
-def verify_rows(rows: Iterable[AuditEventModel]) -> VerifyResultDto:
+def verify_rows(rows: Iterable[AuditEventModel], on_progress: Callable[[int], None] | None = None) -> VerifyResultDto:
     """Recompute every link from stored payloads. Policy: hash/prev_chain mismatch =
     tamper (fail fast at first seq); missing seqs = gaps (warning — a middle delete
     already fails as prev_chain mismatch at the next row, while a pure tail delete
@@ -188,8 +188,12 @@ def verify_rows(rows: Iterable[AuditEventModel]) -> VerifyResultDto:
     prev_seq: int | None = None
     idx = -1
     has_rows = False
+    next_report = 1000
     for idx, m in enumerate(rows):
         has_rows = True
+        if on_progress is not None and idx + 1 >= next_report:
+            on_progress(idx + 1)
+            next_report = ((idx + 1) // 1000 + 1) * 1000
         if first_seq is None:
             first_seq = m.seq
         last_seq = m.seq

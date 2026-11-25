@@ -41,7 +41,7 @@ def export_bundle(manager: DatabaseSessionManager, filename: str, encrypt: bool,
     }
 
 
-def decrypt_bundle(manager: DatabaseSessionManager, filename: str, overwrite: bool) -> dict[str, Any]:
+def decrypt_bundle(filename: str, overwrite: bool) -> dict[str, Any]:
     from trace_core.audit.helpers import do_decrypt, plain_destination
     from trace_core.core.fs import check_contained
 
@@ -112,20 +112,24 @@ def install_update(manager: DatabaseSessionManager, target_version: str) -> dict
 def recover_installation(manager: DatabaseSessionManager) -> dict[str, Any]:
     _require_admin(manager, "recover an interrupted update")
     from trace_core.core.cli.recovery import run_recovery
+    from trace_core.updates.lock import update_lock
     from trace_core.updates.migration import marker_state
 
-    before, _ = marker_state()
-    with redirect_stdout(io.StringIO()):
-        run_recovery()
-    after, _ = marker_state()
+    with update_lock():
+        before, _ = marker_state()
+        with redirect_stdout(io.StringIO()):
+            run_recovery()
+        after, _ = marker_state()
     return {"marker_before": before, "marker_after": after, "recovered": True}
 
 
 def migrate_database(manager: DatabaseSessionManager) -> dict[str, Any]:
     _require_admin(manager, "apply database migrations")
     from trace_core.core.database.migrations import apply_migrations
+    from trace_core.updates.lock import update_lock
 
-    applied = apply_migrations(manager.engine)
+    with update_lock():
+        applied = apply_migrations(manager.engine)
     return {"applied": applied, "count": len(applied)}
 
 

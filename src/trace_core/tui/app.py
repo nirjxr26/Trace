@@ -204,4 +204,7 @@ class TraceApp(App[None]):
 
 def run_tui(session_manager: DatabaseSessionManager | None = None) -> None:
     """Entrypoint for `trace tui`."""
+    from trace_core.core.settings import settings
+
+    settings.ensure_storage()
     TraceApp(session_manager).run()

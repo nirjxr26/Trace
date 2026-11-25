@@ -1,6 +1,6 @@
-import asyncio
-from typing import Annotated
+from typing import Annotated, Any
 
+import anyio
 from mcp.server import MCPServer
 from mcp.server.mcpserver.context import Context
 from pydantic import Field
@@ -76,10 +76,20 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
 
     @mcp_tool(server, TOOL_AUDIT_VERIFY, annotations=READ_ONLY, description="Verify the audit ledger hash chain.")
     async def trace_audit_verify(mcp_ctx: Context) -> dict:
-        await mcp_ctx.report_progress(0, 1, "Verifying ledger")
-        payload = await asyncio.to_thread(lambda: execute(ctx, TOOL_AUDIT_VERIFY, lambda: _verify(ctx)))
+        await mcp_ctx.report_progress(0, None, "Scanning ledger")
+
+        async def report(count: int) -> None:
+            await mcp_ctx.report_progress(count, None, f"Verified {count} events")
+
+        def progress(count: int) -> None:
+            anyio.from_thread.run(report, count)
+
+        def work() -> Any:
+            return execute(ctx, TOOL_AUDIT_VERIFY, lambda: _verify(ctx, progress))
+
+        payload = await anyio.to_thread.run_sync(work)
         message = "Verification failed" if payload.is_error else "Verified"
-        await mcp_ctx.report_progress(1, 1, message)
+        await mcp_ctx.report_progress(payload.structured_content.get("events_verified", 0), None, message)
         return payload
 
     @mcp_tool(
@@ -107,7 +117,7 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         overwrite: bool = False,
         confirm: Annotated[str | None, Field(max_length=64)] = None,
     ) -> dict:
-        return execute(ctx, TOOL_AUDIT_DECRYPT, lambda: _decrypt(ctx, filename, overwrite, confirm))
+        return execute(ctx, TOOL_AUDIT_DECRYPT, lambda: _decrypt(filename, overwrite, confirm))
 
     @mcp_tool(
         server,
@@ -175,8 +185,8 @@ def _get(ctx: ServerContext, seq: int) -> dict:
     return to_result(AuditService(ctx.session_manager).get_by_seq(seq).model_dump(mode="json"))
 
 
-def _verify(ctx: ServerContext) -> dict:
-    return to_result(AuditService(ctx.session_manager).verify().model_dump(mode="json"))
+def _verify(ctx: ServerContext, on_progress=None) -> dict:  # type: ignore[no-untyped-def]
+    return to_result(AuditService(ctx.session_manager).verify(on_progress=on_progress).model_dump(mode="json"))
 
 
 def _export(ctx: ServerContext, filename: str, encrypt: bool, overwrite: bool, confirm: str | None) -> dict:
@@ -184,9 +194,9 @@ def _export(ctx: ServerContext, filename: str, encrypt: bool, overwrite: bool, c
     return to_result(services.export_bundle(ctx.session_manager, filename, encrypt, overwrite))
 
 
-def _decrypt(ctx: ServerContext, filename: str, overwrite: bool, confirm: str | None) -> dict:
+def _decrypt(filename: str, overwrite: bool, confirm: str | None) -> dict:
     checked(AuditDecryptArgs, {"filename": filename, "overwrite": overwrite, "confirm": confirm})
-    return to_result(services.decrypt_bundle(ctx.session_manager, filename, overwrite))
+    return to_result(services.decrypt_bundle(filename, overwrite))
 
 
 def _keys_init(ctx: ServerContext, label: str) -> dict:

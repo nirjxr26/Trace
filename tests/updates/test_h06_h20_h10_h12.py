@@ -161,6 +161,20 @@ def sources_checker_module():  # type: ignore[no-untyped-def]
     return checker
 
 
+def test_read_json_record_refuses_traversal_and_unreadable_paths(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from trace_core.core.fs import read_json_record
+
+    root = tmp_path / "records"
+    root.mkdir()
+    (root / "ok.json").write_text('{"ok": true}', encoding="utf-8")
+    assert read_json_record(root / "ok.json", root=root) == {"ok": True}
+
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"secret": true}', encoding="utf-8")
+    assert read_json_record(root / ".." / outside.name, root=root) is None
+    assert read_json_record(root / "missing.json", root=root) is None
+
+
 # --- H-21 / H-52: symlink containment and lock files ---
 
 

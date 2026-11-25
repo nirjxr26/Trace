@@ -35,11 +35,16 @@ def test_database_check_connection_failure() -> None:
     assert "failed" in message.lower()
 
 
+def test_settings_construction_does_not_touch_storage() -> None:
+    with patch("pathlib.Path.mkdir", side_effect=AssertionError("settings import must not create directories")):
+        Settings()
+
+
 def test_settings_storage_error_logging() -> None:
-    """Verify Settings.model_post_init logs a warning on OSError rather than crashing."""
+    """Verify ensure_storage logs a warning on OSError rather than crashing."""
     with patch("pathlib.Path.mkdir", side_effect=OSError("Permission denied")):
         with patch("trace_core.core.settings.logger.warning") as mock_warning:
-            Settings()
+            Settings().ensure_storage()
             storage_warnings = [call for call in mock_warning.call_args_list if "storage" in str(call)]
             assert len(storage_warnings) == 1, storage_warnings
 

@@ -4,7 +4,11 @@ from trace_core.updates.errors import RecoveryBlockedError, RecoveryError
 
 
 def run_recovery() -> None:
-    with capture_cli_errors("Recovery"):
+    from trace_core.updates.lock import try_update_lock
+
+    with capture_cli_errors("Recovery"), try_update_lock() as held:
+        if not held:
+            raise RecoveryBlockedError("a live updater owns migration; retry after it finishes")
         _recover()
 
 
@@ -37,15 +41,11 @@ _ROLLBACK_WORTHY_STATES, _TERMINAL_STATES = _recovery_states()
 
 
 def _triage_update_marker() -> None:
-    from trace_core.updates.lock import try_update_lock
     from trace_core.updates.migration import finish_update_migration, marker_state
 
     state, active = marker_state()
     if state == "absent":
         return
-    with try_update_lock() as held:
-        if not held:
-            raise RecoveryBlockedError("a live updater owns migration; retry after it finishes")
     if state == "unreadable":
         # Holding the lock proves no updater is running. It does not prove this marker is
         # stale, and it is the only record that an update owned migrations. Deleting it

@@ -116,12 +116,16 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
     #palette-list > ListItem { height: 1; background: transparent; }
     #palette-list > ListItem.group-head { background: transparent; margin-top: 1; }
     #palette-list > ListItem.group-head:first-child { margin-top: 0; }
-    #palette-list > ListItem.-highlight { background: $palette-active; color: $background; }
-    #palette-list > ListItem.-highlight Static { color: $background; }
-    .group-label { color: $violet; text-style: bold; }
+    #palette-list > ListItem.-highlight,
+    #palette-list > ListItem:hover { background: $palette-active; color: $text; border-left: thick $palette-bar; }
+    #palette-list > ListItem.-highlight Static,
+    #palette-list > ListItem:hover Static { color: $text; }
+    #palette-list > ListItem.-highlight .cmd-key,
+    #palette-list > ListItem:hover .cmd-key { color: $muted; }
+    .group-label { color: $muted; text-style: bold; }
     .cmd-columns { height: 1; padding: 0 1; }
     .cmd-label { width: 1fr; }
-    .cmd-key { width: 4; text-align: right; color: $muted; }
+    .cmd-key { width: auto; min-width: 4; text-align: right; color: $muted; }
     #palette-foot { height: 1; color: $muted; margin-top: 1; }
     """
 

@@ -45,4 +45,10 @@ def try_update_lock():  # type: ignore[no-untyped-def]
         yield True
         return
     with try_file_lock(lock_path()) as held:
-        yield held
+        if held:
+            _local.depth = 1
+        try:
+            yield held
+        finally:
+            if held:
+                _local.depth = 0

@@ -9,6 +9,17 @@ would also have offered a downgrade.
 import pytest
 
 
+def test_database_pool_settings_are_bounded() -> None:
+    from trace_core.core.settings import Settings
+
+    fields = Settings.model_fields
+    assert fields["db_pool_size"].default == 5
+    assert fields["db_max_overflow"].default == 10
+    assert fields["db_pool_recycle"].default == 1800
+    assert fields["db_pool_timeout"].default == 30
+    assert fields["db_statement_timeout_ms"].default == 300000
+
+
 def test_an_absent_pointer_is_normal_and_falls_back(monkeypatch) -> None:
     """Source checkouts and plain pip installs have no pointer. That is not a fault."""
     from trace_core.updates import checker

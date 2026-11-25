@@ -459,6 +459,30 @@ def run_updater_migration(
                 finish_update_migration(transaction_id)
 
 
+def _migration_backup(
+    manager: DatabaseSessionManager,
+    backup_required: bool,
+    would_advance: bool,
+    backup_dir: str | Path | None,
+    backup_waiver: str | None,
+) -> Path | None:
+    if not (backup_required or (would_advance and backup_waiver is None)):
+        return None
+    if backup_dir is None:
+        raise UpdateError("backup required but no backup directory given")
+    return backup_database(manager, backup_dir)
+
+
+def _apply_migrations(manager: DatabaseSessionManager, use_installed_code: bool) -> list[str]:
+    from trace_core.core.database.migrations import apply_migrations, verify_migration_checksums
+
+    if use_installed_code:
+        return apply_migrations_with_installed_code(manager.engine.url.render_as_string(hide_password=False))
+    applied = apply_migrations(manager.engine)
+    verify_migration_checksums(manager.engine)
+    return applied
+
+
 def _run_updater_migration_locked(
     manager: DatabaseSessionManager,
     transaction_id: str,
@@ -469,27 +493,15 @@ def _run_updater_migration_locked(
     backup_waiver: str | None = None,
     use_installed_code: bool = False,
 ) -> dict:
-    from trace_core.core.database.migrations import apply_migrations, verify_migration_checksums
-
-    backup_path = None
+    backup_path: Path | None = None
     mutated = False
     try:
         current = current_schema_version(manager)
         would_advance = schema_target is not None and schema_target > current
-        needs_backup = backup_required or (would_advance and backup_waiver is None)
-        if needs_backup:
-            if backup_dir is None:
-                raise UpdateError("backup required but no backup directory given")
-            backup_path = backup_database(manager, backup_dir)
+        backup_path = _migration_backup(manager, backup_required, would_advance, backup_dir, backup_waiver)
         verify_compatibility(manager, schema_min, schema_target)
         mutated = True
-        applied = (
-            apply_migrations_with_installed_code(manager.engine.url.render_as_string(hide_password=False))
-            if use_installed_code
-            else apply_migrations(manager.engine)
-        )
-        if not use_installed_code:
-            verify_migration_checksums(manager.engine)
+        applied = _apply_migrations(manager, use_installed_code)
         after = current_schema_version(manager)
         if schema_target is not None and after < schema_target:
             raise MigrationCompatibilityError(f"schema {after} below target {schema_target}")

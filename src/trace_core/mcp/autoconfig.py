@@ -13,6 +13,7 @@ from packaging.version import InvalidVersion, Version
 from trace_core.core.fs import atomic_write_lines
 from trace_core.mcp import MCP_PROTOCOL_VERSION
 
+_CONFIG_DIR = ".config"
 _MCP_MIN_VERSION = "2.3.0"
 _MCP_REQUIREMENT = "mcp>=2.3.0,<3"
 
@@ -96,7 +97,7 @@ def _desktop_config_path() -> Path:
     elif sys.platform == "darwin":
         base = Path.home() / "Library" / "Application Support" / "Claude"
     else:
-        base = Path.home() / ".config" / "Claude"
+        base = Path.home() / _CONFIG_DIR / "Claude"
     return base / "claude_desktop_config.json"
 
 
@@ -108,14 +109,7 @@ def _has_trace(cli: str) -> bool:
 def _set_desktop(name: str, disabled: bool) -> None:
     path = _desktop_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    data: dict = {}
-    if path.exists():
-        try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                data = loaded
-        except Exception:
-            data = {}
+    data = _load_json_for_write(path)
     servers = data.setdefault("mcpServers", {})
     if not isinstance(servers, dict):
         servers = {}
@@ -134,9 +128,23 @@ def _read_json(path: Path) -> dict:
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
+    except (OSError, ValueError):
         return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _load_json_for_write(path: Path) -> dict:
+    """Fail closed when an existing config is malformed.
+
+    A tolerant read here would turn a syntax error into `{}` and then overwrite the
+    user's config with only the Trace entry. Setup and disable must never do that.
+    """
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("host config root must be a JSON object")
+    return data
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -145,7 +153,7 @@ def _write_json(path: Path, data: dict) -> None:
 
 
 def _add_json_entry(path: Path, key: str, name: str, entry: dict) -> None:
-    data = _read_json(path)
+    data = _load_json_for_write(path)
     servers = data.setdefault(key, {})
     if not isinstance(servers, dict):
         servers = {}
@@ -155,7 +163,7 @@ def _add_json_entry(path: Path, key: str, name: str, entry: dict) -> None:
 
 
 def _remove_json_entry(path: Path, key: str, name: str) -> None:
-    data = _read_json(path)
+    data = _load_json_for_write(path)
     servers = data.get(key)
     if isinstance(servers, dict):
         servers.pop(name, None)
@@ -163,13 +171,13 @@ def _remove_json_entry(path: Path, key: str, name: str) -> None:
 
 
 def _opencode_config_path() -> Path:
-    base = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    base = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / _CONFIG_DIR)))
     return base / "opencode" / "opencode.json"
 
 
 def _remove_opencode_trace() -> None:
     path = _opencode_config_path()
-    data = _read_json(path)
+    data = _load_json_for_write(path)
     mcp = data.get("mcp")
     if not isinstance(mcp, dict):
         return
@@ -187,7 +195,7 @@ def _remove_opencode_trace() -> None:
 
 def _set_opencode_trace() -> None:
     path = _opencode_config_path()
-    data = _read_json(path)
+    data = _load_json_for_write(path)
     mcp = data.setdefault("mcp", {})
     if not isinstance(mcp, dict):
         mcp = {}
@@ -210,9 +218,54 @@ def _json_targets() -> list[tuple[str, Path, str, bool]]:
         ("cursor", base / ".cursor" / "mcp.json", "mcpServers", False),
         ("vscode-copilot", base / ".copilot" / "mcp-config.json", "mcpServers", True),
         ("windsurf", base / ".codeium" / "windsurf" / "mcp_config.json", "mcpServers", False),
-        ("zed", base / ".config" / "zed" / "mcp.json", "mcpServers", False),
-        ("zed-settings", base / ".config" / "zed" / "settings.json", "context_servers", True),
+        ("zed", base / _CONFIG_DIR / "zed" / "mcp.json", "mcpServers", False),
+        ("zed-settings", base / _CONFIG_DIR / "zed" / "settings.json", "context_servers", True),
     ]
+
+
+def _register_cli_host(name: str, cli: str, done: list[str]) -> None:
+    if not _which(cli):
+        return
+    result = _run([cli, "mcp", "add", "trace", "--", trace_exe(), *server_args()])
+    ok = result.returncode == 0 or _has_trace(cli)
+    done.append(f"{name}:{'ok' if ok else 'failed'}")
+
+
+def _register_opencode(done: list[str]) -> None:
+    if not _which("opencode"):
+        return
+    try:
+        _set_opencode_trace()
+        done.append("opencode:ok")
+        return
+    except (OSError, ValueError):
+        pass
+    result = _run(["opencode", "mcp", "add", "--global", "trace", "--", trace_exe(), *server_args()])
+    ok = result.returncode == 0 or _has_trace("opencode")
+    if ok:
+        try:
+            _set_opencode_trace()
+        except (OSError, ValueError):
+            pass
+    done.append(f"opencode:{'ok' if ok else 'failed'}")
+
+
+def _write_host_config(name: str, done: list[str], action: str, write: Callable[[], None]) -> None:
+    try:
+        write()
+        done.append(f"{name}:{action}")
+    except (OSError, ValueError):
+        done.append(f"{name}:failed")
+
+
+def _register_json_hosts(done: list[str]) -> None:
+    _write_host_config("claude-desktop", done, "ok", lambda: _set_desktop("trace", disabled=False))
+    for name, path, key, _zed_style in _json_targets():
+
+        def add(path: Path = path, key: str = key) -> None:
+            _add_json_entry(path, key, "trace", {"command": trace_exe(), "args": server_args()})
+
+        _write_host_config(name, done, "ok", add)
 
 
 def setup(on_progress: Callable[[str], None] | None = None) -> list[str]:
@@ -224,32 +277,10 @@ def setup(on_progress: Callable[[str], None] | None = None) -> list[str]:
     if on_progress:
         on_progress("Registering hosts. This may take a few seconds...")
     done: list[str] = []
-    if _which("codex"):
-        result = _run(["codex", "mcp", "add", "trace", "--", trace_exe(), *server_args()])
-        ok = result.returncode == 0 or _has_trace("codex")
-        done.append(f"codex:{'ok' if ok else 'failed'}")
-    if _which("claude"):
-        result = _run(["claude", "mcp", "add", "trace", "--", trace_exe(), *server_args()])
-        ok = result.returncode == 0 or _has_trace("claude")
-        done.append(f"claude-code:{'ok' if ok else 'failed'}")
-    if _which("opencode"):
-        try:
-            _set_opencode_trace()
-            done.append("opencode:ok")
-        except OSError:
-            result = _run(["opencode", "mcp", "add", "--global", "trace", "--", trace_exe(), *server_args()])
-            ok = result.returncode == 0 or _has_trace("opencode")
-            if ok:
-                try:
-                    _set_opencode_trace()
-                except OSError:
-                    pass
-            done.append(f"opencode:{'ok' if ok else 'failed'}")
-    _set_desktop("trace", disabled=False)
-    done.append("claude-desktop:ok")
-    for name, path, key, _zed_style in _json_targets():
-        _add_json_entry(path, key, "trace", {"command": trace_exe(), "args": server_args()})
-        done.append(f"{name}:ok")
+    _register_cli_host("codex", "codex", done)
+    _register_cli_host("claude-code", "claude", done)
+    _register_opencode(done)
+    _register_json_hosts(done)
     return done
 
 
@@ -261,11 +292,16 @@ def disable(on_progress: Callable[[str], None] | None = None) -> list[str]:
         if _which(cli):
             _run([cli, "mcp", "remove", "trace"])
             done.append(f"{name}:removed")
-    _remove_opencode_trace()
-    done.append("opencode:removed")
-    _set_desktop("trace", disabled=True)
-    done.append("claude-desktop:removed")
+    try:
+        _remove_opencode_trace()
+        done.append("opencode:removed")
+    except (OSError, ValueError):
+        done.append("opencode:failed")
+    _write_host_config("claude-desktop", done, "removed", lambda: _set_desktop("trace", disabled=True))
     for name, path, key, _zed_style in _json_targets():
-        _remove_json_entry(path, key, "trace")
-        done.append(f"{name}:removed")
+
+        def remove(path: Path = path, key: str = key) -> None:
+            _remove_json_entry(path, key, "trace")
+
+        _write_host_config(name, done, "removed", remove)
     return done

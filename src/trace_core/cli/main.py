@@ -1,5 +1,13 @@
 """Trace CLI main entrypoint."""
 
+import sys
+
+if sys.argv[1:] == ["tui"]:
+    from trace_core.tui.app import run_tui
+
+    run_tui()
+    raise SystemExit(0)
+
 import typer
 
 from trace_core.core.cli.catalog import feature_apps
