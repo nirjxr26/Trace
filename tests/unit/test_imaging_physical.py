@@ -29,6 +29,7 @@ from trace_core.devices.domain import (
     WpVerdict,
 )
 from trace_core.imaging.domain import (
+    BlockerMode,
     ImagingDestinationError,
     ImagingInterruptedError,
     ImagingSourceReadError,
@@ -247,7 +248,12 @@ def test_cli_physical_flag_reaches_the_service(monkeypatch: pytest.MonkeyPatch) 
     def fake_acquire(self, operation_id, source_node, **kwargs):
         seen.update(kwargs)
         return SimpleNamespace(
-            id=operation_id, acquisition_sha256="a" * 64, copied_bytes=0, image_relpath="x", manifest_relpath="y"
+            id=operation_id,
+            acquisition_sha256="a" * 64,
+            copied_bytes=0,
+            image_relpath="x",
+            manifest_relpath="y",
+            blocker_mode=BlockerMode.NONE,
         )
 
     monkeypatch.setattr(ImagingService, "acquire", fake_acquire)
@@ -269,7 +275,12 @@ def test_cli_hardware_write_block_flag_reaches_the_service(monkeypatch: pytest.M
     def fake_acquire(self, operation_id, source_node, **kwargs):
         seen.update(kwargs)
         return SimpleNamespace(
-            id=operation_id, acquisition_sha256="a" * 64, copied_bytes=0, image_relpath="x", manifest_relpath="y"
+            id=operation_id,
+            acquisition_sha256="a" * 64,
+            copied_bytes=0,
+            image_relpath="x",
+            manifest_relpath="y",
+            blocker_mode=BlockerMode.NONE,
         )
 
     monkeypatch.setattr(ImagingService, "acquire", fake_acquire)

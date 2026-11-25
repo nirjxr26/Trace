@@ -44,6 +44,8 @@ from trace_core.imaging.destination import (
 )
 from trace_core.imaging.domain import (
     BASE_MANIFEST_LIMITATIONS,
+    NO_BLOCKER_LIMITATION,
+    BlockerMode,
     ImagingAcquisitionError,
     ImagingBadRegion,
     ImagingDestinationError,
@@ -171,6 +173,9 @@ class ImagingService(BaseService):
                 raise ImagingDestinationError("The operation has no recorded image digest.")
             if expected_bytes != operation.expected_bytes or expected_sha256 != operation.acquisition_sha256:
                 raise ImagingDestinationError("The manifest does not match the recorded imaging operation.")
+            recorded_mode = payload.get("blocker_mode")
+            if recorded_mode is not None and recorded_mode != operation.blocker_mode.value:
+                raise ImagingDestinationError("The manifest write-blocker mode does not match the imaging operation.")
             verified, pieces = verify_image_with_pieces(image_path, expected_bytes, expected_sha256)
             if not self._manifest_matches(payload, expected_bytes, expected_sha256, pieces):
                 verified = False
@@ -348,6 +353,7 @@ class ImagingService(BaseService):
         allow_real_hardware: bool = False,
         allow_software_write_block: bool = False,
         attest_hardware_write_block: bool = False,
+        no_write_blocker: bool = False,
         progress: Progress | None = None,
         cancelled: Cancelled | None = None,
     ) -> ImagingOperation:
@@ -361,12 +367,14 @@ class ImagingService(BaseService):
                 None if operation.state is ImagingState.PREPARING else operation,
                 allow_software_write_block,
                 attest_hardware_write_block,
+                no_write_blocker,
             )
             paths = self._operation_paths(operation.case_number, operation.id)
             if operation.state is ImagingState.PREPARING:
                 claimed = self._claim(operation, source, paths)
                 return self._finish_copy(claimed, source, source_stat, paths, 0, progress, cancelled)
             self._require_evidence_class_match(source, paths)
+            self._require_blocker_mode_match(source, paths)
             if operation.state is ImagingState.INTERRUPTED:
                 offset, _, _ = self._acquiring_state(operation, paths)
                 claimed = self._resume_claim(operation, source, now_utc())
@@ -428,6 +436,7 @@ class ImagingService(BaseService):
         allow_real_hardware: bool,
         allow_software_write_block: bool,
         attest_hardware_write_block: bool,
+        no_write_blocker: bool,
     ) -> None:
         if device.requires_real_hardware_opt_in and not allow_real_hardware:
             raise AuthorizationError(f"{source_node} is real hardware; pass --physical to proceed")
@@ -437,6 +446,8 @@ class ImagingService(BaseService):
             raise AuthorizationError("Hardware write blocking applies only to physical acquisitions; pass --physical")
         if allow_software_write_block and attest_hardware_write_block:
             raise AuthorizationError("Select either software or hardware write blocking, not both")
+        if no_write_blocker and (allow_software_write_block or attest_hardware_write_block):
+            raise AuthorizationError("Select one write-blocker mode, not both")
 
     @staticmethod
     def _resolve_source_device(devices, source_node: str):
@@ -472,11 +483,17 @@ class ImagingService(BaseService):
         operation: ImagingOperation | None,
         allow_software_write_block: bool = False,
         attest_hardware_write_block: bool = False,
+        no_write_blocker: bool = False,
     ) -> tuple[ImagingSource, os.stat_result | None]:
         devices = device_service.list_devices()
         device = self._resolve_source_device(devices, source_node)
         self._require_write_block_opt_ins(
-            device, source_node, allow_real_hardware, allow_software_write_block, attest_hardware_write_block
+            device,
+            source_node,
+            allow_real_hardware,
+            allow_software_write_block,
+            attest_hardware_write_block,
+            no_write_blocker,
         )
         inspection = device_service.inspect_device(device.node, allow_real_hardware=allow_real_hardware)
         gate = device_service.check_device(device.node, inspection=inspection, allow_real_hardware=allow_real_hardware)
@@ -506,6 +523,7 @@ class ImagingService(BaseService):
             inspected_at=inspection.inspected_at,
             software_write_block=software_write_block,
             hardware_write_block=attest_hardware_write_block,
+            blocker_mode=BlockerMode.HARDWARE if attest_hardware_write_block else BlockerMode.NONE,
         )
         return source, source_stat
 
@@ -551,6 +569,7 @@ class ImagingService(BaseService):
                 image_relpath,
                 manifest_relpath,
                 now_utc(),
+                source.blocker_mode,
             )
             if claimed is None:
                 raise NotFoundError(_IMAGING_OPERATION, str(operation.id))
@@ -740,6 +759,7 @@ class ImagingService(BaseService):
                     "source_serial": source.serial,
                     "source_node": source.node,
                     "evidence_class": self._evidence_class(source),
+                    "blocker_mode": source.blocker_mode.value,
                     "digest": digest,
                     "bad_regions": [region.model_dump() for region in bad_regions],
                     "tool_version": settings.version,
@@ -784,6 +804,7 @@ class ImagingService(BaseService):
                     "source_serial": source.serial,
                     "source_node": source.node,
                     "evidence_class": ImagingService._evidence_class(source),
+                    "blocker_mode": source.blocker_mode.value,
                     "digest": digest_state["value"],
                     "bad_regions": [region.model_dump() for region in regions],
                     "tool_version": settings.version,
@@ -881,10 +902,8 @@ class ImagingService(BaseService):
                 )
             elif source.kind is ImagingSourceKind.FILE:
                 limitations = BASE_MANIFEST_LIMITATIONS + ("FIXTURE — NOT EVIDENCE.",)
-            elif evidence_class == "UNVERIFIED_WRITE_PROTECTION":
-                limitations = BASE_MANIFEST_LIMITATIONS + (
-                    "UNVERIFIED WRITE PROTECTION — no hardware write blocker was attested; not evidentiary.",
-                )
+            elif source.blocker_mode is BlockerMode.NONE:
+                limitations = BASE_MANIFEST_LIMITATIONS + (NO_BLOCKER_LIMITATION,)
             else:
                 limitations = BASE_MANIFEST_LIMITATIONS
             manifest_model = ImagingManifest(
@@ -903,6 +922,7 @@ class ImagingService(BaseService):
                 finished_at=finished_at,
                 tool_version=settings.version,
                 evidence_class=evidence_class,
+                blocker_mode=source.blocker_mode,
                 limitations=limitations,
             )
             if manifest.exists():
@@ -985,6 +1005,7 @@ class ImagingService(BaseService):
                             "copied_bytes": updated.copied_bytes,
                             "acquisition_sha256": readback_sha256,
                             "readback_sha256": readback_sha256,
+                            "blocker_mode": operation.blocker_mode.value,
                             "image_relpath": updated.image_relpath,
                             "manifest_relpath": updated.manifest_relpath,
                             "source_kind": operation.source_kind.value if operation.source_kind else None,
@@ -1075,6 +1096,17 @@ class ImagingService(BaseService):
             )
 
     @staticmethod
+    def _require_blocker_mode_match(source: ImagingSource, paths: tuple) -> None:
+        payload = read_checkpoint(paths[2])
+        if payload is None:
+            return
+        recorded = payload.get("blocker_mode")
+        if recorded is not None and recorded != source.blocker_mode.value:
+            raise ImagingSourceUnavailableError(
+                "The resume write-blocker mode does not match the original selection; pass the original flag."
+            )
+
+    @staticmethod
     def _start_details(source: ImagingSource, paths: tuple, *, resumed: bool) -> dict[str, object]:
         image_relpath = paths[5] if len(paths) > 5 else None
         manifest_relpath = paths[6] if len(paths) > 6 else None
@@ -1091,6 +1123,8 @@ class ImagingService(BaseService):
             "resumed": resumed,
             "evidence_class": ImagingService._evidence_class(source),
             "hardware_write_block": source.hardware_write_block,
+            "blocker_mode": source.blocker_mode.value,
+            "non_evidentiary": source.blocker_mode is BlockerMode.NONE,
             "software_write_block": (
                 source.software_write_block.model_dump(mode="json") if source.software_write_block is not None else None
             ),

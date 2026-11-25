@@ -124,11 +124,18 @@ def acquire_imaging(
         "--hardware-write-block",
         help="Attest that a validated hardware write blocker protects the source",
     ),
+    no_write_blocker: bool = typer.Option(
+        False,
+        "--no-write-blocker",
+        help="Image without a write blocker; development and training only, NOT EVIDENTIARY",
+    ),
     force: bool = typer.Option(False, "--yes", "-y", help=SKIP_CONFIRM_HELP),
 ) -> None:
     with capture_cli_errors("Imaging Acquisition Failed"):
         if not force:
             _confirm_or_exit(f"Acquire {source}?", "Acquisition")
+        if no_write_blocker:
+            console.print("[bold red]NO WRITE BLOCKER · NOT EVIDENTIARY[/bold red]")
         import time
 
         from trace_core.devices.renderers import format_bytes
@@ -150,9 +157,11 @@ def acquire_imaging(
             allow_real_hardware=physical,
             allow_software_write_block=software_write_block,
             attest_hardware_write_block=hardware_write_block,
+            no_write_blocker=no_write_blocker,
             progress=_progress,
         )
         render_success(f"Image byte-verified for operation {operation.id}.")
+        console.print(f"  Blocker     {operation.blocker_mode.value}")
         console.print(f"  SHA-256   {operation.acquisition_sha256}")
         console.print(f"  Bytes     {operation.copied_bytes}")
         console.print(f"  Image     {operation.image_relpath}")

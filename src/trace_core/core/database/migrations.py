@@ -1472,3 +1472,35 @@ def _run_migration_027(conn: Connection) -> None:
     for column, ddl in _IMAGING_ACQUISITION_COLUMNS:
         _ensure_column(conn, "imaging_operations", column, ddl)
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_imaging_operations_state on imaging_operations (state)"))
+
+
+_IMAGING_BLOCKER_MODE_COLUMN = (
+    "blocker_mode",
+    "ALTER TABLE imaging_operations ADD COLUMN blocker_mode VARCHAR(16) NOT NULL DEFAULT 'NONE'",
+)
+
+
+def _verify_028_imaging_blocker_mode(conn: Connection) -> bool:
+    return "imaging_operations" in inspect(conn).get_table_names() and _IMAGING_BLOCKER_MODE_COLUMN[0] in _column_names(
+        conn, "imaging_operations"
+    )
+
+
+@register_migration(
+    28,
+    "028_imaging_blocker_mode",
+    operations=(_IMAGING_BLOCKER_MODE_COLUMN[1],),
+    verify=_verify_028_imaging_blocker_mode,
+)
+def _migration_028_imaging_blocker_mode(bind: Engine | Connection) -> None:
+    if isinstance(bind, Engine):
+        with bind.begin() as conn:
+            _run_migration_028(conn)
+    else:
+        _run_migration_028(bind)
+
+
+def _run_migration_028(conn: Connection) -> None:
+    if "imaging_operations" not in inspect(conn).get_table_names():
+        return
+    _ensure_column(conn, "imaging_operations", *_IMAGING_BLOCKER_MODE_COLUMN)

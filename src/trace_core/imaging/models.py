@@ -6,7 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from trace_core.core.clock import now_utc
 from trace_core.core.database.base import Base, UTCDateTime
-from trace_core.imaging.domain import ImagingState
+from trace_core.imaging.domain import BlockerMode, ImagingState
 
 
 class ImagingOperationModel(Base):
@@ -39,5 +39,6 @@ class ImagingOperationModel(Base):
     image_relpath: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     manifest_relpath: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     failure_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    blocker_mode: Mapped[str] = mapped_column(String(16), default=BlockerMode.NONE.value, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
