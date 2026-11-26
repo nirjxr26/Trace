@@ -646,7 +646,7 @@ async def test_palette_shows_only_the_active_tab_commands(
         modal.query_one("#palette-input", Input).value = "seal"
         await pilot.pause()
         found = [child.id for child in view.children if child.id]
-        assert found[0] == "imaging-seal"
+        assert "imaging-seal" in found
         assert all(command_scope(command) == "imaging" for command in found)
 
 

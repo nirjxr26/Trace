@@ -105,7 +105,7 @@ PALETTE_CSS = """
     #palette-esc { width: auto; color: $muted; text-align: right; }
     #palette-input { width: 1fr; height: 1; border: none; background: $surface-elevated; padding: 0 0 0 1; }
     #palette-input:focus { border: none; background: $surface-elevated; background-tint: transparent; }
-    #palette-list { height: auto; max-height: 12; margin-top: 1; scrollbar-size: 0 0; background: $surface-elevated; }
+    #palette-list { height: auto; max-height: 12; margin-top: 1; scrollbar-size: 0 0; background: transparent; }
     #palette-list > ListItem { height: 1; background: transparent; }
     #palette-list > ListItem.group-head { background: transparent; margin-top: 1; }
     #palette-list > ListItem.group-head:first-child { margin-top: 0; }
