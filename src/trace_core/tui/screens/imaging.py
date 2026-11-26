@@ -10,7 +10,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.notifications import SeverityLevel
 from textual.timer import Timer
-from textual.widgets import DataTable, Input, Static
+from textual.widgets import DataTable, Input, ListItem, ListView, Static
 
 from trace_core.cases.dto import CaseFilterDto
 from trace_core.cases.service import CaseService
@@ -24,6 +24,7 @@ from trace_core.tui.design.text import kv_row, section_head
 from trace_core.tui.design.tokens import LABEL_LG, STAGE_TONES
 from trace_core.tui.design.widgets import ListDetailPane, ModalFrame, SegmentedProgress
 from trace_core.tui.forms import CasePicker, TextInputModal, YesNoModal, _BaseModal
+from trace_core.tui.palette import PALETTE_CSS
 from trace_core.tui.theme import SELECT_PREFIX, detail_placeholder
 from trace_core.tui.widgets import TablePane
 
@@ -43,6 +44,54 @@ _STATE_STYLE = {
     ImagingState.FAILED: THEME_HEX["red"],
     ImagingState.QUARANTINED: THEME_HEX["red"],
 }
+
+
+class _InspectModal(_BaseModal):
+    CSS = (
+        PALETTE_CSS
+        + """
+    #status-title { width: 1fr; color: $accent; padding-left: 1; }
+    """
+    )
+
+    def _head(self, title: str) -> ComposeResult:
+        with Vertical(id="palette-box"):
+            with Horizontal(id="palette-head"):
+                yield Static(title, id="status-title")
+                yield Static("esc", id="palette-esc")
+
+    def action_dismiss_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class PieceHashesModal(_InspectModal):
+    def __init__(self, hashes: list[str]) -> None:
+        super().__init__()
+        self._hashes = hashes
+
+    def compose(self) -> ComposeResult:
+        yield from self._head("Piece hashes")
+        yield ListView(*[ListItem(Static(f"{index + 1}: {value}")) for index, value in enumerate(self._hashes)])
+
+
+class BadRegionsModal(_InspectModal):
+    def __init__(self, regions: list[dict]) -> None:
+        super().__init__()
+        self._regions = regions
+
+    def compose(self) -> ComposeResult:
+        yield from self._head("Bad regions")
+        yield ListView(
+            *[
+                ListItem(
+                    Static(
+                        f"Offset {int(region.get('offset', 0)):,} · Length {int(region.get('length', 0)):,} "
+                        "· Zero-filled · Original data not recovered"
+                    )
+                )
+                for region in self._regions
+            ]
+        )
 
 
 class ImagingProgressModal(_BaseModal):
@@ -205,6 +254,8 @@ class ImagingView(TablePane[ImagingOperation]):
         Binding("ctrl+d", "toggle_preview", "Preview data", show=False),
         Binding("ctrl+a", "toggle_advanced", "Advanced details", show=False),
         Binding("ctrl+g", "preview_progress", "Progress popup preview", show=False),
+        Binding("ctrl+h", "bad_regions", "All bad regions", show=False),
+        Binding("ctrl+k", "piece_hashes", "Piece hashes", show=False),
         Binding("alt+s", "acquire_software", "Software-block acquire", show=False),
     ]
 
@@ -225,6 +276,7 @@ class ImagingView(TablePane[ImagingOperation]):
         self._closing = False
         self._preview = False
         self._advanced = False
+        self._dossier_manifest: dict[str, object] = {}
 
     @property
     def _service(self) -> ImagingService:
@@ -317,13 +369,14 @@ class ImagingView(TablePane[ImagingOperation]):
         body = Text()
         if self._preview:
             sample = self._sample_operation()
+            manifest = self._sample_manifest()
             body.append("SAMPLE — NOT EVIDENCE\n", style=f"bold {THEME_HEX['amber']}")
-            self._append_full_dossier(body, sample, self._sample_manifest(), None, self._advanced)
+            self._append_full_dossier(body, sample, manifest, None, self._advanced)
         else:
             assert operation is not None
-            self._append_full_dossier(
-                body, operation, self._manifest_for_render(operation, False), self._progress, self._advanced
-            )
+            manifest = self._manifest_for_render(operation, False)
+            self._append_full_dossier(body, operation, manifest, self._progress, self._advanced)
+        self._dossier_manifest = manifest
         body.append(
             f"\nCtrl+A — {'collapse' if self._advanced else 'expand'} advanced details\n",
             style="dim",
@@ -337,6 +390,19 @@ class ImagingView(TablePane[ImagingOperation]):
     def action_toggle_advanced(self) -> None:
         self._advanced = not self._advanced
         self.render_detail()
+
+    def action_bad_regions(self) -> None:
+        raw = self._dossier_manifest.get("bad_regions")
+        regions = [region for region in raw if isinstance(region, dict)] if isinstance(raw, list) else []
+        if regions:
+            self.app.push_screen(BadRegionsModal(regions))
+
+    def action_piece_hashes(self) -> None:
+        raw = self._dossier_manifest.get("piecewise")
+        piece = raw if isinstance(raw, dict) else {}
+        hashes = piece.get("hashes")
+        if isinstance(hashes, list) and hashes:
+            self.app.push_screen(PieceHashesModal([str(value) for value in hashes]))
 
     @staticmethod
     def _sample_operation() -> ImagingOperation:
@@ -427,22 +493,11 @@ class ImagingView(TablePane[ImagingOperation]):
         sealed = str(encryption.get("sealed_relpath", ""))
         stopped = operation.finished_at.strftime(UTC_TIMESTAMP_FORMAT) if operation.finished_at else "—"
 
-        self._dossier_header(
-            body,
-            operation,
-            manifest,
-            progress,
-            expected,
-            copied,
-            bad_regions,
-            digest,
-            readback,
-            verified,
-            stopped,
-        )
+        self._dossier_header(body, operation, manifest, progress, expected, copied, bad_regions, digest, readback)
+        self._dossier_acquisition(body, operation, primary=not advanced)
         self._dossier_source(body, operation, manifest)
-        self._dossier_results(body, copied, expected, zero_filled, bad_regions)
-        self._dossier_artifacts(body, image_path, manifest_path, sealed, encryption)
+        self._dossier_results(body, copied, expected, zero_filled, bad_regions, primary=not advanced)
+        self._dossier_artifacts(body, image_path, manifest_path, sealed, primary=not advanced)
         if advanced:
             self._dossier_advanced(
                 body,
@@ -457,7 +512,104 @@ class ImagingView(TablePane[ImagingOperation]):
                 manifest_path,
                 sealed,
                 stopped,
+                zero_filled,
+                expected,
+                copied,
             )
+
+    @staticmethod
+    def _verdicts(
+        operation: ImagingOperation,
+        manifest: dict[str, object],
+        expected: int,
+        copied: int,
+        bad_regions: list[dict],
+        digest: str,
+        readback: str,
+    ) -> tuple[str, str, str, str, str, str, str]:
+        state = operation.state
+        if state is ImagingState.PREPARING:
+            acquisition, acquisition_style = "PREPARING", THEME_TOKENS["muted"]
+        elif state is ImagingState.ACQUIRING:
+            acquisition, acquisition_style = "ACQUIRING", THEME_HEX["blue"]
+        elif state is ImagingState.VERIFYING:
+            acquisition, acquisition_style = "VERIFYING", THEME_HEX["amber"]
+        elif state is ImagingState.FAILED or state is ImagingState.QUARANTINED:
+            acquisition, acquisition_style = "FAILED", THEME_HEX["red"]
+        elif state is ImagingState.INTERRUPTED or copied < expected or bad_regions:
+            acquisition, acquisition_style = "PARTIAL", THEME_HEX["amber"]
+        else:
+            acquisition, acquisition_style = "COMPLETE", THEME_HEX["green"]
+
+        if state is ImagingState.QUARANTINED:
+            integrity, integrity_style = "VERIFICATION FAILED", THEME_HEX["red"]
+        elif state is ImagingState.VERIFYING:
+            integrity, integrity_style = "VERIFYING", THEME_HEX["amber"]
+        elif not digest or not readback or state is not ImagingState.BYTE_VERIFIED:
+            integrity, integrity_style = "NOT VERIFIED", THEME_TOKENS["muted"]
+        elif digest == readback:
+            integrity, integrity_style = "HASH MATCH", THEME_HEX["green"]
+        else:
+            integrity, integrity_style = "HASH MISMATCH", THEME_HEX["red"]
+
+        evidence_class = str(manifest.get("evidence_class") or "")
+        if evidence_class == "HARDWARE_WRITE_BLOCK" or (
+            evidence_class != "SOFTWARE_ONLY" and operation.blocker_mode.value == "HARDWARE"
+        ):
+            evidence, evidence_style = "HARDWARE VERIFIED", THEME_HEX["green"]
+        elif evidence_class == "SOFTWARE_ONLY":
+            evidence, evidence_style = "SOFTWARE-ONLY", THEME_HEX["amber"]
+        elif operation.source_kind is ImagingSourceKind.FILE:
+            evidence, evidence_style = "NOT APPLICABLE", THEME_TOKENS["muted"]
+        elif evidence_class == "UNVERIFIED_WRITE_PROTECTION":
+            evidence, evidence_style = "UNVERIFIED", THEME_HEX["amber"]
+        elif operation.source_protection == "WRITABLE":
+            evidence, evidence_style = "NOT PROTECTED", THEME_HEX["red"]
+        else:
+            evidence, evidence_style = "UNKNOWN", THEME_HEX["amber"]
+        return (
+            acquisition,
+            acquisition_style,
+            integrity,
+            integrity_style,
+            evidence,
+            evidence_style,
+            evidence_class,
+        )
+
+    @staticmethod
+    def _warnings(
+        operation: ImagingOperation,
+        manifest: dict[str, object],
+        copied: int,
+        expected: int,
+        bad_regions: list[dict],
+        integrity: str,
+        evidence_class: str,
+    ) -> list[str]:
+        warnings: list[str] = []
+        if copied == 0:
+            warnings.append("No source bytes were acquired.")
+        synthetic = manifest.get("synthetic")
+        if not isinstance(synthetic, bool):
+            synthetic = (operation.source_serial or "").startswith("SYNTH-")
+        if synthetic:
+            warnings.append("Synthetic source. Not evidence.")
+        if evidence_class == "SOFTWARE_ONLY":
+            warnings.append("Software-only write blocking. Not evidentiary.")
+        elif operation.blocker_mode.value == "NONE" and operation.source_kind is not ImagingSourceKind.FILE:
+            warnings.append("No hardware write blocker was used. Not evidentiary.")
+        elif evidence_class == "UNVERIFIED_WRITE_PROTECTION":
+            warnings.append("Write protection unverified.")
+        if bad_regions:
+            warnings.append("Unreadable source regions were zero-filled.")
+        if 0 < copied < expected:
+            warnings.append("Full source coverage was not achieved.")
+        if operation.state is ImagingState.FAILED or operation.state is ImagingState.QUARANTINED:
+            warnings.append("Acquisition failed before completion.")
+        if integrity == "HASH MISMATCH":
+            warnings.append("Image bytes no longer match the recorded digest.")
+        return warnings
 
     def _dossier_header(
         self,
@@ -470,34 +622,62 @@ class ImagingView(TablePane[ImagingOperation]):
         bad_regions: list[dict],
         digest: str,
         readback: str,
-        verified: bool,
-        stopped: str,
     ) -> None:
-        completion = copied * 100 / expected if expected else 0.0
-        verdict = "MATCH REPORTED" if verified else "MISMATCH REPORTED"
-        verdict_style = THEME_HEX["green"] if verified else THEME_HEX["red"]
-        complete = operation.state is ImagingState.BYTE_VERIFIED and copied == expected and not bad_regions
-        limit_reached = "Acquisition limit reached" if copied < expected else "—"
-        if operation.failure_category:
-            termination = operation.failure_category.value.replace("_", " ").title()
-        else:
-            termination = limit_reached
-
+        acquisition, acquisition_style, integrity, integrity_style, evidence, evidence_style, evidence_class = (
+            self._verdicts(operation, manifest, expected, copied, bad_regions, digest, readback)
+        )
         body.append(f"{operation.source_model or '—'}\n", style=f"bold {THEME_HEX['title']}")
         body.append(f"RAW acquisition · {operation.case_number}\n\n", style=THEME_TOKENS["accent"])
-        body.append(
-            "COMPLETE" if complete else "PARTIAL",
-            style=f"bold {THEME_HEX['green'] if complete else THEME_HEX['amber']}",
-        )
-        body.append(f" · {verdict}   ", style=f"bold {verdict_style}")
-        body.append(f"{completion:.2f}%\n\n", style=f"bold {THEME_HEX['title']}")
-        if progress is not None:
+        for label, value, style in (
+            ("Acquisition", acquisition, acquisition_style),
+            ("Integrity", integrity, integrity_style),
+            ("Evidence", evidence, evidence_style),
+        ):
+            kv_row(body, label, value, LABEL_LG)
+        for warning in self._warnings(operation, manifest, copied, expected, bad_regions, integrity, evidence_class):
+            body.append(f"{warning}\n", style=f"bold {THEME_HEX['amber']}")
+        body.append("\n")
+        if progress is not None and operation.state in (ImagingState.ACQUIRING, ImagingState.VERIFYING):
             done, total = progress
-            percent = done * 100 // total if total else 0
-            body.append(f"Progress {percent}% · {format_bytes(done)}/{format_bytes(total)}\n\n", style="dim")
-        section_head(body, "ACQUISITION DETAILS")
-        kv_row(body, "Format", str(manifest.get("format", "RAW")), LABEL_LG)
-        kv_row(body, "Acquisition ID", str(operation.id), LABEL_LG)
+            percent = done * 100 / total if total else 0
+            body.append(f"Coverage   {format_bytes(done)} / {format_bytes(total)}   ({percent:.2f}%)\n\n")
+        else:
+            percent = copied * 100 / expected if expected else 0.0
+            body.append(f"Coverage   {format_bytes(copied)} / {format_bytes(expected)}   ({percent:.2f}%)\n\n")
+
+    def _dossier_source(self, body: Text, operation: ImagingOperation, manifest: dict[str, object]) -> None:
+        section_head(body, "SOURCE EVIDENCE")
+        kv_row(body, "Device", operation.source_node or "", LABEL_LG)
+        kv_row(body, "Serial", operation.source_serial or "", LABEL_LG)
+        kv_row(body, "Capacity", f"{(operation.source_size_bytes or 0):,} bytes", LABEL_LG)
+        _, _, _, _, evidence, _, _ = self._verdicts(
+            operation,
+            manifest,
+            operation.expected_bytes or 0,
+            operation.copied_bytes or 0,
+            [],
+            str(manifest.get("acquisition_sha256") or operation.acquisition_sha256 or ""),
+            str(manifest.get("readback_sha256") or operation.readback_sha256 or ""),
+        )
+        raw = operation.source_protection or "UNKNOWN"
+        protection = f"{raw} · {evidence}" if evidence != "NOT APPLICABLE" else raw
+        kv_row(body, "Write protection", protection, LABEL_LG)
+
+    @staticmethod
+    def _duration(operation: ImagingOperation) -> str:
+        if operation.started_at is None or operation.finished_at is None:
+            return ""
+        seconds = (operation.finished_at - operation.started_at).total_seconds()
+        if seconds < 1:
+            return "<1s"
+        minutes, rest = divmod(int(seconds), 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours}h {minutes}m {rest}s"
+        return f"{minutes}m {rest}s"
+
+    def _dossier_acquisition(self, body: Text, operation: ImagingOperation, *, primary: bool) -> None:
+        section_head(body, "ACQUISITION")
         kv_row(body, "Examiner", operation.created_by, LABEL_LG)
         kv_row(
             body,
@@ -505,34 +685,25 @@ class ImagingView(TablePane[ImagingOperation]):
             operation.started_at.strftime(UTC_TIMESTAMP_FORMAT) if operation.started_at else "",
             LABEL_LG,
         )
-        kv_row(body, "Stopped", stopped, LABEL_LG)
-        kv_row(body, "Termination", termination, LABEL_LG)
-
-    def _dossier_source(self, body: Text, operation: ImagingOperation, manifest: dict[str, object]) -> None:
-        section_head(body, "SOURCE EVIDENCE")
-        kv_row(body, "Device", operation.source_node or "", LABEL_LG)
-        kv_row(body, "Serial", operation.source_serial or "", LABEL_LG)
-        kv_row(body, "Capacity", f"{(operation.source_size_bytes or 0):,} bytes", LABEL_LG)
-        kv_row(body, "Write protection", operation.source_protection or "", LABEL_LG)
-        blocker_mode = str(manifest.get("blocker_mode") or operation.blocker_mode.value)
-        kv_row(body, "Blocker mode", blocker_mode, LABEL_LG)
-        evidence_class = str(manifest.get("evidence_class") or "")
-        limitations_raw = manifest.get("limitations")
-        limitations = limitations_raw if isinstance(limitations_raw, list) else []
-        limitations_text = " ".join(str(item) for item in limitations if isinstance(item, str))
-        software_only = evidence_class == "SOFTWARE_ONLY" or "SOFTWARE-ONLY · NOT EVIDENTIARY" in limitations_text
         kv_row(
             body,
-            "Evidence class",
-            evidence_class or ("SOFTWARE_ONLY" if software_only else "UNCLASSIFIED"),
+            "Ended",
+            operation.finished_at.strftime(UTC_TIMESTAMP_FORMAT) if operation.finished_at else "",
             LABEL_LG,
         )
-        if software_only:
-            body.append("\nSOFTWARE-ONLY · NOT EVIDENTIARY\n\n", style=f"bold {THEME_HEX['red']}")
-        elif "NO WRITE BLOCKER · NOT EVIDENTIARY" in limitations_text:
-            body.append("\nNO WRITE BLOCKER · NOT EVIDENTIARY\n\n", style=f"bold {THEME_HEX['red']}")
-        elif evidence_class == "UNVERIFIED_WRITE_PROTECTION":
-            body.append("\nUNVERIFIED WRITE PROTECTION · NOT EVIDENTIARY\n\n", style=f"bold {THEME_HEX['red']}")
+        duration = self._duration(operation)
+        if duration:
+            kv_row(body, "Duration", duration, LABEL_LG)
+        if primary and (
+            operation.failure_category
+            or operation.state in (ImagingState.FAILED, ImagingState.QUARANTINED, ImagingState.INTERRUPTED)
+        ):
+            reason = (
+                operation.failure_category.value.replace("_", " ").title()
+                if operation.failure_category
+                else "Acquisition limit reached"
+            )
+            body.append(f"{reason}\n", style=f"bold {THEME_HEX['amber']}")
 
     def _dossier_results(
         self,
@@ -541,25 +712,32 @@ class ImagingView(TablePane[ImagingOperation]):
         expected: int,
         zero_filled: int,
         bad_regions: list[dict],
+        *,
+        primary: bool,
     ) -> None:
         section_head(body, "ACQUISITION RESULTS")
         kv_row(body, "Source read", f"{copied - zero_filled:,} bytes", LABEL_LG)
-        kv_row(body, "Image written", f"{copied:,} bytes", LABEL_LG)
-        kv_row(body, "Unacquired", f"{expected - copied:,} bytes", LABEL_LG)
-        kv_row(body, "Zero-filled", f"{zero_filled:,} bytes", LABEL_LG)
-        kv_row(body, "Coverage base", "image extent / source capacity", LABEL_LG)
+        if not primary:
+            kv_row(body, "Image written", f"{copied:,} bytes", LABEL_LG)
+            kv_row(body, "Acquisition scope", "image extent / source capacity", LABEL_LG)
+        unacquired = expected - copied
+        if unacquired > 0:
+            kv_row(body, "Unacquired", f"{unacquired:,} bytes", LABEL_LG)
+        if zero_filled > 0:
+            kv_row(body, "Zero-filled", f"{zero_filled:,} bytes", LABEL_LG)
         section_head(body, "ACQUISITION EXCEPTIONS")
-        if bad_regions:
-            count = len(bad_regions)
-            label = "unreadable region" if count == 1 else "unreadable regions"
-            body.append(f"{count} {label}\n\n", style=THEME_HEX["amber"])
-            for region in bad_regions[:8]:
-                kv_row(body, "Offset", f"{int(region.get('offset', 0)):,} bytes", LABEL_LG)
-                kv_row(body, "Length", f"{int(region.get('length', 0)):,} bytes", LABEL_LG)
-                kv_row(body, "Recovery", "Zero-filled", LABEL_LG)
-                kv_row(body, "Original data", "Not recovered", LABEL_LG)
-        else:
+        if not bad_regions:
             body.append("No acquisition exceptions recorded\n", style="dim")
+            return
+        count = len(bad_regions)
+        label = "unreadable region" if count == 1 else "unreadable regions"
+        body.append(f"{count} {label}\n", style=THEME_HEX["amber"])
+        for region in bad_regions[:8]:
+            kv_row(body, "Offset", f"{int(region.get('offset', 0)):,} bytes", LABEL_LG)
+            kv_row(body, "Length", f"{int(region.get('length', 0)):,} bytes", LABEL_LG)
+            body.append("Zero-filled · Original data not recovered\n")
+        if count > 8:
+            body.append(f"View all {count} regions  Ctrl+H\n", style=THEME_HEX["blue"])
 
     def _dossier_artifacts(
         self,
@@ -567,13 +745,18 @@ class ImagingView(TablePane[ImagingOperation]):
         image_path: str,
         manifest_path: str,
         sealed: str,
-        encryption: dict,
+        *,
+        primary: bool,
     ) -> None:
         section_head(body, "EVIDENCE ARTIFACTS")
-        kv_row(body, "Image", image_path.rsplit("/", 1)[-1], LABEL_LG)
-        kv_row(body, "Manifest", manifest_path.rsplit("/", 1)[-1], LABEL_LG)
-        kv_row(body, "Sealed image", sealed.rsplit("/", 1)[-1], LABEL_LG)
-        kv_row(body, "Encryption", str(encryption.get("algorithm", "")).split("/")[0], LABEL_LG)
+        rows = (
+            (image_path.rsplit("/", 1)[-1], "Available" if image_path else "Not available"),
+            (manifest_path.rsplit("/", 1)[-1], "Available" if manifest_path else "Not available"),
+            (sealed.rsplit("/", 1)[-1], "Sealed" if sealed else "Not present"),
+        )
+        for name, status in rows:
+            if not primary or status != "Not present":
+                kv_row(body, name, status, LABEL_LG)
 
     def _dossier_advanced(
         self,
@@ -589,46 +772,76 @@ class ImagingView(TablePane[ImagingOperation]):
         manifest_path: str,
         sealed: str,
         stopped: str,
+        zero_filled: int,
+        expected: int,
+        copied: int,
     ) -> None:
         section_head(body, "ADVANCED DETAILS")
-        section_head(body, "Integrity & Verification")
+        section_head(body, "Integrity & verification")
         kv_row(body, "Acquisition SHA-256", digest, LABEL_LG)
         kv_row(body, "Read-back SHA-256", readback, LABEL_LG)
         kv_row(
             body,
-            "Comparison",
-            "Match — reported" if verified and digest == readback else "Not verified",
+            "Verification scope",
+            f"Whole image + {int(piece.get('count', 0)):,} piecewise hashes" if piece else "Whole image only",
             LABEL_LG,
         )
-        kv_row(body, "Method", "Saved image read-back", LABEL_LG)
+        kv_row(body, "Verification method", "Saved image read-back", LABEL_LG)
         kv_row(body, "Verified at", stopped, LABEL_LG)
-        kv_row(body, "Piece size", f"{int(piece.get('chunk_size', 0)):,} bytes (4 MiB)" if piece else "", LABEL_LG)
+        kv_row(body, "Piece size", f"{int(piece.get('chunk_size', 0)):,} bytes" if piece else "", LABEL_LG)
         kv_row(body, "Piece count", str(piece.get("count", "")) if piece else "", LABEL_LG)
-        kv_row(body, "Piece hashes", f"Recorded ({int(piece.get('count', 0)):,})" if piece else "", LABEL_LG)
-        section_head(body, "Manifest, Encryption & Paths")
+        hashes = piece.get("hashes")
+        count = len(hashes) if isinstance(hashes, list) else 0
+        kv_row(body, "Piece hashes", f"Recorded ({count:,})  Ctrl+K", LABEL_LG)
+
+        section_head(body, "Acquisition metadata")
+        kv_row(body, "Acquisition ID", str(operation.id), LABEL_LG)
+        kv_row(body, "Format", str(manifest.get("format", "RAW")), LABEL_LG)
+        kv_row(body, "Acquisition scope", "image extent / source capacity", LABEL_LG)
+        kv_row(body, "Source bytes read", f"{copied - zero_filled:,} bytes", LABEL_LG)
+        kv_row(body, "Image bytes written", f"{copied:,} bytes", LABEL_LG)
+        kv_row(body, "Unacquired bytes", f"{expected - copied:,} bytes", LABEL_LG)
+        kv_row(body, "Zero-filled bytes", f"{zero_filled:,} bytes", LABEL_LG)
+        reason = (
+            operation.failure_category.value.replace("_", " ").title()
+            if operation.failure_category
+            else ("Acquisition limit reached" if copied < expected else "")
+        )
+        kv_row(body, "Termination reason", reason, LABEL_LG)
+        kv_row(body, "Tool version", str(manifest.get("tool_version", "")), LABEL_LG)
+
+        section_head(body, "Manifest & encryption")
         kv_row(body, "Manifest version", str(manifest.get("manifest_version", "")), LABEL_LG)
         kv_row(body, "Manifest created", str(manifest.get("created_at", "")), LABEL_LG)
-        kv_row(body, "Tool version", str(manifest.get("tool_version", "")), LABEL_LG)
-        kv_row(body, "Cipher", "AES-256-GCM", LABEL_LG)
-        kv_row(body, "Key derivation", "PBKDF2-HMAC-SHA256", LABEL_LG)
-        kv_row(body, "Iterations", "600,000", LABEL_LG)
-        kv_row(body, "Sealed size", f"{int(encryption.get('sealed_size_bytes', 0)):,} bytes", LABEL_LG)
+        kv_row(body, "Cipher", "AES-256-GCM" if encryption else "", LABEL_LG)
+        kv_row(body, "Key derivation", "PBKDF2-HMAC-SHA256" if encryption else "", LABEL_LG)
+        kv_row(body, "Iterations", "600,000" if encryption else "", LABEL_LG)
+        kv_row(
+            body,
+            "Sealed size",
+            f"{int(encryption.get('sealed_size_bytes', 0)):,} bytes" if encryption else "",
+            LABEL_LG,
+        )
         kv_row(body, "Image path", image_path, LABEL_LG)
         kv_row(body, "Manifest path", manifest_path, LABEL_LG)
         kv_row(body, "Sealed path", sealed, LABEL_LG)
-        section_head(body, "Source Diagnostics & Audit")
+
+        section_head(body, "Diagnostics & audit")
         kv_row(body, "Source kind", operation.source_kind.value if operation.source_kind else "", LABEL_LG)
         kv_row(body, "Adapter", operation.source_adapter or "", LABEL_LG)
         kv_row(
             body,
-            "Inspected",
+            "Inspected at",
             operation.source_inspected_at.strftime(UTC_TIMESTAMP_FORMAT) if operation.source_inspected_at else "",
             LABEL_LG,
         )
         synthetic = manifest.get("synthetic")
         if not isinstance(synthetic, bool):
             synthetic = (operation.source_serial or "").startswith("SYNTH-")
-        kv_row(body, "Synthetic", "yes" if synthetic else "no", LABEL_LG)
+        kv_row(body, "Synthetic source", "yes" if synthetic else "no", LABEL_LG)
+        kv_row(body, "Write protection", operation.source_protection or "Unknown", LABEL_LG)
+        kv_row(body, "Blocker mode", str(manifest.get("blocker_mode") or operation.blocker_mode.value), LABEL_LG)
+        kv_row(body, "Evidence class", str(manifest.get("evidence_class") or "UNCLASSIFIED"), LABEL_LG)
         kv_row(body, "Audit references", "Acquisition events in Audit tab", LABEL_LG)
 
     def _manifest_for_render(self, operation: ImagingOperation, sample: bool) -> dict[str, object]:

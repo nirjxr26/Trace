@@ -299,14 +299,15 @@ async def test_imaging_dossier_shows_full_operation_detail(session_manager: Data
         view._update_progress(50, 100)
         detail = str(app.query_one("#imaging-dossier", Static).render())
         assert case.number in detail
-        assert "PARTIAL" in detail
-        assert "50%" in detail
-        assert "Acquisition ID" in detail
+        assert "PREPARING" in detail
+        assert "Coverage" in detail
+        assert "Acquisition ID" not in detail
         assert "SOURCE EVIDENCE" in detail
         assert "Ctrl+A — expand advanced details" in detail
         view.action_toggle_advanced()
         detail = str(app.query_one("#imaging-dossier", Static).render())
-        assert "Manifest, Encryption & Paths" in detail
+        assert "Acquisition ID" in detail
+        assert "Manifest & encryption" in detail
 
     assert "tab-imaging" not in TAB_HINTS
     assert "Ctrl+P Commands" in TAB_HINTS["imaging"]
@@ -326,17 +327,18 @@ async def test_imaging_preview_shows_labelled_sample_data(session_manager: Datab
         view.action_toggle_preview()
         detail = str(view.query_one("#imaging-dossier", Static).render())
         assert "SAMPLE — NOT EVIDENCE" in detail
-        assert "c68aac89-bd30-4c73-91ca-4d878e09c370" in detail
+        assert "c68aac89-bd30-4c73-91ca-4d878e09c370" not in detail
         assert "SanDisk Cruzer Blade" in detail
-        assert "97.65%" in detail
+        assert "Coverage" in detail
         assert "Source read" in detail
         assert "187,654,322" in detail
         assert "ACQUISITION EXCEPTIONS" in detail
-        assert "Not recovered" in detail
+        assert "Original data not recovered" in detail
         view.action_toggle_advanced()
         advanced = str(view.query_one("#imaging-dossier", Static).render())
-        assert "Integrity & Verification" in advanced
-        assert "Method" in advanced
+        assert "c68aac89-bd30-4c73-91ca-4d878e09c370" in advanced
+        assert "Integrity & verification" in advanced
+        assert "Verification method" in advanced
         assert "Key derivation" in advanced
         assert "9f2c1a7b4e6d5830f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708" in advanced
         view.action_toggle_preview()
@@ -359,3 +361,51 @@ async def test_case_dossier_reports_unavailable_imaging_records(
         content = tui.query_one("#case-dossier", Static).render()
         text = content.plain if isinstance(content, Text) else str(content)
         assert "Imaging records unavailable." in text
+
+
+@pytest.mark.anyio
+async def test_imaging_primary_dossier_uses_forensic_verdicts(session_manager: DatabaseSessionManager) -> None:
+    from textual.widgets import Static
+
+    from trace_core.tui.screens.imaging import ImagingView
+
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(110, 40)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        view = app.query_one(ImagingView)
+        view.action_toggle_preview()
+        detail = str(view.query_one("#imaging-dossier", Static).render())
+        for label in ("Acquisition", "Integrity", "Evidence", "Coverage", "Examiner", "Started", "Ended"):
+            assert label in detail
+        for hidden in ("Acquisition ID", "Image written", "Coverage base", "Cipher", "Manifest version"):
+            assert hidden not in detail
+        view.action_toggle_advanced()
+        advanced = str(view.query_one("#imaging-dossier", Static).render())
+        for section in (
+            "Integrity & verification",
+            "Acquisition metadata",
+            "Manifest & encryption",
+            "Diagnostics & audit",
+        ):
+            assert section in advanced
+
+
+@pytest.mark.anyio
+async def test_imaging_inspect_modals_open(session_manager: DatabaseSessionManager) -> None:
+    from trace_core.tui.screens.imaging import BadRegionsModal, ImagingView, PieceHashesModal
+
+    app = TraceApp(session_manager)
+    async with app.run_test(size=(110, 40)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        view = app.query_one(ImagingView)
+        view.action_toggle_preview()
+        await pilot.press("ctrl+k")
+        await pilot.pause()
+        assert isinstance(app.screen, PieceHashesModal)
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("ctrl+h")
+        await pilot.pause()
+        assert isinstance(app.screen, BadRegionsModal)
