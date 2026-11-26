@@ -73,7 +73,7 @@ async def test_check_updates_reports_system_up_to_date(
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         modal = await _open_updates(pilot, app)
-        text = await _wait_detail(pilot, modal, "Update not available")
+        text = await _wait_detail(pilot, modal, "System is up to date")
         assert "install" not in text.lower()
 
 

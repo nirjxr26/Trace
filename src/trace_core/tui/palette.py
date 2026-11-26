@@ -183,14 +183,14 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
             )
 
     async def _fill(self, query: str) -> None:
-        scoped = [
-            command for command in _BY_ID if command == "app-status" or command_scope(command) == self._active_tab
-        ]
+        scoped = [command for command in _BY_ID if command_scope(command) == self._active_tab]
         if query:
-            rows = self._search_rows(query, scoped)
+            rows = self._search_rows(query, [*scoped, "app-status"])
         else:
             rows = [("head", "In this tab")]
             rows.extend(("cmd", command) for command in scoped)
+            rows.append(("head", "Settings"))
+            rows.append(("cmd", "app-status"))
         view = self.query_one(PALETTE_LIST_SELECTOR, ListView)
         await view.clear()
         self._append_rows(view, rows)

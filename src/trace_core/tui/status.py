@@ -212,8 +212,10 @@ class StatusModal(_BaseModal, ModalScreen[None]):
             self.call_later(self._update_detail, self._bad(f"Check failed · {_detail(exc)}"))
             return
         target = str((payload or {}).get("target") or "")
-        detail = (
-            f"Update available to {target}\nInstall with: trace update install" if target else "Update not available"
+        detail: str | Text = (
+            f"Update available to {target}\nInstall with: trace update install"
+            if target
+            else self._good("\u2713 System is up to date")
         )
         self.call_later(self._update_detail, detail)
 
@@ -224,10 +226,10 @@ class StatusModal(_BaseModal, ModalScreen[None]):
             self.call_later(self._update_detail, self._bad(f"Check failed · {_detail(exc)}"))
             return
         body = Text()
-        for index, (_, _, passed) in enumerate(rows):
-            if index:
-                body.append("  ")
+        for name, _, passed in rows:
+            body.append(f"{name:<28}")
             body.append("PASS" if passed else "FAIL", style=DOT_OK if passed else DOT_BAD)
+            body.append("\n")
         self.call_later(self._update_detail, body)
 
 

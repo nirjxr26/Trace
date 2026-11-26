@@ -637,7 +637,7 @@ async def test_palette_shows_only_the_active_tab_commands(
         view = modal.query_one("#palette-list", ListView)
         children = list(view.children)
         heads = [str(child.query_one(".group-label").render()) for child in children if "group-head" in child.classes]
-        assert heads == ["In this tab"]
+        assert heads == ["In this tab", "Settings"]
         ids = [child.id for child in children if child.id]
         assert ids
         assert all(command == "app-status" or command_scope(command) == "imaging" for command in ids)

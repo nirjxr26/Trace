@@ -56,8 +56,8 @@ async def test_system_status_row_and_detail(
         assert isinstance(modal, StatusModal)
         assert "Settings" in _text(modal.query_one("#status-title", Static))
         text = await _wait(pilot, app, "#status-detail", "PASS")
+        assert "Database" in text
         assert "FAIL" not in text
-        assert "Database" not in text
 
 
 async def test_database_and_integrity_statuses(
@@ -179,4 +179,4 @@ async def test_updates_popup_reports_no_update(
         await pilot.press("enter")
         await pilot.pause()
         text = await _wait(pilot, app, "#status-detail", "System is up to date")
-        assert "Update not available" in text
+        assert "System is up to date" in text
