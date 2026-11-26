@@ -205,7 +205,7 @@ class StatusModal(_BaseModal, ModalScreen[None]):
     async def _load_updates(self) -> None:
         from trace_core.updates.checker import peek_cached_update
 
-        await asyncio.sleep(0.15)
+        await asyncio.sleep(0.4)
         try:
             payload = peek_cached_update()
         except Exception as exc:
