@@ -81,7 +81,7 @@ def test_blocker_mode_defaults_to_none() -> None:
         piecewise=ImagingPiecewise(chunk_size=1024, count=0),
         created_at=now_utc(),
         finished_at=now_utc(),
-        tool_version="0.5.1",
+        tool_version="0.6.0",
     )
     assert operation.blocker_mode is BlockerMode.NONE
     assert manifest.blocker_mode is BlockerMode.NONE

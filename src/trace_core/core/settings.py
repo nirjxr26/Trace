@@ -38,7 +38,7 @@ def _unknown_trace_settings(known: set[str]) -> set[str]:
 class Settings(BaseSettings):
     """Trace runtime settings."""
 
-    version: str = "0.5.1"
+    version: str = "0.6.0"
     # Alias-only binding: the documented TRACE_DEBUG name wins, and a stray
     # bare DEBUG in the environment can no longer crash startup with a bool error.
     debug: bool = Field(default=False, alias="TRACE_DEBUG")

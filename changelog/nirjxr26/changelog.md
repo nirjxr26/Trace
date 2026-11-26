@@ -5827,3 +5827,8 @@ irjxr26, which would imply changelog/nirjxr26/. Appended to the existing changel
 - Summary: Rewrite the imaging dossier around five forensic questions. Primary view shows source identity, three independent verdicts, adaptive coverage, conditional warnings, acquisition timing, combined write protection, result metrics, exceptions, and artifact status. Technical fields move to four Advanced sections; piece hashes and full bad-region lists open in inspectable modals.
 - Files: changelog/nirjxr26/changelog.md, src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_ui.py.
 - Verification: ruff format --check ., ruff check ., mypy --platform linux src tests passed; imaging UI batch 15 passed; full suite pending.
+
+## 2026-11-26
+- Summary: Release v0.6.0. Bump version in project metadata, README, settings, lockfile, and sample tool version. Includes the palette redesign, centered Settings popup, forensic imaging dossier, theme simplification, audit dossier cleanup, startup improvements, and storage ACL repair command.
+- Files: README.md, pyproject.toml, uv.lock, src/trace_core/__init__.py, src/trace_core/core/settings.py, src/trace_core/tui/screens/imaging.py, tests/unit/test_imaging_blocker_mode.py, changelog/nirjxr26/changelog.md.
+- Verification: ruff format --check ., ruff check ., mypy --platform linux src tests passed; full CI green on PR #35 before merge.
