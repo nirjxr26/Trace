@@ -7,9 +7,7 @@ from typing import Any, Literal
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from trace_core.core.logging import get_logger
-
-logger = get_logger()
+from trace_core.core.logging import logger
 
 DEV_SECRET_SENTINEL = "trace-local-dev-key-change-in-production"
 # Shipped default database URL. Named once so the guard below cannot drift from the

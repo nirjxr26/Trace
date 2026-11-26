@@ -44,8 +44,7 @@ COMMANDS: list[tuple[str, str, str]] = [
     ("imaging-unseal", "Unseal image", "decrypt + verify"),
     ("imaging-change-case", "Choose case", "case picker"),
     ("imaging-progress-preview", "Preview progress", "static layout"),
-    ("database-migrate", "Migrate DB", "pending only"),
-    ("updates-check", "Check updates", "available version"),
+    ("app-status", "Settings", "db · updates · audit"),
 ]
 
 COMMAND_META: dict[str, tuple[str, str]] = {
@@ -78,12 +77,18 @@ COMMAND_META: dict[str, tuple[str, str]] = {
     "imaging-unseal": ("Imaging", "u"),
     "imaging-change-case": ("Imaging", "c"),
     "imaging-progress-preview": ("Imaging", "Ctrl+G"),
-    "database-migrate": ("Settings", "m"),
-    "updates-check": ("Settings", "c"),
+    "app-status": ("Settings", "s"),
 }
 
-GROUP_ORDER = ("Navigate", "Cases", "Devices", "Audit", "Imaging", "Settings")
 _BY_ID = {command: (label, hint) for command, label, hint in COMMANDS}
+_SHORTCUT_OVERRIDES = {"audit-export": "ctrl+x l", "audit-anchor": "ctrl+x n"}
+
+
+def shortcut_label(command: str) -> str:
+    key = COMMAND_META[command][1]
+    if command in _SHORTCUT_OVERRIDES:
+        return _SHORTCUT_OVERRIDES[command]
+    return f"ctrl+x {key}" if len(key) == 1 else key
 
 
 def command_scope(command: str) -> str | None:
@@ -93,41 +98,41 @@ def command_scope(command: str) -> str | None:
     return meta[0].lower()
 
 
-class PaletteModal(_BaseModal, ModalScreen[str | None]):
-    """Fuzzy command search. Enter runs, Esc backs out."""
-
-    BINDINGS = [
-        Binding("escape", "dismiss_cancel", "Back"),
-        Binding("down", "list_down", "Next", priority=True),
-        Binding("up", "list_up", "Prev", priority=True),
-    ]
-
-    CSS = """
+PALETTE_CSS = """
     PaletteModal { align: center middle; }
-    #palette-box { width: 54; height: auto; max-height: 28; border: none; background: $surface-elevated; padding: 1 2; }
+    #palette-box { width: 56; height: auto; max-height: 22; border: none; background: $surface-elevated; padding: 2 3; }
     #palette-head { height: 1; margin-bottom: 1; }
-    #palette-title { width: auto; color: $text; text-style: bold; }
-    #palette-context { width: 1fr; color: $muted; text-align: right; }
-    #palette-esc { width: auto; color: $muted; text-align: right; margin-left: 2; }
-    #palette-search { height: 1; align: center middle; }
-    #palette-input { width: 1fr; height: 1; border: none; background: $surface-elevated; padding: 0 1; }
+    #palette-esc { width: auto; color: $muted; text-align: right; }
+    #palette-input { width: 1fr; height: 1; border: none; background: $surface-elevated; padding: 0 0 0 1; }
     #palette-input:focus { border: none; background: $surface-elevated; background-tint: transparent; }
-    #palette-list { height: auto; max-height: 17; margin-top: 1; scrollbar-size: 0 0; background: $surface-elevated; }
+    #palette-list { height: auto; max-height: 12; margin-top: 1; scrollbar-size: 0 0; background: $surface-elevated; }
     #palette-list > ListItem { height: 1; background: transparent; }
     #palette-list > ListItem.group-head { background: transparent; margin-top: 1; }
     #palette-list > ListItem.group-head:first-child { margin-top: 0; }
     #palette-list > ListItem.-highlight,
-    #palette-list > ListItem:hover { background: $palette-active; color: $text; border-left: thick $palette-bar; }
+    #palette-list > ListItem:hover { background: $surface-active; color: $text; border-left: heavy $palette-bar; }
     #palette-list > ListItem.-highlight Static,
     #palette-list > ListItem:hover Static { color: $text; }
     #palette-list > ListItem.-highlight .cmd-key,
     #palette-list > ListItem:hover .cmd-key { color: $muted; }
-    .group-label { color: $muted; text-style: bold; }
+    .group-label { color: $accent; padding-left: 1; }
+    .category-label { color: $text; padding-left: 1; }
     .cmd-columns { height: 1; padding: 0 1; }
     .cmd-label { width: 1fr; }
     .cmd-key { width: auto; min-width: 4; text-align: right; color: $muted; }
-    #palette-foot { height: 1; color: $muted; margin-top: 1; }
     """
+
+
+class PaletteModal(_BaseModal, ModalScreen[str | None]):
+    """Fuzzy command search. Enter runs, Esc backs out."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_cancel", "Close"),
+        Binding("down", "list_down", "Next", priority=True),
+        Binding("up", "list_up", "Prev", priority=True),
+    ]
+
+    CSS = PALETTE_CSS
 
     def __init__(self, active_tab: str = "cases") -> None:
         super().__init__()
@@ -136,13 +141,9 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="palette-box"):
             with Horizontal(id="palette-head"):
-                yield Static("Commands", id="palette-title")
-                yield Static("", id="palette-context")
+                yield Input(placeholder="Search commands", id="palette-input")
                 yield Static("esc", id="palette-esc")
-            with Horizontal(id="palette-search"):
-                yield Input(placeholder="Search commands…", id="palette-input")
             yield ListView(id="palette-list")
-            yield Static("Enter run   ↑↓ move   esc close", id="palette-foot")
 
     async def on_mount(self) -> None:
         await self._fill("")
@@ -150,15 +151,13 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
         search.cursor_blink = False
         search.focus()
 
-    def _search_rows(self, query: str, scoped: list[str], context: Static) -> list[tuple[str, str]]:
-        ordered = scoped + [command for command in _BY_ID if command not in scoped]
+    def _search_rows(self, query: str, scoped: list[str]) -> list[tuple[str, str]]:
         candidates: list[tuple[str, str]] = []
-        for command in ordered:
+        for command in scoped:
             label, hint = _BY_ID[command]
             group, key = COMMAND_META[command]
             candidates.append((f"{command} {label} {hint} {key} {group}", command))
         matches = [command for _, command in filter_completions(candidates, query, limit=12)]
-        context.update(f"Results · {len(matches)}   {self._active_tab.title()}")
         if not matches:
             return [("head", f'No commands match "{query}"')]
         rows: list[tuple[str, str]] = [("head", "Results")]
@@ -171,12 +170,11 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
                 view.append(ListItem(Static(value, classes="group-label"), disabled=True, classes="group-head"))
                 continue
             label = _BY_ID[value][0]
-            key = COMMAND_META[value][1]
             view.append(
                 ListItem(
                     Horizontal(
                         Static(label, classes="cmd-label"),
-                        Static(key, classes="cmd-key"),
+                        Static(shortcut_label(value), classes="cmd-key"),
                         classes="cmd-columns",
                     ),
                     id=value,
@@ -185,21 +183,14 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
             )
 
     async def _fill(self, query: str) -> None:
-        scoped = [command for command in _BY_ID if command_scope(command) == self._active_tab]
-        context = self.query_one("#palette-context", Static)
+        scoped = [
+            command for command in _BY_ID if command == "app-status" or command_scope(command) == self._active_tab
+        ]
         if query:
-            rows = self._search_rows(query, scoped, context)
+            rows = self._search_rows(query, scoped)
         else:
-            context.update(f"{self._active_tab.title()} · {len(scoped)} actions here")
             rows = [("head", "In this tab")]
             rows.extend(("cmd", command) for command in scoped)
-            for group in GROUP_ORDER:
-                if group.lower() == self._active_tab:
-                    continue
-                members = [command for command, meta in COMMAND_META.items() if meta[0] == group]
-                if members:
-                    rows.append(("head", group))
-                    rows.extend(("cmd", command) for command in members)
         view = self.query_one(PALETTE_LIST_SELECTOR, ListView)
         await view.clear()
         self._append_rows(view, rows)
@@ -215,17 +206,18 @@ class PaletteModal(_BaseModal, ModalScreen[str | None]):
     async def _typed(self, event: Input.Changed) -> None:
         await self._fill(event.value)
 
+    async def _choose(self, target: str | None) -> None:
+        self.dismiss(target)
+
     @on(Input.Submitted)
-    def _submitted(self, event: Input.Submitted) -> None:
+    async def _submitted(self, event: Input.Submitted) -> None:
         view = self.query_one(PALETTE_LIST_SELECTOR, ListView)
         highlighted = view.highlighted_child
-        target = highlighted.id if highlighted is not None else None
-        self.dismiss(target or None)
+        await self._choose(highlighted.id if highlighted is not None else None)
 
     @on(ListView.Selected)
-    def _selected(self, event: ListView.Selected) -> None:
-        item_id = event.item.id if event.item is not None else None
-        self.dismiss(item_id if item_id else None)
+    async def _selected(self, event: ListView.Selected) -> None:
+        await self._choose(event.item.id if event.item is not None else None)
 
 
 class KeysModal(_BaseModal, ModalScreen[None]):
@@ -242,7 +234,7 @@ class KeysModal(_BaseModal, ModalScreen[None]):
         (
             "Navigation",
             (
-                ("1 – 5", "switch tabs  Cases · Devices · Imaging · Audit · Settings"),
+                ("1 – 4", "switch tabs  Cases · Devices · Imaging · Audit"),
                 ("← / →", "prev / next tab"),
                 ("↑ / ↓", "move / select"),
                 ("Enter", "open / select"),
@@ -284,14 +276,11 @@ class KeysModal(_BaseModal, ModalScreen[None]):
             ),
         ),
         (
-            "Audit · Settings",
+            "Audit",
             (
                 ("s", "scope to case  (Audit)"),
                 ("e", "export bundle  (Audit)"),
                 ("a", "verify against anchor  (Audit)"),
-                ("m", "apply migrations  (Settings · Database)"),
-                ("c", "check updates  (Settings · Updates)"),
-                ("v", "verify chain  (Settings · Integrity)"),
             ),
         ),
     )

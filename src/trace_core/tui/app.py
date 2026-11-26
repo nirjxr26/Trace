@@ -1,5 +1,9 @@
 """Fullscreen Trace console shell: tabs, hint bar, palette, global keys."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
@@ -7,20 +11,21 @@ from textual.binding import Binding
 from textual.notifications import SeverityLevel
 from textual.widgets import Static, TabbedContent, TabPane
 
-from trace_core.core.database.session import DatabaseSessionManager
 from trace_core.core.ui.theme import THEME_HEX
 from trace_core.tui.design.css import APP_CSS
 from trace_core.tui.theme import TRACE_THEME
+
+if TYPE_CHECKING:
+    from trace_core.core.database.session import DatabaseSessionManager
 
 TAB_HINTS: dict[str, str] = {
     "cases": "↑↓ Navigate   / Search   Ctrl+P Commands   q Quit",
     "devices": "↑↓ Navigate   / Search   Ctrl+P Commands   q Quit",
     "audit": "↑↓ Navigate   Enter Open   / Search   Ctrl+P Commands   q Quit",
-    "settings": "↑↓ Sections   Enter Run   Ctrl+P Commands   q Quit",
     "imaging": "↑↓ Operations   / Search   Ctrl+P Commands   q Quit",
 }
 
-_TAB_ORDER = ("cases", "devices", "imaging", "audit", "settings")
+_TAB_ORDER = ("cases", "devices", "imaging", "audit")
 
 
 def _hint_text(hint: str) -> Text:
@@ -87,7 +92,6 @@ class TraceApp(App[None]):
         from trace_core.tui.screens.cases import CasesView
         from trace_core.tui.screens.devices import DevicesView
         from trace_core.tui.screens.imaging import ImagingView
-        from trace_core.tui.screens.settings import SettingsView
 
         with TabbedContent(initial="cases"):
             with TabPane("Cases", id="cases"):
@@ -98,8 +102,6 @@ class TraceApp(App[None]):
                 yield ImagingView(self._session_manager)
             with TabPane("Audit", id="audit"):
                 yield AuditView(self._session_manager)
-            with TabPane("Settings", id="settings"):
-                yield SettingsView(self._session_manager)
         yield Static(_hint_text(TAB_HINTS["cases"]), id="hint")
 
     def on_mount(self) -> None:
@@ -110,7 +112,7 @@ class TraceApp(App[None]):
             focus()
 
     def action_tab(self, tab_id: str) -> None:
-        self.query_one(TabbedContent).active = tab_id
+        self.query_one(TabbedContent).active = tab_id if tab_id in _TAB_ORDER else "cases"
 
     def action_prev_tab(self) -> None:
         tabs = self.query_one(TabbedContent)
@@ -143,6 +145,11 @@ class TraceApp(App[None]):
         from trace_core.tui.palette import command_scope
 
         command = resolve_palette_command(command)
+        if command == "app-status":
+            from trace_core.tui.status import StatusModal
+
+            self.push_screen(StatusModal(self._session_manager))
+            return
         tabs = self.query_one(TabbedContent)
         if command.startswith("tab-"):
             self.action_tab(command.removeprefix("tab-"))

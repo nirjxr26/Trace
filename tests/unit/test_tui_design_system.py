@@ -84,7 +84,7 @@ def test_shared_css_classes_are_applied() -> None:
     assert "#confirm-box { width: 50;" in forms_source
     assert "#yesno-box { width: 50;" in forms_source
     assert 'f"{label:<23}:' in forms_source
-    assert THEME_HEX["form_bg"] == "#141414"
+    assert THEME_HEX["form_bg"] == "#111111"
     assert "$form-bg" in MODAL_CSS_PREFIX
     assert "form-bg" in TRACE_THEME.variables
 
@@ -93,7 +93,7 @@ def test_shared_css_classes_are_applied() -> None:
         assert "ListDetailPane(" in screen_source
         assert 'classes="pane-table"' in screen_source
 
-    settings_source = (TUI_ROOT / "screens" / "settings.py").read_text(encoding="utf-8")
-    assert 'classes="pane-host"' in settings_source
-    assert 'classes="pane pane-left"' in settings_source
-    assert 'classes="pane pane-right"' in settings_source
+    from trace_core.tui.palette import PALETTE_CSS
+    from trace_core.tui.status import StatusModal
+
+    assert StatusModal.CSS.startswith(PALETTE_CSS)

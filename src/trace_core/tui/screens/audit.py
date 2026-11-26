@@ -247,34 +247,27 @@ class AuditView(TablePane[AuditEventSummaryDto]):
                 key_problem = ""
         return intact, hash_ok, key_problem
 
-    def _append_event_details(
-        self, body: Text, e: AuditEventDto, reason: str, utc: str, ist: str, unreadable: bool
-    ) -> None:
+    def _append_event_details(self, body: Text, e: AuditEventDto, utc: str, ist: str, unreadable: bool) -> None:
         body.append(f"#{e.seq} · {action_title(e.action.value)}\n", style=THEME_TOKENS["accent"])
-        body.append(f"{reason or 'No reason recorded'}\n", style="dim")
         section_head(body, "EVENT DETAILS")
         self._detail_row(body, "Event", e.action.value)
-        self._detail_row(body, "Sequence", str(e.seq))
         self._detail_row(body, "Case", subject_case_label(e.subject_case_number))
         self._detail_row(body, "Actor", e.actor)
         self._detail_row(body, "Timestamp", f"{utc} / {ist}")
-        self._detail_row(body, "Reason", reason)
         if unreadable:
             body.append("unreadable — details cannot be shown\n", style="dim")
 
     def _append_subject_device(self, body: Text, e: AuditEventDto, details: dict) -> str:
-        from trace_core.devices.renderers import device_heading, format_bytes
+        from trace_core.devices.renderers import device_heading
 
         section_head(body, "SUBJECT DEVICE")
         node = str(details.get("node") or "")
         if node:
             record = self._observed().get(node)
             serial = e.subject_device_serial or str(details.get("serial") or "")
-            capacity = record.capacity_bytes if record else None
-            body.append(f"  {sanitize_terminal(device_heading(node, record.model if record else None, capacity))}\n")
+            body.append(f"  {sanitize_terminal(device_heading(node, record.model if record else None, None))}\n")
             self._detail_row(body, "Node", node)
             self._detail_row(body, "Serial", serial)
-            self._detail_row(body, "Capacity", format_bytes(capacity) if capacity is not None else "")
             self._detail_row(body, "Evidence label", str(details.get("label") or ""))
         else:
             body.append("  No subject device recorded.\n", style="dim")
@@ -292,14 +285,6 @@ class AuditView(TablePane[AuditEventSummaryDto]):
                 old = fit_text(format_change_value(before.get(field)), 42)
                 new = fit_text(format_change_value(after.get(field)), 42)
                 self._detail_row(body, field.replace("_", " ").title(), f"{old} → {new}")
-
-    def _append_related_records(self, body: Text, e: AuditEventDto, details: dict, node: str) -> None:
-        section_head(body, "RELATED RECORDS")
-        related = self._observed().get(node) if node else None
-        device = str(details.get("model") or (related.model if related else ""))
-        self._detail_row(body, "Case", subject_case_label(e.subject_case_number))
-        self._detail_row(body, "Device", device)
-        self._detail_row(body, "Imaging", str(details.get("operation_id") or ""))
 
     def render_detail(self) -> None:
         from datetime import UTC
@@ -320,12 +305,10 @@ class AuditView(TablePane[AuditEventSummaryDto]):
         body = Text()
         utc = e.ts.astimezone(UTC).strftime("%H:%M:%S UTC")
         ist = e.ts.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S IST")
-        reason = str(details.get("reason") or "").strip()
-        self._append_event_details(body, e, reason, utc, ist, unreadable)
-        node = self._append_subject_device(body, e, details)
+        self._append_event_details(body, e, utc, ist, unreadable)
+        self._append_subject_device(body, e, details)
         self._append_recorded_changes(body, details)
         self._append_integrity(body, e, intact, hash_ok, key_problem)
-        self._append_related_records(body, e, details, node)
         self.query_one(f"#{AUDIT_DETAIL_ID}", Static).update(body)
 
     def run_command(self, command: str) -> None:

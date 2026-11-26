@@ -53,6 +53,16 @@ def launch_doctor() -> None:
     run_doctor()
 
 
+@app.command("tighten-storage")
+def tighten_storage() -> None:
+    """Recursively remove broad Windows ACL grants from the storage tree."""
+    from trace_core.core.fs import tighten_tree
+    from trace_core.core.settings import settings
+
+    tighten_tree(settings.storage_root)
+    typer.echo("Storage ACL tightened.")
+
+
 @app.command("recovery")
 def launch_recovery() -> None:
     from trace_core.core.cli.recovery import run_recovery

@@ -95,26 +95,15 @@ async def test_tui_pilot_flow(seeded_manager: DatabaseSessionManager) -> None:
         assert "Case details updated" in _text(app.query_one("#audit-detail", Static))
         assert "Seq" in app.export_screenshot()
 
-        await pilot.press("5")
+        app._palette_done("app-status")
         await pilot.pause()
-        assert app.query_one(TabbedContent).active == "settings"
-        from textual.widgets import ListView, Static
+        from trace_core.tui.status import StatusModal
 
-        sections = app.query_one("#settings-sections", ListView)
-        assert len(list(sections.children)) == 5
-        labels = [_text(item.query_one(Static)) for item in sections.children]
-        assert sum(label.endswith("Storage & Paths") for label in labels) == 1, labels
-        assert "Database" in _text(app.query_one("#settings-detail", Static))
-        assert "Connected" in _text(app.query_one("#settings-detail", Static))
+        assert isinstance(app.screen, StatusModal)
+        from textual.widgets import ListView
 
-        await pilot.press("down")
-        await pilot.pause()
-        detail = _text(app.query_one("#settings-detail", Static))
-        assert "Installed version" in detail
-
-        await pilot.press("down")
-        await pilot.pause()
-        assert "Valid" in _text(app.query_one("#settings-detail", Static))
+        rows = [child.id for child in app.screen.query_one("#palette-list", ListView).children]
+        assert rows == ["row-database", "row-updates", "row-system", "row-integrity"]
 
 
 async def test_modals_back_out_on_escape(seeded_manager: DatabaseSessionManager) -> None:
@@ -175,19 +164,16 @@ async def test_case_form_typing_and_enter_flow() -> None:
 
 async def test_tui_palette_routing(seeded_manager: DatabaseSessionManager) -> None:
     """Palette command ids route to tabs without typing."""
-    from textual.widgets import TabbedContent
-
     app = TraceApp(seeded_manager)
     async with app.run_test():
-        app._palette_done("tab-settings")
-        await app.workers.wait_for_complete()
-        assert app.query_one(TabbedContent).active == "settings"
-        app._palette_done("tab-integrity")
-        await app.workers.wait_for_complete()
-        assert app.query_one(TabbedContent).active == "settings"
-        app._palette_done("tab-database")
-        await app.workers.wait_for_complete()
-        assert app.query_one(TabbedContent).active == "settings"
+        from trace_core.tui.status import StatusModal
+
+        for command in ("tab-settings", "tab-integrity", "tab-database"):
+            app._palette_done(command)
+            await app.workers.wait_for_complete()
+            assert isinstance(app.screen, StatusModal)
+            app.pop_screen()
+            await app.workers.wait_for_complete()
         app._palette_done(None)
         app._palette_done("no-such-command")
 
@@ -343,38 +329,25 @@ async def test_no_dossier_shows_a_scrollbar(session_manager, device_file_env, ke
 
 
 @pytest.mark.anyio
-async def test_settings_headers_share_row_and_spacing(session_manager) -> None:
-    """Settings title and subtitle align with the detail title and subtitle, and the
-    section list starts on the same row as the detail body. Measured from painted cells."""
+async def test_status_popup_uses_palette_layout(session_manager) -> None:
+    """The status popup shares the palette CSS and keeps labels and values on one row."""
     from trace_core.tui.app import TraceApp
+    from trace_core.tui.palette import PALETTE_CSS
+    from trace_core.tui.status import StatusModal
 
+    assert StatusModal.CSS.startswith(PALETTE_CSS)
     app = TraceApp(session_manager)
     async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.press("5")
+        app._palette_done("app-status")
         await pilot.pause()
         await pilot.pause()
+        assert isinstance(app.screen, StatusModal)
         strips = app.screen._compositor.render_strips()
-        left = app.screen.query_one("#settings-left")
-        content = left.content_region
-        rows = range(content.y, content.y + 12)
-
-        def row_with(needle: str, lo: int, hi: int) -> int:
-            for y in rows:
-                if needle in strips[y].text[lo:hi]:
-                    return y
-            raise AssertionError(f"{needle!r} not painted in cols {lo}-{hi}")
-
-        assert row_with("Settings", 0, 40) == row_with("Database", 40, 120), (
-            "the Settings and detail titles must share a row"
-        )
-        assert row_with("System configuration", 0, 40) == row_with("Connection & migrations", 40, 120), (
-            "the Settings and detail subtitles must share a row"
-        )
-        list_row = row_with("\u203a Database", 0, 40)
-        body_row = row_with("Connected", 40, 120)
-        assert list_row == body_row, (
-            f"section list (row {list_row}) and detail body (row {body_row}) must start together"
-        )
+        painted = "\n".join(strip.text for strip in strips)
+        assert "Migrate DB" in painted
+        assert "Check updates" in painted
+        assert "System status" in painted
+        assert "Audit integrity" in painted
 
 
 @pytest.mark.anyio
@@ -465,7 +438,6 @@ async def test_background_tabs_skip_mount_fetch(session_manager, monkeypatch) ->
     from trace_core.tui.screens import audit as audit_mod
     from trace_core.tui.screens import cases as cases_mod
     from trace_core.tui.screens import devices as devices_mod
-    from trace_core.tui.screens.settings import SettingsView
 
     counts: dict[str, int] = {}
     for mod, cls_name in (
@@ -487,13 +459,6 @@ async def test_background_tabs_skip_mount_fetch(session_manager, monkeypatch) ->
         return real_scan(self, *args, **kwargs)
 
     monkeypatch.setattr(devices_mod.DevicesView, "_start_scan", counting_scan)
-    real_settings = SettingsView.refresh_data
-
-    def counting_settings(self):  # type: ignore[no-untyped-def]
-        counts["SettingsView"] = counts.get("SettingsView", 0) + 1
-        return real_settings(self)
-
-    monkeypatch.setattr(SettingsView, "refresh_data", counting_settings)
 
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
@@ -501,16 +466,14 @@ async def test_background_tabs_skip_mount_fetch(session_manager, monkeypatch) ->
         await pilot.pause()
         assert counts.get("DevicesView", 0) == 0, f"devices fetched before visit: {counts}"
         assert counts.get("AuditView", 0) == 0, f"audit fetched before visit: {counts}"
-        assert counts.get("SettingsView", 0) == 0, f"settings fetched before visit: {counts}"
         assert counts.get("CasesView", 0) >= 1, "initial tab never fetched"
-        for key in ("2", "3", "4", "5"):
+        for key in ("2", "3", "4"):
             await pilot.press(key)
             await pilot.pause()
             await pilot.pause()
         await _settle(app, pilot)
         assert counts.get("DevicesView", 0) >= 1, "devices tab blank after visit"
         assert counts.get("AuditView", 0) >= 1, "audit tab blank after visit"
-        assert counts.get("SettingsView", 0) >= 1, "settings tab blank after visit"
 
 
 @asynccontextmanager
@@ -631,8 +594,10 @@ def test_the_palette_and_keys_offer_only_what_the_tui_runs() -> None:
     from trace_core.tui.palette import COMMANDS, KeysModal
 
     names = {entry[0] for entry in COMMANDS}
-    assert {"updates-check", "audit-anchor", "database-migrate"} <= names
-    assert not {"updates-install", "uninstall"} & names, "the TUI installs and uninstalls only through the CLI"
+    assert {"app-status", "audit-anchor"} <= names
+    assert not {"updates-install", "uninstall", "database-migrate", "updates-check"} & names, (
+        "settings actions live in the status popup, not as palette commands"
+    )
     advertised = " ".join(f"{key} {description}" for _, items in KeysModal.GROUPS for key, description in items)
     assert "install update" not in advertised
 
@@ -657,12 +622,12 @@ def test_palette_action_titles_are_short() -> None:
     assert all(" — " not in label for _, label, _ in COMMANDS)
 
 
-async def test_palette_groups_the_active_tab_first_and_keeps_every_command(
+async def test_palette_shows_only_the_active_tab_commands(
     session_manager: DatabaseSessionManager,
 ) -> None:
-    from textual.widgets import ListView
+    from textual.widgets import Input, ListView
 
-    from trace_core.tui.palette import COMMANDS, PaletteModal, command_scope
+    from trace_core.tui.palette import PaletteModal, command_scope
 
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
@@ -672,12 +637,17 @@ async def test_palette_groups_the_active_tab_first_and_keeps_every_command(
         view = modal.query_one("#palette-list", ListView)
         children = list(view.children)
         heads = [str(child.query_one(".group-label").render()) for child in children if "group-head" in child.classes]
-        assert heads[0] == "In this tab"
+        assert heads == ["In this tab"]
         ids = [child.id for child in children if child.id]
-        assert len(ids) == len(COMMANDS)
-        assert set(ids) == {command for command, _, _ in COMMANDS}
-        scoped = [command for command in ids if command_scope(command) == "imaging"]
-        assert ids[: len(scoped)] == scoped
+        assert ids
+        assert all(command == "app-status" or command_scope(command) == "imaging" for command in ids)
+        assert "app-status" in ids
+
+        modal.query_one("#palette-input", Input).value = "seal"
+        await pilot.pause()
+        found = [child.id for child in view.children if child.id]
+        assert found[0] == "imaging-seal"
+        assert all(command_scope(command) == "imaging" for command in found)
 
 
 async def test_palette_arrow_keys_move_the_highlight(session_manager: DatabaseSessionManager) -> None:
@@ -704,7 +674,7 @@ async def test_palette_arrow_keys_move_the_highlight(session_manager: DatabaseSe
 async def test_palette_search_boosts_the_active_tab(session_manager: DatabaseSessionManager) -> None:
     from textual.widgets import Input, ListView
 
-    from trace_core.tui.palette import PaletteModal
+    from trace_core.tui.palette import PaletteModal, command_scope
 
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
@@ -718,10 +688,9 @@ async def test_palette_search_boosts_the_active_tab(session_manager: DatabaseSes
         view = modal.query_one("#palette-list", ListView)
         ids = [child.id for child in view.children if child.id]
         assert ids[0] == "imaging-seal"
-        assert "case-close" in ids
+        assert all(command_scope(command) == "imaging" for command in ids)
         first_label = view.children[1].query_one(".cmd-label")
         assert "Seal image" in str(first_label.render())
-        assert "Imaging" in str(modal.query_one("#palette-context").render())
 
 
 async def test_palette_command_switches_to_its_tab_before_running(

@@ -3,33 +3,34 @@
 from typing import Final
 
 THEME_HEX: Final[dict[str, str]] = {
+    # Surfaces
     "background": "#0C0C0C",
     "surface": "#0C0C0C",
-    "surface_elevated": "#1D1D1F",
-    "surface_active": "#29292C",
-    "border": "#414145",
-    "border_card": "#29292C",
-    "border_subtle": "#272729",
-    "blue": "#8BC4D9",
-    "blue_deep": "#659FB9",
-    "green": "#8ACBB2",
-    "amber": "#D8C18F",
-    "violet": "#B7A5DF",
-    "slate": "#B0B3BA",
-    "red": "#DC9AA8",
-    "red_border": "#B97889",
-    "title": "#EEEEF0",
-    "title_hero": "#FAFAFB",
-    "value": "#E2E2E5",
-    "label": "#C5C5CA",
-    "muted": "#A3A3AA",
-    "disabled": "#77777E",
-    "selection": "#35353C",
-    "tag": "#B7C4D4",
-    "metadata": "#ABABB2",
-    "palette_active": "#A9C5DD",
-    "scrollbar": "#505055",
-    "form_bg": "#141414",
+    "surface_elevated": "#1C1C1E",
+    "surface_active": "#252527",
+    # Structural borders
+    "border": "#303033",
+    "border_card": "#262628",
+    # Semantic accents
+    "blue": "#60A5FA",
+    "blue_deep": "#3B82F6",
+    "green": "#4ADE80",
+    "amber": "#FBBF24",
+    "violet": "#A78BFA",
+    "slate": "#A1A1AA",
+    "red": "#FB7185",
+    # Text — two whites plus disabled
+    "title": "#EEEEEE",
+    "title_hero": "#EEEEEE",
+    "value": "#EEEEEE",
+    "label": "#C5CDD6",
+    "muted": "#C5CDD6",
+    "metadata": "#C5CDD6",
+    "tag": "#C5CDD6",
+    "disabled": "#535D6A",
+    # Interaction
+    "scrollbar": "#424247",
+    "form_bg": "#111111",
 }
 
 THEME_TOKENS: Final[dict[str, str]] = {
@@ -41,10 +42,7 @@ THEME_TOKENS: Final[dict[str, str]] = {
     # STRUCTURAL BORDERS — neutral, very low (solid approximations for Rich)
     "border": THEME_HEX["border"],
     "border_card": THEME_HEX["border_card"],
-    "border_outer": THEME_HEX["border_card"],
-    "border_subtle": THEME_HEX["border_subtle"],
     "border_primary": THEME_HEX["blue_deep"],
-    "border_alert": THEME_HEX["red_border"],
     # TYPOGRAPHY
     "title": f"bold {THEME_HEX['title']}",
     "title_hero": f"bold {THEME_HEX['title_hero']}",
@@ -55,12 +53,8 @@ THEME_TOKENS: Final[dict[str, str]] = {
     # INFORMATION / INTERACTION — blue reserved
     "accent": f"bold {THEME_HEX['blue']}",
     "section_title": f"bold {THEME_HEX['blue']}",
-    "link": THEME_HEX["blue"],
-    "focus": THEME_HEX["blue_deep"],
-    "selection": THEME_HEX["selection"],
     # TAGS / METADATA
     "tag": THEME_HEX["tag"],
-    "metadata": THEME_HEX["metadata"],
     # STATUS
     "status_open": f"bold {THEME_HEX['green']}",
     "status_review": f"bold {THEME_HEX['amber']}",
@@ -75,8 +69,6 @@ THEME_TOKENS: Final[dict[str, str]] = {
     "success": f"bold {THEME_HEX['green']}",
     "warning": f"bold {THEME_HEX['amber']}",
     "danger": f"bold {THEME_HEX['red']}",
-    "info": f"bold {THEME_HEX['blue']}",
     # RECORD STATE
     "record_active": f"bold {THEME_HEX['green']}",
-    "record_deleted": f"bold {THEME_HEX['muted']}",
 }

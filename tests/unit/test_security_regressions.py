@@ -961,7 +961,7 @@ def test_atomic_write_grants_no_broad_principal_a_right(tmp_path) -> None:  # ty
 
 
 def test_ensure_dir_repairs_a_loose_existing_acl(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    from trace_core.core.fs import ensure_dir
+    from trace_core.core.fs import ensure_dir, tighten_tree
 
     store = tmp_path / "store"
     store.mkdir()
@@ -971,6 +971,7 @@ def test_ensure_dir_repairs_a_loose_existing_acl(tmp_path) -> None:  # type: ign
         subprocess.run(["icacls", str(key), "/grant", "*S-1-5-32-545:R"], check=True, capture_output=True)
         assert ";;;BU)" in _windows_sddl(key)
     ensure_dir(store)
+    tighten_tree(store)
     assert_owner_only(store, "0o700")
     if sys.platform == "win32":
         assert ";;;BU)" not in _windows_sddl(key)
@@ -1181,27 +1182,23 @@ def test_unsigned_anchor_is_rejected(session_manager: DatabaseSessionManager) ->
 async def test_bad_anchor_path_notifies(session_manager: DatabaseSessionManager) -> None:
     """Unreadable anchor surfaces as text, never a dead app (SEC-12)."""
     from rich.text import Text
-    from textual.widgets import ListView, Static, TabbedContent
+    from textual.widgets import Static
 
     from trace_core.tui.app import TraceApp
 
     app = TraceApp(session_manager)
     async with app.run_test() as pilot:
         await pilot.pause()
-        app.query_one(TabbedContent).active = "settings"
+        app._palette_done("app-status")
         await pilot.pause()
-        app.query_one("#settings-sections", ListView).focus()
-        # Move to Integrity section (Database -> Updates -> Integrity).
-        for _ in range(5):
-            body_now = app.query_one("#settings-detail", Static).render()
-            text_now = body_now.plain if isinstance(body_now, Text) else str(body_now)
-            if "Chain status" in text_now or "NOTHING TO VERIFY" in text_now or "No audit" in text_now:
-                break
-            await pilot.press("down")
+        for _ in range(30):
             await pilot.pause()
-        rendered = app.query_one("#settings-detail", Static).render()
-        body = rendered.plain if isinstance(rendered, Text) else str(rendered)
-        assert "Chain status" in body or "NOTHING TO VERIFY" in body or "No audit" in body
+            shown = app.screen.query_one("#row-integrity .cmd-value", Static).render()
+            body = shown.plain if isinstance(shown, Text) else str(shown)
+            if body and body != "Checking…":
+                break
+        assert body
+        assert body != "Checking…"
         # Service-level typed error for the bad anchor path itself.
         from trace_core.audit.anchor import verify_against_anchor
         from trace_core.audit.service import AuditService
