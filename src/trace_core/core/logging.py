@@ -23,3 +23,11 @@ def get_logger() -> Any:
     import structlog
 
     return structlog.get_logger()
+
+
+class _LazyLogger:
+    def __getattr__(self, name: str) -> Any:
+        return getattr(get_logger(), name)
+
+
+logger = _LazyLogger()

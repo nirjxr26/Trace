@@ -220,9 +220,9 @@ class CasesView(TablePane[CaseResponseDto]):
         body.append("\u25cf ", style=status_color)
         body.append(f"{status_label}\n", style=f"bold {status_color}")
         body.append("\n")
-        body.append(f"{'Lead Examiner':<15} ", style="dim")
+        body.append(f"{'Lead Examiner':<15} ", style=THEME_TOKENS["muted"])
         body.append(f"{sanitize_terminal(case.lead_examiner or '\u2014')}\n", style=THEME_HEX["value"])
-        body.append(f"{'Tags':<15} ", style="dim")
+        body.append(f"{'Tags':<15} ", style=THEME_TOKENS["muted"])
         if case.tags:
             body.append(sanitize_terminal(" ".join(f"#{t}" for t in case.tags)) + "\n", style=THEME_HEX["tag"])
         else:
@@ -230,15 +230,15 @@ class CasesView(TablePane[CaseResponseDto]):
 
     def _append_meta(self, body, case, rule) -> None:  # type: ignore[no-untyped-def]
         # Timestamp/closure rows plus DESCRIPTION/NOTES sections.
-        body.append(f"{'Opened':<15} ", style="dim")
+        body.append(f"{'Opened':<15} ", style=THEME_TOKENS["muted"])
         body.append(f"{format_india_datetime(case.opened_at)}\n")
-        body.append(f"{'Updated':<15} ", style="dim")
+        body.append(f"{'Updated':<15} ", style=THEME_TOKENS["muted"])
         body.append(f"{format_india_datetime(case.updated_at)}\n")
         if case.closed_at:
-            body.append(f"{'Closed':<15} ", style="dim")
+            body.append(f"{'Closed':<15} ", style=THEME_TOKENS["muted"])
             body.append(f"{format_india_datetime(case.closed_at)}\n")
             if case.closure_reason:
-                body.append(f"{'Reason':<15} ", style="dim")
+                body.append(f"{'Reason':<15} ", style=THEME_TOKENS["muted"])
                 body.append(f"{sanitize_terminal(case.closure_reason)}\n")
         width = max(20, len(str(getattr(rule, "plain", rule))) - 4)
         if case.description:
@@ -311,7 +311,7 @@ class CasesView(TablePane[CaseResponseDto]):
             body.append(f"  {sanitize_terminal(heading)}", style=None if row.current else "dim")
             if row.label:
                 body.append("\n")
-                body.append(f"    {'Label':<10}", style="dim")
+                body.append(f"    {'Label':<10}", style=THEME_TOKENS["muted"])
                 body.append(f"{sanitize_terminal(row.label)}", style=None if row.current else "dim")
         body.append("\n\n")
 

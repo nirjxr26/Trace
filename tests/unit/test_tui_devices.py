@@ -640,10 +640,8 @@ async def test_a_device_link_event_names_the_device(session_manager, device_file
         text = str(getattr(app.screen.query_one(f"#{AUDIT_DETAIL_ID}"), "content", ""))
 
     assert "SUBJECT DEVICE" in text, "the detail must carry its own device section"
-    # The heading names the model and its capacity, not the OS handle - the same rule the
-    # case dossier uses. The synthetic disk's model is its own filename.
     assert "disk-a.dd" in text, "the linked device must be named by its model"
-    assert "2.0 KB" in text, "and its size shown"
+    assert "2.0 KB" not in text, "capacity is no longer part of the audit dossier"
     assert "bag 4471" in text, "and its label carried through"
 
 

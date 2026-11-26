@@ -78,7 +78,7 @@ def _current_user_sid() -> str:
     return _USER_SID
 
 
-def _restrict_windows_acl(path: Path, *, directory: bool) -> None:
+def _restrict_windows_acl(path: Path, *, directory: bool, recursive: bool = False, force: bool = False) -> None:
     if os.name != "nt":
         return
     try:
@@ -86,39 +86,46 @@ def _restrict_windows_acl(path: Path, *, directory: bool) -> None:
     except OSError:
         return
     marker = (info.st_dev, info.st_ino)
-    if _TIGHTENED.get(str(path)) == marker:
+    if not force and _TIGHTENED.get(str(path)) == marker:
         return
     import subprocess
 
     sid = _current_user_sid()
     rights = "(OI)(CI)F" if directory else "F"
-    commands: list[list[str]] = [
-        ["icacls", str(path), "/reset"],
-        ["icacls", str(path), "/inheritance:r"],
-        [
-            "icacls",
-            str(path),
-            "/grant:r",
-            f"*{sid}:{rights}",
-            f"*S-1-5-18:{rights}",
-            f"*S-1-5-32-544:{rights}",
-        ],
-    ]
-    if directory and path.is_dir():
-        commands.append(
+    commands: list[tuple[list[str], bool]] = [
+        (["icacls", str(path), "/reset"], True),
+        (["icacls", str(path), "/inheritance:r"], True),
+        (
             [
                 "icacls",
                 str(path),
-                "/T",
-                "/remove:g",
-                "*S-1-1-0",
-                "*S-1-5-32-545",
-                "*S-1-5-11",
+                "/grant:r",
+                f"*{sid}:{rights}",
+                f"*S-1-5-18:{rights}",
+                f"*S-1-5-32-544:{rights}",
             ],
+            True,
+        ),
+    ]
+    if directory and path.is_dir() and recursive:
+        commands.append(
+            (
+                [
+                    "icacls",
+                    str(path),
+                    "/C",
+                    "/T",
+                    "/remove:g",
+                    "*S-1-1-0",
+                    "*S-1-5-32-545",
+                    "*S-1-5-11",
+                ],
+                False,
+            )
         )
-    for argv in commands:
+    for argv, fatal in commands:
         result = subprocess.run(argv, capture_output=True, text=True, check=False)
-        if result.returncode != 0:
+        if result.returncode != 0 and fatal:
             from trace_core.core.logging import get_logger
 
             get_logger().warning("owner-only ACL not applied", path=str(path), error=result.stderr.strip())
@@ -136,6 +143,11 @@ def ensure_dir(path: str | Path, mode: int = 0o700) -> Path:
     if mode & 0o077 == 0:
         _restrict_windows_acl(target, directory=True)
     return target
+
+
+def tighten_tree(path: str | Path) -> None:
+    """Recursively remove broad ACL grants from an existing storage tree."""
+    _restrict_windows_acl(Path(path), directory=True, recursive=True, force=True)
 
 
 def check_contained(path: str | Path, root: str | Path, *, what: str = "path") -> Path:
