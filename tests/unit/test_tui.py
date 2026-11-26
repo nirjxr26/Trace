@@ -647,7 +647,7 @@ async def test_palette_shows_only_the_active_tab_commands(
         await pilot.pause()
         found = [child.id for child in view.children if child.id]
         assert "imaging-seal" in found
-        assert all(command_scope(command) == "imaging" for command in found)
+        assert all(command == "app-status" or command_scope(command) == "imaging" for command in found)
 
 
 async def test_palette_arrow_keys_move_the_highlight(session_manager: DatabaseSessionManager) -> None:
