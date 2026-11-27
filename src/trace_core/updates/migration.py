@@ -1,11 +1,14 @@
 import contextlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import threading
 from pathlib import Path
+
+import structlog
 
 from trace_core.core.database.session import DatabaseSessionManager, sqlite_file_path
 from trace_core.core.fs import JsonFileVerdict, atomic_write_lines, check_contained, classify_json_file, sqlite_sidecars
@@ -20,6 +23,20 @@ _PG_RESTORE_TIMEOUT_SECONDS = 600
 _PG_BACKUP_TIMEOUT_SECONDS = 300
 _BACKUP_FAILED = "database backup failed"
 BACKUP_PATH_REFUSED = "backup path refused; cannot restore"
+
+_CREDENTIAL_URL_RE = re.compile(r"(://)[^@\s/]+@")
+_CREDENTIAL_KV_RE = re.compile(r"(?i)\b(password|passwd|pwd|token|secret|api[_-]?key)\s*[=:]\s*\S+")
+_SQL_RE = re.compile(
+    r"(?is)\b(?:SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TRUNCATE|REPLACE|VACUUM|PRAGMA|WITH|GRANT|REVOKE)\b[^;]*;?"
+)
+_PATH_RE = re.compile(r"(?:[A-Za-z]:[\\/]|/)[^\s\"'<>|,;]+")
+
+
+def _redact_migration_output(text: str) -> str:
+    text = _CREDENTIAL_URL_RE.sub(r"\1<credentials>@", text)
+    text = _CREDENTIAL_KV_RE.sub(r"\1=<redacted>", text)
+    text = _SQL_RE.sub("<sql>", text)
+    return _PATH_RE.sub("<path>", text)
 
 
 def migration_marker_path() -> Path:
@@ -90,9 +107,15 @@ def begin_update_migration(transaction_id: str) -> None:
 
 def finish_update_migration(transaction_id: str) -> None:
     state, active = marker_state()
-    if state == "active" and active is not None and active.get("transaction_id") != transaction_id:
-        raise UpdateInProgressError("another update transaction owns migration")
-    migration_marker_path().unlink(missing_ok=True)
+    if state == "active":
+        if active is None or active.get("transaction_id") != transaction_id:
+            raise UpdateInProgressError("another update transaction owns migration")
+        migration_marker_path().unlink(missing_ok=True)
+        return
+    if state == "corrupt":
+        raise UpdateInProgressError("update marker corrupt; left in place, run trace recovery before finishing")
+    if state == "unreadable":
+        raise UpdateInProgressError("update marker unreadable; left in place, run trace recovery before finishing")
 
 
 def applied_versions(manager: DatabaseSessionManager) -> list[int]:
@@ -132,7 +155,15 @@ def apply_migrations_with_installed_code(database_url: str | None = None) -> lis
         check=False,
     )
     if result.returncode != 0:
-        raise UpdateError(f"database migration failed: {result.stderr.strip()[-500:]}")
+        from trace_core.core.settings import settings
+
+        if settings.debug:
+            structlog.get_logger().debug(
+                "database migration subprocess failed",
+                exit_code=result.returncode,
+                stderr=_redact_migration_output(result.stderr)[-500:],
+            )
+        raise UpdateError("database migration failed; run with TRACE_DEBUG=1 for technical details")
     for line in result.stdout.splitlines():
         if line.startswith("TRACE_APPLIED="):
             return json.loads(line.split("=", 1)[1])
@@ -386,16 +417,15 @@ def backup_database(manager: DatabaseSessionManager, dest_dir: str | Path) -> Pa
     dest = ensure_dir(dest_dir)
     stamp = _unique_stamp(dest)
     if url.startswith("sqlite") and ":memory:" not in url:
-        out = dest / f"trace-backup-{stamp}.db"
-        literal = str(check_contained(out, dest)).replace("'", "''")
+        out = check_contained(dest / f"trace-backup-{stamp}.db", dest)
+        literal = str(out).replace("'", "''")
         with manager.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.execute(text(f"VACUUM INTO '{literal}'"))
         if not out.is_file() or out.stat().st_size == 0:
             raise UpdateError(f"{_BACKUP_FAILED}: empty backup")
         return out
     if url.startswith("postgresql"):
-        out = dest / f"trace-backup-{stamp}.sql"
-        check_contained(out, dest)
+        out = check_contained(dest / f"trace-backup-{stamp}.sql", dest)
         clean_url, password = _pg_parts(url)
         try:
             env = _pg_env(password)
@@ -426,37 +456,40 @@ def run_updater_migration(
     backup_waiver: str | None = None,
     use_installed_code: bool = False,
 ) -> dict:
-    state, active = marker_state()
-    if state == "unreadable":
-        raise UpdateInProgressError("update marker unreadable; left in place, run trace recovery before migrating")
-    if state == "corrupt":
-        raise UpdateInProgressError("update marker corrupt; run trace recovery before migrating")
-    if state == "active" and active is not None and active.get("transaction_id") != transaction_id:
-        raise UpdateInProgressError("another update transaction owns migration")
-    # H-17: when a caller already owns this transaction — the lifecycle does, for the
-    # whole update — it owns the marker too. Clearing it here dropped the "an update
-    # owns migrations" signal before health check, activation, retention prune, history
-    # and the result marker, leaving only update_lock() protecting that window.
-    caller_owns = is_owner(transaction_id)
-    if not caller_owns:
-        begin_update_migration(transaction_id)
-    try:
-        with update_migration_owner(transaction_id):
-            return _run_updater_migration_locked(
-                manager,
-                transaction_id,
-                schema_min=schema_min,
-                schema_target=schema_target,
-                backup_required=backup_required,
-                backup_dir=backup_dir,
-                backup_waiver=backup_waiver,
-                use_installed_code=use_installed_code,
-            )
-    finally:
-        # A caller-owned marker is released by whoever reached a terminal state.
+    from trace_core.updates.lock import update_lock
+
+    with update_lock():
+        state, active = marker_state()
+        if state == "unreadable":
+            raise UpdateInProgressError("update marker unreadable; left in place, run trace recovery before migrating")
+        if state == "corrupt":
+            raise UpdateInProgressError("update marker corrupt; run trace recovery before migrating")
+        if state == "active" and active is not None and active.get("transaction_id") != transaction_id:
+            raise UpdateInProgressError("another update transaction owns migration")
+        # H-17: when a caller already owns this transaction — the lifecycle does, for the
+        # whole update — it owns the marker too. Clearing it here dropped the "an update
+        # owns migrations" signal before health check, activation, retention prune, history
+        # and the result marker, leaving only update_lock() protecting that window.
+        caller_owns = is_owner(transaction_id)
         if not caller_owns:
-            with contextlib.suppress(UpdateInProgressError):
-                finish_update_migration(transaction_id)
+            begin_update_migration(transaction_id)
+        try:
+            with update_migration_owner(transaction_id):
+                return _run_updater_migration_locked(
+                    manager,
+                    transaction_id,
+                    schema_min=schema_min,
+                    schema_target=schema_target,
+                    backup_required=backup_required,
+                    backup_dir=backup_dir,
+                    backup_waiver=backup_waiver,
+                    use_installed_code=use_installed_code,
+                )
+        finally:
+            # A caller-owned marker is released by whoever reached a terminal state.
+            if not caller_owns:
+                with contextlib.suppress(UpdateInProgressError):
+                    finish_update_migration(transaction_id)
 
 
 def _migration_backup(

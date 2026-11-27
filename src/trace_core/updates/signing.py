@@ -34,18 +34,14 @@ def load_release_pubkey(key_id: str) -> bytes:
         raise UpdateVerificationError(f"revoked release key {key_id!r}")
     path = trust_key_path(key_id)
     if not path.exists():
-        from trace_core.updates import bootstrap, selfheal
-
-        if key_id == bootstrap.KEY_ID and selfheal.heal_trust_anchor() and trust_key_path(key_id).exists():
-            try:
-                return _strict_hex_key(trust_key_path(key_id).read_text(encoding="utf-8"), key_id)
-            except OSError as e:
-                raise UpdateVerificationError(f"unreadable release key {key_id!r}") from e
         raise UpdateVerificationError(f"unknown release key {key_id!r}")
     try:
-        return _strict_hex_key(path.read_text(encoding="utf-8"), key_id)
+        raw_pub = _strict_hex_key(path.read_text(encoding="utf-8"), key_id)
     except OSError as e:
         raise UpdateVerificationError(f"unreadable release key {key_id!r}") from e
+    if key_id_for_pubkey(raw_pub) != key_id:
+        raise UpdateVerificationError(f"release key {key_id!r} does not match its own key content")
+    return raw_pub
 
 
 def _verify_signature(key_id: str | None, signature: str | None, data: bytes, subject: str) -> None:

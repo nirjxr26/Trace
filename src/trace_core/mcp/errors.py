@@ -17,7 +17,7 @@ from trace_core.core.errors import (
     ValidationError,
 )
 from trace_core.devices.domain import DeviceEnumerationError, DeviceError
-from trace_core.updates.errors import UpdateError, UpdateInProgressError
+from trace_core.updates.errors import UpdateError, UpdateInProgressError, UpdateNotAvailableError
 
 
 class ToolFailure(Exception):
@@ -62,6 +62,8 @@ def map_error(exc: Exception, correlation_id: str) -> dict[str, Any]:
         return envelope("DEVICE_ERROR", str(exc), correlation_id, retryable=True)
     if isinstance(exc, UpdateInProgressError):
         return envelope("UPDATE_IN_PROGRESS", str(exc), correlation_id)
+    if isinstance(exc, UpdateNotAvailableError):
+        return envelope("UPDATE_NOT_AVAILABLE", str(exc), correlation_id)
     if isinstance(exc, UpdateError):
         return envelope("UPDATE_FAILED", _safe_message(exc), correlation_id)
     if isinstance(exc, AuditTamperError):
@@ -87,4 +89,4 @@ def result(payload: dict[str, Any], *, is_error: bool = False) -> CallToolResult
 
 
 def failure(exc: Exception, correlation_id: str) -> CallToolResult:
-    return result(map_error(exc, correlation_id), is_error=True)
+    return result(map_error(exc, correlation_id), is_error=not isinstance(exc, UpdateNotAvailableError))

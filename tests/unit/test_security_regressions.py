@@ -1679,6 +1679,19 @@ def test_installers_embed_a_bootstrap_anchor_set() -> None:
         assert key_id_for_pubkey(raw).removeprefix("ed25519:") == pub.stem
 
 
+def test_install_sh_derives_trust_ids_from_raw_key_bytes() -> None:
+    from trace_core.updates.signing import key_id_for_pubkey
+
+    text = (_REPO / "install.sh").read_text(encoding="utf-8")
+    assert "bytes.fromhex" in text, "install.sh still hashes the hex text, not the decoded key"
+    assert "hashlib.sha256(bytes.fromhex(sys.stdin.read().strip()))" in text
+    pub = next(iter(sorted((_REPO / "release" / "trusted-keys").glob("*.pub"))))
+    raw = bytes.fromhex(pub.read_text(encoding="utf-8").strip())
+    derived = key_id_for_pubkey(raw).removeprefix("ed25519:")
+    assert derived == pub.stem
+    assert derived in text
+
+
 @pytest.mark.parametrize("installer", ["install.sh", "install.ps1"])
 def test_installer_never_trusts_a_channel_supplied_key_id(installer: str) -> None:
     """The bundle's own filename is attacker-controlled; only a content-derived id may be written."""

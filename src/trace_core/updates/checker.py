@@ -1,3 +1,4 @@
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -6,6 +7,9 @@ from trace_core.core.settings import settings
 from trace_core.updates.manifest import ReleaseManifest
 from trace_core.updates.policy import is_installable, is_update_available
 from trace_core.updates.sources import is_http_url
+
+_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+([._-][a-zA-Z0-9]+)*(\+[a-zA-Z0-9._-]+)?$")
+_VERSION_MAX_LENGTH = 64
 
 
 def default_manifest_target() -> str | None:
@@ -137,6 +141,8 @@ def pointer_version() -> tuple[str | None, str | None]:
         return None, f"the version pointer could not be read ({e})"
     if not active:
         return None, None
+    if len(active) > _VERSION_MAX_LENGTH or not _VERSION_RE.fullmatch(active):
+        return None, "the version pointer holds a malformed version"
     return active, None
 
 
@@ -263,7 +269,7 @@ def peek_cached_update() -> dict[str, Any] | None:
 
     try:
         cached = check_cache.read_check_cache()
-    except Exception:
+    except (OSError, ValueError, TypeError):
         return None
     payload = (cached or {}).get("payload") or {}
     if payload.get("available") and payload.get("target"):
