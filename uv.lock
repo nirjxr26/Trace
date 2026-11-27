@@ -1744,7 +1744,7 @@ wheels = [
 
 [[package]]
 name = "trace"
-version = "0.6.0"
+version = "0.6.1"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
@@ -1783,8 +1783,8 @@ requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = "==1.6.1" },
     { name = "cryptography", specifier = ">=44" },
     { name = "cyclonedx-bom", marker = "extra == 'dev'", specifier = "==7.4.0" },
-    { name = "mcp", marker = "extra == 'dev'", specifier = ">=2.3.0" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3.0" },
+    { name = "mcp", marker = "extra == 'dev'", specifier = ">=2.3.0,<3" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3.0,<3" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.9.0" },
     { name = "packaging", specifier = ">=24" },
     { name = "prompt-toolkit", specifier = ">=3.0.40" },
