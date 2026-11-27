@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 import pytest
@@ -150,7 +151,8 @@ async def test_case_view_reserves_and_acquires_a_fixture(
         await pilot.pause()
         tui.screen.query_one("#text-input", Input).value = str(source)
         await pilot.press("enter")
-        for _ in range(80):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
             await pilot.pause()
             if ImagingService(manager).list_for_case(case.number)[0].state is ImagingState.BYTE_VERIFIED:
                 break

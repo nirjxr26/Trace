@@ -441,7 +441,7 @@ class ImagingView(TablePane[ImagingOperation]):
             "manifest_version": "trace-imaging-manifest-v1",
             "format": "RAW",
             "byte_integrity": "verified",
-            "tool_version": "0.6.0",
+            "tool_version": "0.6.1",
             "expected_bytes": 8_000_000_000,
             "copied_bytes": 7_812_345_678,
             "acquisition_sha256": digest,
