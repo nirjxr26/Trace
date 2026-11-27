@@ -85,10 +85,8 @@ def _stage_artifact_locked(
 ) -> Path:
 
     ensure_dir(staging_dir)
-    dst = staging_dir / src.name
-    check_contained(dst, staging_dir)
-    tmp = staging_dir / f"{src.name}.partial"
-    check_contained(tmp, staging_dir)
+    dst = check_contained(staging_dir / src.name, staging_dir)
+    tmp = check_contained(staging_dir / f"{src.name}.partial", staging_dir)
     if expected_sha256 is None:
         raise UpdateVerificationError("staging requires an expected hash")
     offset = _stage_copy(src, staging_dir, dst, tmp, expected_sha256, binding)
@@ -170,8 +168,7 @@ def _stage_release_locked(
     reuse_existing: bool = False,
 ) -> Path:
     root = releases_root(base)
-    target = root / version
-    check_contained(target, root)
+    target = check_contained(root / version, root)
     if target.exists():
         if not reuse_existing:
             raise FileExistsError(f"release {version} already staged; releases are immutable")

@@ -68,9 +68,10 @@ def test_self_heal_cleans_tmp_artifacts(storage: Path) -> None:
     assert not (artifacts / "wheel.tmp").exists()
 
 
-def test_signing_recovers_through_selfheal(storage: Path, monkeypatch) -> None:
+def test_signing_recovers_through_explicit_anchor_heal(storage: Path, monkeypatch) -> None:
     from trace_core.updates.signing import load_release_pubkey
 
+    assert selfheal.heal_trust_anchor()
     raw = load_release_pubkey(bootstrap.KEY_ID)
     assert raw == bytes.fromhex(bootstrap.PUBKEY_HEX)
 
@@ -203,7 +204,7 @@ def test_self_heal_failures_reach_the_log(tmp_path, monkeypatch, caplog) -> None
             captured.append({"event": event, **kwargs})
 
     monkeypatch.setattr(selfheal.time, "monotonic", lambda: selfheal._HEAL_INTERVAL + 1.0)
-    monkeypatch.setattr(selfheal.structlog, "get_logger", lambda: _Log())
+    monkeypatch.setattr(selfheal, "get_logger", lambda: _Log())
     monkeypatch.setattr(selfheal, "_LAST_HEAL", 0.0)
     monkeypatch.setattr(
         selfheal,

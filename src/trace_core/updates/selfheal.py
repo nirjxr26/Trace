@@ -2,9 +2,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import structlog
-
 from trace_core.core.fs import JsonFileVerdict, classify_json_file, ensure_dir
+from trace_core.core.logging import get_logger
 
 TRUST_ANCHOR_NAME = "trust anchor"
 STATE_FILES_NAME = "state files"
@@ -158,30 +157,38 @@ def _recorded(conn, version: int) -> bool:
     )
 
 
-CHECKS = (check_trust_dirs, check_trust_anchor, check_state_json, check_artifact_tmp)
+CHECKS = (check_trust_dirs, check_trust_anchor)
+EXPLICIT_CHECKS = CHECKS + (check_state_json, check_artifact_tmp)
 
 _LAST_HEAL = 0.0
 _HEAL_INTERVAL = 300.0
+_automatic_only = False
 
 
 def _maybe_heal() -> None:
-    global _LAST_HEAL
+    global _LAST_HEAL, _automatic_only
+    from trace_core.updates.lock import try_update_lock
+
     now = time.monotonic()
     if now - _LAST_HEAL < _HEAL_INTERVAL:
         return
-    _LAST_HEAL = now
-    log = structlog.get_logger()
-    for result in run_self_heal():
-        if not result.ok:
-            log.warning("self-heal check failed", check=result.name, detail=result.detail)
-    try:
-        heal_schema_drift()
-    except Exception as exc:
-        log.warning("schema drift self-heal failed", error=str(exc))
+    with try_update_lock() as held:
+        if not held:
+            return
+        _LAST_HEAL = now
+        _automatic_only = True
+        try:
+            log = get_logger()
+            for result in run_self_heal():
+                if not result.ok:
+                    log.warning("self-heal check failed", check=result.name, detail=result.detail)
+        finally:
+            _automatic_only = False
 
 
 def run_self_heal() -> list[SelfCheck]:
-    return [check() for check in CHECKS]
+    checks = CHECKS if _automatic_only else EXPLICIT_CHECKS
+    return [check() for check in checks]
 
 
 def heal_trust_anchor() -> bool:

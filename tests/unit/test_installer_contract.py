@@ -253,7 +253,7 @@ def test_the_shell_installer_never_streams_an_archive_into_tar() -> None:
         "swapped artifact installs with nothing to compare against"
     )
     download = text.index('-o "$ARCHIVE_FILE"')
-    verify = text.index('sha256sum "$ARCHIVE_FILE"')
+    verify = text.index('trace_sha256_file "$ARCHIVE_FILE"')
     extract = text.index('tar -xz --strip-components=1 -C "$WORK_ROOT" -f "$ARCHIVE_FILE"')
     assert download < verify < extract, "the archive must be downloaded to a file, verified, and only then extracted"
 
@@ -332,3 +332,157 @@ def test_a_replacement_install_is_staged_and_swapped_only_after_it_runs(
         "signing secret) across the swap"
     )
     assert restore in text[swap_at:], f"{name} has no way back if the swap itself fails halfway"
+
+
+def test_the_shell_installer_derives_trust_key_ids_from_decoded_bytes() -> None:
+    text = SH.read_text(encoding="utf-8")
+    assert "bytes.fromhex" in text, "the shell installer hashes the ASCII hex string, not the 32 key bytes"
+    assert "hashlib.sha256(bytes.fromhex(sys.stdin.read().strip()))" in text
+    assert not re.search(r"_derived=.*sha256sum", text), "the derived id still comes from the hex text"
+
+
+@pytest.mark.parametrize(
+    ("script", "name"),
+    [(PS1, "install.ps1"), (SH, "install.sh")],
+    ids=["ps1", "sh"],
+)
+def test_unverified_source_requires_an_explicit_opt_in(script: Path, name: str) -> None:
+    text = script.read_text(encoding="utf-8")
+    assert "--allow-unverified" in text, f"{name} offers no opt-in flag"
+    assert "TRACE_ALLOW_UNVERIFIED" in text, f"{name} offers no opt-in env var"
+    assert "Refusing unverified source" in text, f"{name} still installs mutable main by default"
+    assert "TRACE_RELEASE_SHA256" in text, f"{name} does not offer the digest pin"
+    assert "TRACE_COSIGN_BUNDLE_URL" in text, f"{name} does not offer the signature pin"
+
+
+@pytest.mark.parametrize(
+    ("script", "name", "gate"),
+    [(PS1, "install.ps1", "Type PURGE"), (SH, "install.sh", "TRACE_CONFIRM_PURGE=1")],
+    ids=["ps1", "sh"],
+)
+def test_non_interactive_purge_cannot_proceed_implicitly(script: Path, name: str, gate: str) -> None:
+    text = script.read_text(encoding="utf-8")
+    assert gate in text, f"{name} purges data in a non-interactive run without an explicit confirmation"
+
+
+def test_the_powershell_installer_uses_unique_temporary_paths() -> None:
+    text = PS1.read_text(encoding="utf-8")
+    for predictable in ("trace-main.zip", "trace-temp", "trace-trusted-keys.bundle"):
+        assert predictable not in text, f"still uses predictable temp path {predictable}"
+    assert text.count('[Guid]::NewGuid().ToString("N")') >= 5
+    assert "Remove-TraceTempArtifacts" in text
+    assert "expected one extracted directory" in text, "a multi-root archive silently picks a random folder"
+
+
+def test_downloads_use_https_only_with_timeouts() -> None:
+    sh_text = SH.read_text(encoding="utf-8")
+    assert sh_text.count('--proto-redir "$CURL_PROTO"') >= 5
+    assert "--connect-timeout 10 --max-time 60" in sh_text
+    assert sh_text.count("$CURL_TIMEOUT") >= 6
+    ps_text = PS1.read_text(encoding="utf-8")
+    assert "-TimeoutSec 60" in ps_text
+    assert "$request.Timeout = 60000" in ps_text
+    assert "$request.AllowAutoRedirect = $false" in ps_text
+    assert "Refusing a non-HTTPS download URL" in ps_text
+    assert "DefaultWebProxy" in ps_text, "proxy environment variables are ignored"
+
+
+@pytest.mark.parametrize(
+    ("script", "name"),
+    [(PS1, "install.ps1"), (SH, "install.sh")],
+    ids=["ps1", "sh"],
+)
+def test_the_cosign_bundle_url_must_be_https(script: Path, name: str) -> None:
+    text = script.read_text(encoding="utf-8")
+    assert "TRACE_COSIGN_BUNDLE_URL must use https://" in text, (
+        f"{name} downloads the signature bundle from an arbitrary scheme"
+    )
+
+
+def test_refs_are_validated_and_encoded_before_they_reach_a_url() -> None:
+    sh_text = SH.read_text(encoding="utf-8")
+    assert "*'..'*" in sh_text
+    assert "'-'*" in sh_text
+    assert "trace_encode_ref" in sh_text
+    assert "$2 == ref" in sh_text, "the tag match is still unanchored"
+    assert "*[!0-9]*" in sh_text, "the release picker accepts non-numeric input"
+    ps_text = PS1.read_text(encoding="utf-8")
+    assert '.Contains("..")' in ps_text
+    assert '.StartsWith("-")' in ps_text
+    assert "EscapeDataString" in ps_text
+    assert '"refs/tags/$Tag"' in ps_text
+    assert "[int]::TryParse" in ps_text
+
+
+def test_the_shell_installer_never_puts_the_token_on_the_command_line() -> None:
+    text = SH.read_text(encoding="utf-8")
+    assert '-K "$AUTH_CONFIG"' in text, "the bearer token is passed as a curl argument"
+    assert 'chmod 600 "$AUTH_CONFIG"' in text
+    assert '-H "$AUTH_HEADER"' not in text
+
+
+def test_the_powershell_installer_never_puts_the_token_on_the_command_line() -> None:
+    text = PS1.read_text(encoding="utf-8")
+    assert "$env:TRACE_GIT_TOKEN = $Token" in text
+    assert "$request.Headers[$key] = $Headers[$key]" in text
+    assert "git clone --depth 1 --branch $TraceRef https://github.com/nirjxr26/Trace.git $RepoRoot" in text
+
+
+def test_the_shell_installer_exits_with_signal_codes() -> None:
+    text = SH.read_text(encoding="utf-8")
+    assert "trap 'exit 130' INT" in text
+    assert "trap 'exit 143' TERM" in text
+    assert "trap 'true' EXIT" not in text
+
+
+def test_installer_logs_and_env_files_are_private() -> None:
+    sh_text = SH.read_text(encoding="utf-8")
+    assert "umask 077" in sh_text
+    assert 'chmod 600 "$TRACE_INSTALL_LOG"' in sh_text
+    assert 'chmod 600 "$SCRIPT_DIR/.env"' in sh_text
+    ps_text = PS1.read_text(encoding="utf-8")
+    assert "Protect-TraceFile $InstallLog" in ps_text
+    assert "Protect-TraceFile $EnvFile" in ps_text
+    assert "SetAccessRuleProtection" in ps_text
+
+
+def test_shell_uninstall_never_swallows_a_deletion_failure() -> None:
+    body = _shell_function_body("trace_do_uninstall")
+    assert "|| true" not in body
+    assert body.count('|| trace_fail "uninstall"') >= 5
+
+
+def test_shell_rollback_restore_failure_is_reported() -> None:
+    text = SH.read_text(encoding="utf-8")
+    assert 'mv "${REPO_ROOT}.old" "$REPO_ROOT" 2>>"$TRACE_INSTALL_LOG" || trace_fail "$PHASE_SOURCE"' in text
+
+
+def test_powershell_uninstall_and_rollback_failures_are_reported() -> None:
+    text = PS1.read_text(encoding="utf-8")
+    assert "Remove-TracePath -Path $shim" in text
+    assert "Remove-TracePath -Path $appDir -Recurse" in text
+    assert "Remove-Item -Recurse -Force $appDir -ErrorAction SilentlyContinue" not in text
+    restore = text[text.index('$OldRoot = "$FinalRoot.old"') :]
+    assert "Move-Item -Path $OldRoot -Destination $FinalRoot -ErrorAction Stop" in restore
+    assert 'catch { Stop-TraceInstall "source" }' in restore
+
+
+def test_the_shell_installer_has_a_hash_tool_fallback_and_case_insensitive_compare() -> None:
+    text = SH.read_text(encoding="utf-8")
+    assert "shasum -a 256" in text
+    assert "hashlib.sha256(open(sys.argv[1]" in text
+    assert "tr '[:upper:]' '[:lower:]'" in text
+
+
+def test_the_shell_version_check_fails_when_git_and_curl_are_absent() -> None:
+    body = _shell_function_body("trace_check_version")
+    assert "Cannot verify tag" in body
+    assert "exit 1" in body.split("curl >/dev/null")[-1]
+
+
+def test_the_shell_installer_cleans_temporary_artifacts_on_any_exit() -> None:
+    text = SH.read_text(encoding="utf-8")
+    assert "trap 'trace_cleanup_temps' EXIT" in text
+    body = _shell_function_body("trace_cleanup_temps")
+    for token in ("ARCHIVE_FILE", "AUTH_CONFIG", "ASKPASS_FILE", "BUNDLE_FILE", "TRACE_TMP"):
+        assert token in body

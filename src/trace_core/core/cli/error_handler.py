@@ -158,12 +158,16 @@ def _update_error(e: Exception, operation_title: str | None, default_remediation
             EXIT_ERROR,
             EXIT_RECOVERY_FAILED,
             EXIT_RECOVERY_RETRY,
+            EXIT_SUCCESS,
             EXIT_UPDATE_BLOCKED,
         )
         from trace_core.updates.errors import (
+            MigrationCompatibilityError,
             RecoveryBlockedError,
             RecoveryError,
+            UpdateInProgressError,
             UpdateNetworkError,
+            UpdateNotAvailableError,
             UpdatePolicyBlockedError,
             UpdateResponseRefused,
             UpdateVerificationError,
@@ -194,6 +198,25 @@ def _update_error(e: Exception, operation_title: str | None, default_remediation
                 "Update Check Failed",
                 "Check network connectivity and manifest URL, then retry.",
                 EXIT_ERROR,
+            ),
+            (
+                UpdateInProgressError,
+                "Update In Progress",
+                "Another update owns migration. Wait for it to finish, then retry; run `trace recovery` if it stopped.",
+                EXIT_RECOVERY_RETRY,
+            ),
+            (
+                MigrationCompatibilityError,
+                "Schema Incompatible",
+                "The database schema is outside this release's supported range. Apply pending migrations with "
+                "`trace db migrate`, or restore a compatible backup, before installing.",
+                EXIT_ERROR,
+            ),
+            (
+                UpdateNotAvailableError,
+                "Update Not Available",
+                "Already on the latest release. Nothing was installed.",
+                EXIT_SUCCESS,
             ),
             (
                 RecoveryBlockedError,

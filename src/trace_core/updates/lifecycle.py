@@ -201,8 +201,8 @@ class UpdateLifecycle:
         progress: ProgressCallback | None = None,
     ) -> UpdateResultDto:
         from trace_core.core.clock import now_utc
-        from trace_core.updates.checker import get_installed_version
-        from trace_core.updates.errors import UpdateNotAvailableError, UpdatePolicyBlockedError
+        from trace_core.updates.checker import get_installed_version, pointer_version
+        from trace_core.updates.errors import UpdateError, UpdateNotAvailableError, UpdatePolicyBlockedError
         from trace_core.updates.policy import is_update_available
 
         progress = progress or SILENT
@@ -211,6 +211,9 @@ class UpdateLifecycle:
 
             gate = ForensicOperationGate(active_probe=lambda _context: forensic_operation_active(self.session_manager))
         current = get_installed_version()
+        _version, pointer_problem = pointer_version()
+        if pointer_problem is not None:
+            raise UpdateError(f"cannot tell which version is installed - {pointer_problem}. Run `trace recovery`.")
         if not is_update_available(current, manifest):
             raise UpdateNotAvailableError(f"no update available (current {current})")
         started_at = now_utc()

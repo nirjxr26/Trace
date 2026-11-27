@@ -5,9 +5,11 @@
 # ==============================================================================
 
 set -eu
+umask 077
 
 # Allowed URL protocol for all artifact downloads (HTTPS only, incl. redirects).
 CURL_PROTO='=https'
+CURL_TIMEOUT='--connect-timeout 10 --max-time 60'
 
 VERBOSE=0
 TRACE_REQ_VERSION=""
@@ -15,13 +17,13 @@ TRACE_LIST_VERSIONS=0
 TRACE_REINSTALL=0
 TRACE_UNINSTALL=0
 TRACE_PURGE_DATA=0
+TRACE_ALLOW_UNVERIFIED=0
 TRACE_TICK='✓'
 TRACE_PY_WIN=0
 case "$(uname -s 2>/dev/null || printf '')" in
   MINGW*|MSYS*|CYGWIN*) TRACE_PY_WIN=1 ;;
 esac
 
-trap 'true' EXIT HUP INT TERM
 PHASE_SOURCE="source"
 PHASE_DEPENDENCIES="dependencies"
 TRACE_HOME="${HOME}/.trace"
@@ -32,14 +34,15 @@ STAGE_ROOT=""
 SWAP_PENDING=0
 
 trace_usage() {
-  printf "%s\n" "Usage: install.sh [--version <tag>] [--list-versions] [--reinstall] [--uninstall [--purge-data]] [--verbose] [--help]"
+  printf "%s\n" "Usage: install.sh [--version <tag>] [--list-versions] [--reinstall] [--uninstall [--purge-data]] [--allow-unverified] [--verbose] [--help]"
   printf "%s\n" ""
   printf "%s\n" "  (none)              Quiet install of main (or TRACE_REF when set)"
   printf "%s\n" "  --version <tag>     Install that release instead"
   printf "%s\n" "  --list-versions     List releases; TTY offers pick-and-install"
   printf "%s\n" "  --reinstall         Wipe app code first, then install"
   printf "%s\n" "  --uninstall         Remove launcher + app + config; keeps storage and database"
-  printf "%s\n" "  --uninstall --purge-data  Also remove storage; confirms first"
+  printf "%s\n" "  --uninstall --purge-data  Also remove storage; needs a TTY prompt or TRACE_CONFIRM_PURGE=1"
+  printf "%s\n" "  --allow-unverified  Opt in to mutable main without TRACE_RELEASE_SHA256 or TRACE_COSIGN_BUNDLE_URL"
   printf "%s\n" "  --verbose           Full step-by-step output"
   printf "%s\n" "  --help              Usage; exit 0"
 }
@@ -48,9 +51,33 @@ trace_is_tty() {
   [ -t 1 ]
 }
 
+trace_cleanup_temps() {
+  if [ -n "${ARCHIVE_FILE:-}" ]; then
+    rm -f "$ARCHIVE_FILE" "${ARCHIVE_FILE}.sigstore.json" 2>/dev/null || true
+  fi
+  if [ -n "${AUTH_CONFIG:-}" ]; then
+    rm -f "$AUTH_CONFIG" 2>/dev/null || true
+  fi
+  if [ -n "${ASKPASS_FILE:-}" ]; then
+    rm -f "$ASKPASS_FILE" 2>/dev/null || true
+  fi
+  if [ -n "${BUNDLE_FILE:-}" ]; then
+    rm -f "$BUNDLE_FILE" 2>/dev/null || true
+  fi
+  if [ -n "${TRACE_TMP:-}" ]; then
+    rm -f "$TRACE_TMP" 2>/dev/null || true
+  fi
+}
+
+trap 'trace_cleanup_temps' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
 trace_log_init() {
   mkdir -p "$TRACE_HOME" 2>/dev/null || true
   touch "$TRACE_INSTALL_LOG" 2>/dev/null || true
+  chmod 600 "$TRACE_INSTALL_LOG" 2>/dev/null || true
 }
 
 trace_say() {
@@ -138,28 +165,61 @@ trace_success() {
   fi
 }
 
+trace_check_ref() {
+  case "$1" in
+    ''|'-'*|*'..'*)
+      printf "Invalid ref '%s'.\n" "$1" >&2
+      exit 2
+      ;;
+  esac
+}
+
+trace_encode_ref() {
+  printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n' | sed 's/../%&/g'
+}
+
+trace_sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | cut -d' ' -f1
+  else
+    for TRACE_PY_FALLBACK in python3 python; do
+      if command -v "$TRACE_PY_FALLBACK" >/dev/null 2>&1; then
+        "$TRACE_PY_FALLBACK" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"
+        return
+      fi
+    done
+    return 1
+  fi
+}
+
 trace_check_version() {
   TRACE_TAG="$1"
+  trace_check_ref "$TRACE_TAG"
   if command -v git >/dev/null 2>&1; then
-    if git ls-remote --tags https://github.com/nirjxr26/Trace.git "$TRACE_TAG" 2>>"$TRACE_INSTALL_LOG" | grep -q "$TRACE_TAG"; then
+    if git ls-remote --tags https://github.com/nirjxr26/Trace.git "refs/tags/$TRACE_TAG" 2>>"$TRACE_INSTALL_LOG" | awk -v ref="refs/tags/$TRACE_TAG" '$2 == ref { found = 1 } END { exit !found }'; then
       return 0
     fi
     printf "Unknown tag '%s'. Run with --list-versions to see releases.\n" "$TRACE_TAG" >&2
     exit 1
   fi
   if command -v curl >/dev/null 2>&1; then
-    if curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL "https://api.github.com/repos/nirjxr26/Trace/releases/tags/$TRACE_TAG" >>"$TRACE_INSTALL_LOG" 2>&1; then
+    TRACE_TAG_ENC="$(trace_encode_ref "$TRACE_TAG")"
+    if curl $CURL_TIMEOUT --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL "https://api.github.com/repos/nirjxr26/Trace/releases/tags/${TRACE_TAG_ENC}" >>"$TRACE_INSTALL_LOG" 2>&1; then
       return 0
     fi
     printf "Unknown tag '%s'. Run with --list-versions to see releases.\n" "$TRACE_TAG" >&2
     exit 1
   fi
+  printf "Cannot verify tag '%s': git and curl are both unavailable.\n" "$TRACE_TAG" >&2
+  exit 1
 }
 
 trace_list_versions() {
   TRACE_API="https://api.github.com/repos/nirjxr26/Trace/releases?per_page=20"
   TRACE_TMP="$(mktemp)"
-  if ! curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$TRACE_TMP" "$TRACE_API" 2>>"$TRACE_INSTALL_LOG"; then
+  if ! curl $CURL_TIMEOUT --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$TRACE_TMP" "$TRACE_API" 2>>"$TRACE_INSTALL_LOG"; then
     rm -f "$TRACE_TMP"
     printf "Could not list releases (offline?). Try --version vX.Y.Z explicitly.\n"
     exit 1
@@ -178,6 +238,12 @@ trace_list_versions() {
     if [ -z "$TRACE_PICK" ]; then
       exit 0
     fi
+    case "$TRACE_PICK" in
+      *[!0-9]*)
+        printf "Invalid selection.\n" >&2
+        exit 1
+        ;;
+    esac
     TRACE_SEL="$(printf "%s\n" "$TRACE_TAGS" | sed -n "${TRACE_PICK}p")"
     if [ -z "$TRACE_SEL" ]; then
       printf "Invalid selection.\n" >&2
@@ -205,27 +271,32 @@ trace_do_uninstall() {
   if [ -n "${REPO_ROOT:-}" ] && [ -f "${REPO_ROOT}/.env" ]; then
     TRACE_ENV_FILE="${REPO_ROOT}/.env"
   fi
-  if [ "$TRACE_PURGE_DATA" = "1" ] && [ -t 0 ]; then
-    printf "Remove storage and config? Database server is kept. Confirm y/N: "
-    read TRACE_CONFIRM
-    if [ "$TRACE_CONFIRM" != "y" ] && [ "$TRACE_CONFIRM" != "Y" ]; then
-      printf "Cancelled.\n"
-      exit 0
+  if [ "$TRACE_PURGE_DATA" = "1" ]; then
+    if [ -t 0 ] && [ -t 1 ]; then
+      printf "Remove storage and config? Database server is kept. Confirm y/N: "
+      read TRACE_CONFIRM
+      if [ "$TRACE_CONFIRM" != "y" ] && [ "$TRACE_CONFIRM" != "Y" ]; then
+        printf "Cancelled.\n"
+        exit 0
+      fi
+    elif [ "${TRACE_CONFIRM_PURGE:-0}" != "1" ]; then
+      printf "Non-interactive data purge requires TRACE_CONFIRM_PURGE=1.\n" >&2
+      exit 1
     fi
   fi
-  rm -f "$TRACE_SHIM" 2>/dev/null || true
+  rm -f "$TRACE_SHIM" 2>>"$TRACE_INSTALL_LOG" || trace_fail "uninstall"
   if [ -d "$TRACE_APP_DIR" ]; then
     rm -rf "$TRACE_APP_DIR" 2>>"$TRACE_INSTALL_LOG" || trace_fail "uninstall"
   fi
   if [ -n "$TRACE_ENV_FILE" ]; then
-    rm -f "$TRACE_ENV_FILE" 2>/dev/null || true
+    rm -f "$TRACE_ENV_FILE" 2>>"$TRACE_INSTALL_LOG" || trace_fail "uninstall"
   fi
   if [ -f "${HOME}/.trace/app/.env" ]; then
-    rm -f "${HOME}/.trace/app/.env" 2>/dev/null || true
+    rm -f "${HOME}/.trace/app/.env" 2>>"$TRACE_INSTALL_LOG" || trace_fail "uninstall"
   fi
   if [ "$TRACE_PURGE_DATA" = "1" ]; then
-    rm -rf "${HOME}/.trace/trust" 2>/dev/null || true
-    rm -rf "${HOME}/.trace/storage" 2>/dev/null || true
+    rm -rf "${HOME}/.trace/trust" 2>>"$TRACE_INSTALL_LOG" || trace_fail "uninstall"
+    rm -rf "${HOME}/.trace/storage" 2>>"$TRACE_INSTALL_LOG" || trace_fail "uninstall"
     printf "Removed launcher, app, config, trust, storage.\n"
     printf "Kept: PostgreSQL server. To drop data run: DROP DATABASE trace;\n"
   else
@@ -261,6 +332,10 @@ while [ $# -gt 0 ]; do
       TRACE_PURGE_DATA=1
       shift
       ;;
+    --allow-unverified)
+      TRACE_ALLOW_UNVERIFIED=1
+      shift
+      ;;
     --verbose)
       VERBOSE=1
       shift
@@ -287,10 +362,12 @@ trace_log_init
 printf "install started %s flags verbose=%s reinstall=%s uninstall=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)" "$VERBOSE" "$TRACE_REINSTALL" "$TRACE_UNINSTALL" >>"$TRACE_INSTALL_LOG" 2>/dev/null || true
 
 if [ -n "$TRACE_REQ_VERSION" ]; then
+  trace_check_ref "$TRACE_REQ_VERSION"
   TRACE_REF="$TRACE_REQ_VERSION"
   export TRACE_REF
   trace_check_version "$TRACE_REQ_VERSION"
 elif [ -n "${TRACE_REF:-}" ]; then
+  trace_check_ref "$TRACE_REF"
   export TRACE_REF
 fi
 
@@ -317,6 +394,21 @@ else
     printf "remote install root %s ref %s\n" "$REPO_ROOT" "${TRACE_REF:-main}" >>"$TRACE_INSTALL_LOG" 2>/dev/null || true
 
     if [ ! -f "$REPO_ROOT/pyproject.toml" ] || [ "$TRACE_REINSTALL" = "1" ] || [ -n "$TRACE_REQ_VERSION" ]; then
+        if [ -z "${TRACE_RELEASE_SHA256:-}" ] && [ -z "${TRACE_COSIGN_BUNDLE_URL:-}" ] && [ "${TRACE_ALLOW_UNVERIFIED:-0}" != "1" ]; then
+            printf "  [!] Refusing unverified source. Pin TRACE_RELEASE_SHA256 or TRACE_COSIGN_BUNDLE_URL, or pass --allow-unverified (or set TRACE_ALLOW_UNVERIFIED=1).\n" >&2
+            trace_fail "$PHASE_SOURCE"
+        fi
+        if [ -n "${TRACE_RELEASE_SHA256:-}" ] && ! { command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; }; then
+            printf "  [!] No SHA-256 tool available: cannot verify pinned release. Aborting.\n" >&2
+            trace_fail "$PHASE_SOURCE"
+        fi
+        case "${TRACE_COSIGN_BUNDLE_URL:-}" in
+            ''|https://*) ;;
+            *)
+                printf "  [!] TRACE_COSIGN_BUNDLE_URL must use https://.\n" >&2
+                trace_fail "$PHASE_SOURCE"
+                ;;
+        esac
         mkdir -p "$TRACE_HOME"
         WORK_ROOT="${REPO_ROOT}.staging"
         STAGE_ROOT="$WORK_ROOT"
@@ -325,14 +417,19 @@ else
         mkdir -p "$WORK_ROOT"
         TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
         TRACE_REF="${TRACE_REF:-main}"
+        trace_check_ref "$TRACE_REF"
+        TRACE_REF_ENC="$(trace_encode_ref "$TRACE_REF")"
         case "$TRACE_REF" in
             v*) REF_KIND="tags" ;;
             *) REF_KIND="heads" ;;
         esac
         if [ -n "$TOKEN" ]; then
-            AUTH_HEADER="Authorization: Bearer ${TOKEN}"
+            AUTH_CONFIG="$(mktemp)"
+            chmod 600 "$AUTH_CONFIG"
+            TRACE_TOKEN_ESCAPED="$(printf '%s' "$TOKEN" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+            printf 'header = "Authorization: Bearer %s"\n' "$TRACE_TOKEN_ESCAPED" > "$AUTH_CONFIG"
         else
-            AUTH_HEADER=""
+            AUTH_CONFIG=""
         fi
 
         if command -v git >/dev/null 2>&1 && [ -z "${TRACE_RELEASE_SHA256:-}" ] && [ -z "${TRACE_COSIGN_BUNDLE_URL:-}" ]; then
@@ -343,7 +440,6 @@ else
                 chmod 700 "$ASKPASS_FILE"
                 TRACE_GIT_TOKEN="$TOKEN" GIT_ASKPASS="$ASKPASS_FILE" GIT_TERMINAL_PROMPT=0 \
                     git clone --depth 1 --branch "$TRACE_REF" https://github.com/nirjxr26/Trace.git "$WORK_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
-                rm -f "$ASKPASS_FILE"
                 unset TRACE_GIT_TOKEN
             else
                 git clone --depth 1 --branch "$TRACE_REF" https://github.com/nirjxr26/Trace.git "$WORK_ROOT" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
@@ -353,42 +449,36 @@ else
             if [ -n "${TRACE_RELEASE_SHA256:-}" ] || [ -n "${TRACE_COSIGN_BUNDLE_URL:-}" ]; then
                 trace_say "  Release pins set: verifying the downloaded archive before extraction."
             fi
-            if [ -n "${TRACE_RELEASE_SHA256:-}" ] && ! command -v sha256sum >/dev/null 2>&1; then
-                printf "  [!] sha256sum missing: cannot verify pinned release. Aborting.\n" >&2
-                trace_fail "$PHASE_SOURCE"
-            fi
             if [ -n "${TRACE_COSIGN_BUNDLE_URL:-}" ] && ! command -v cosign >/dev/null 2>&1; then
                 printf "  [!] cosign missing: cannot verify the pinned signature. Aborting.\n" >&2
                 trace_fail "$PHASE_SOURCE"
             fi
-            ARCHIVE_URL="https://github.com/nirjxr26/Trace/archive/refs/${REF_KIND}/${TRACE_REF}.tar.gz"
+            ARCHIVE_URL="https://github.com/nirjxr26/Trace/archive/refs/${REF_KIND}/${TRACE_REF_ENC}.tar.gz"
             ARCHIVE_FILE="$(mktemp)"
-            if [ -n "$AUTH_HEADER" ]; then
-                curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -H "$AUTH_HEADER" -o "$ARCHIVE_FILE" "$ARCHIVE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
+            if [ -n "$TOKEN" ]; then
+                curl $CURL_TIMEOUT --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -K "$AUTH_CONFIG" -o "$ARCHIVE_FILE" "$ARCHIVE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
             else
-                curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$ARCHIVE_FILE" "$ARCHIVE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
+                curl $CURL_TIMEOUT --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$ARCHIVE_FILE" "$ARCHIVE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
             fi
             if [ -n "${TRACE_RELEASE_SHA256:-}" ]; then
-                ACTUAL_SHA="$(sha256sum "$ARCHIVE_FILE" | cut -d' ' -f1)"
-                if [ "$ACTUAL_SHA" != "$TRACE_RELEASE_SHA256" ]; then
+                ACTUAL_SHA="$(trace_sha256_file "$ARCHIVE_FILE" | tr '[:upper:]' '[:lower:]')"
+                EXPECTED_SHA="$(printf '%s' "$TRACE_RELEASE_SHA256" | tr '[:upper:]' '[:lower:]')"
+                if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
                     printf "  [!] Release digest mismatch: refusing to install.\n" >&2
-                    rm -f "$ARCHIVE_FILE"
                     trace_fail "$PHASE_SOURCE"
                 fi
             fi
             if [ -n "${TRACE_COSIGN_BUNDLE_URL:-}" ]; then
-                curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "${ARCHIVE_FILE}.sigstore.json" "$TRACE_COSIGN_BUNDLE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
+                curl $CURL_TIMEOUT --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "${ARCHIVE_FILE}.sigstore.json" "$TRACE_COSIGN_BUNDLE_URL" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
                 cosign verify-blob --bundle "${ARCHIVE_FILE}.sigstore.json" \
                     --certificate-identity "${TRACE_COSIGN_IDENTITY:?set TRACE_COSIGN_IDENTITY}" \
                     --certificate-oidc-issuer "${TRACE_COSIGN_OIDC_ISSUER:-https://token.actions.githubusercontent.com}" \
                     "$ARCHIVE_FILE" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
-                rm -f "${ARCHIVE_FILE}.sigstore.json"
             fi
             if [ -z "${TRACE_RELEASE_SHA256:-}" ] && [ -z "${TRACE_COSIGN_BUNDLE_URL:-}" ]; then
-                trace_say "  [!] No TRACE_RELEASE_SHA256 pinned: installing unverified $TRACE_REF."
+                trace_say "  [!] Installing unverified $TRACE_REF by explicit opt-in."
             fi
             tar -xz --strip-components=1 -C "$WORK_ROOT" -f "$ARCHIVE_FILE" >>"$TRACE_INSTALL_LOG" 2>&1 || trace_fail "$PHASE_SOURCE"
-            rm -f "$ARCHIVE_FILE"
         fi
     fi
 fi
@@ -537,11 +627,11 @@ if [ "$SWAP_PENDING" = "1" ]; then
     mv "$WORK_ROOT" "$REPO_ROOT" 2>>"$TRACE_INSTALL_LOG" || TRACE_SWAP_STATUS=$?
     if [ "$TRACE_SWAP_STATUS" -ne 0 ]; then
         if [ -d "${REPO_ROOT}.old" ]; then
-            mv "${REPO_ROOT}.old" "$REPO_ROOT" 2>>"$TRACE_INSTALL_LOG" || true
+            mv "${REPO_ROOT}.old" "$REPO_ROOT" 2>>"$TRACE_INSTALL_LOG" || trace_fail "$PHASE_SOURCE"
         fi
         trace_fail "$PHASE_SOURCE" "$TRACE_SWAP_STATUS"
     fi
-    rm -rf "${REPO_ROOT}.old" 2>/dev/null || true
+    rm -rf "${REPO_ROOT}.old" 2>>"$TRACE_INSTALL_LOG" || trace_fail "$PHASE_SOURCE"
     STAGE_ROOT=""
     SWAP_PENDING=0
     SCRIPT_DIR="$REPO_ROOT"
@@ -565,6 +655,7 @@ if [ ! -f "$SCRIPT_DIR/.env" ]; then
         trace_say "  [!] Set a strong TRACE_DATABASE_URL password and TRACE_SECRET_KEY before production use."
     fi
 else
+    chmod 600 "$SCRIPT_DIR/.env" 2>/dev/null || true
     trace_say "  [OK] Existing .env file preserved."
 fi
 
@@ -577,10 +668,8 @@ TRUST_DIR="${HOME}/.trace/trust/releases"
 TRACE_BOOTSTRAP_KEY_IDS="53712e8bb8a774e6"
 if mkdir -p "$TRUST_DIR" 2>/dev/null; then
     BUNDLE_FILE="$(mktemp)"
-    if trace_run curl --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$BUNDLE_FILE" "https://github.com/nirjxr26/Trace/releases/latest/download/trusted-keys.bundle"; then
-        if ! command -v sha256sum >/dev/null 2>&1; then
-            trace_say "  [!] sha256sum missing: cannot derive trust key ids, so no key was provisioned. Verification stays fail-closed."
-        else
+    if trace_run curl $CURL_TIMEOUT --proto "$CURL_PROTO" --proto-redir "$CURL_PROTO" -fsSL -o "$BUNDLE_FILE" "https://github.com/nirjxr26/Trace/releases/latest/download/trusted-keys.bundle"; then
+        if "$FOUND_PYTHON" -c 'import hashlib' >/dev/null 2>&1; then
             _provisioned=0
             while IFS=' ' read -r _fp _hex _rest; do
                 case "$_fp" in
@@ -601,7 +690,7 @@ if mkdir -p "$TRUST_DIR" 2>/dev/null; then
                 esac
                 # The bundle's own filename is attacker-controlled; the id is derived
                 # from the key bytes and must agree with it.
-                _derived="$(printf '%s' "$_hex" | sha256sum | cut -c1-16)"
+                _derived="$(printf '%s' "$_hex" | "$FOUND_PYTHON" -c 'import sys,hashlib; print(hashlib.sha256(bytes.fromhex(sys.stdin.read().strip())).hexdigest()[:16])')"
                 [ "$_derived" = "$_fp" ] || continue
                 case " $TRACE_BOOTSTRAP_KEY_IDS " in
                     *" $_derived "*) ;;
@@ -615,6 +704,8 @@ if mkdir -p "$TRUST_DIR" 2>/dev/null; then
             else
                 trace_say "  [!] Release bundle carried no known bootstrap anchor. Verification stays fail-closed."
             fi
+        else
+            trace_say "  [!] Python hashing unavailable: no key was provisioned. Verification stays fail-closed."
         fi
     else
         trace_say "  [!] Could not fetch release trust keys (offline or no release yet). Verification stays fail-closed until provisioned."

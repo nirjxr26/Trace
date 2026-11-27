@@ -56,6 +56,19 @@ def test_pointer_version_distinguishes_absent_from_unreadable(tmp_path, monkeypa
     assert problem is None, "an absent pointer is normal and must not be reported as a problem"
 
 
+def test_pointer_version_rejects_a_malformed_active_version(tmp_path, monkeypatch) -> None:
+    import trace_updater.updater as updater_mod
+    from trace_core.updates import checker
+
+    monkeypatch.setattr(updater_mod, "install_root", lambda: tmp_path)
+    for malformed in ("not-a-version", "1.2", "../../1.2.3", "1.2.3;rm -rf /", "9" * 65):
+        (tmp_path / "active-version").write_text(malformed, encoding="utf-8")
+        version, problem = checker.pointer_version()
+        assert version is None, malformed
+        assert problem is not None, malformed
+        assert "malformed version" in problem, malformed
+
+
 def test_install_refuses_when_the_version_cannot_be_determined(monkeypatch, signed_release, temp_storage_root):
     from trace_core.updates import checker
     from trace_core.updates.errors import UpdateError

@@ -10,6 +10,7 @@ param (
     [switch]$Reinstall,
     [switch]$Uninstall,
     [switch]$PurgeData,
+    [switch]$AllowUnverified,
     [switch]$VerboseOutput,
     [switch]$SkipDbMigration,
     [switch]$Help
@@ -21,7 +22,15 @@ trap {
     throw $_
 }
 
-[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+if ([Enum]::GetNames([Net.SecurityProtocolType]) -contains "Tls13") {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls13
+}
+$TraceProxy = $env:HTTPS_PROXY
+if (-not $TraceProxy) { $TraceProxy = $env:HTTP_PROXY }
+if ($TraceProxy) {
+    [Net.WebRequest]::DefaultWebProxy = New-Object Net.WebProxy($TraceProxy)
+}
 
 $UnknownFlags = @()
 foreach ($rawArg in $args) {
@@ -35,6 +44,8 @@ foreach ($rawArg in $args) {
         $Uninstall = $true
     } elseif ($rawArg -eq '--purge-data') {
         $PurgeData = $true
+    } elseif ($rawArg -eq '--allow-unverified') {
+        $AllowUnverified = $true
     } elseif ($rawArg -eq '--verbose') {
         $VerboseOutput = $true
     } elseif ($rawArg -eq '--help' -or $rawArg -eq '-h') {
@@ -60,6 +71,7 @@ $script:DoctorFailed = $false
 $script:LastChildExit = 0
 $script:StageRoot = ""
 $script:Staged = $false
+$script:TempArtifacts = @()
 $VerboseMode = [bool]$VerboseOutput
 if ($env:TRACE_VERBOSE -eq "1") {
     $VerboseMode = $true
@@ -70,15 +82,46 @@ function Write-TraceLog {
     Add-Content -Path $InstallLog -Value $Text -ErrorAction SilentlyContinue
 }
 
+function Protect-TraceFile {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return }
+    try {
+        $acl = Get-Acl -Path $Path
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRule($rule) | Out-Null }
+        $owner = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $grant = New-Object Security.AccessControl.FileSystemAccessRule($owner, "FullControl", "Allow")
+        $acl.AddAccessRule($grant)
+        Set-Acl -Path $Path -AclObject $acl
+    } catch {
+        Write-Host "  [!] Could not restrict permissions on a local file." -ForegroundColor Yellow
+    }
+}
+
+function Add-TraceTempArtifact {
+    param([string]$Path)
+    if ($Path) { $script:TempArtifacts += $Path }
+}
+
+function Remove-TraceTempArtifacts {
+    foreach ($artifact in $script:TempArtifacts) {
+        if ($artifact -and (Test-Path $artifact)) {
+            Remove-Item -Recurse -Force $artifact -ErrorAction SilentlyContinue
+        }
+    }
+    $script:TempArtifacts = @()
+}
+
 function Show-TraceUsage {
-    Write-Output "Usage: install.ps1 [--version <tag>] [--list-versions] [--reinstall] [--uninstall [--purge-data]] [--verbose] [--help]"
+    Write-Output "Usage: install.ps1 [--version <tag>] [--list-versions] [--reinstall] [--uninstall [--purge-data]] [--allow-unverified] [--verbose] [--help]"
     Write-Output ""
     Write-Output "  (none)              Quiet install of main (or TRACE_REF when set)"
     Write-Output "  --version <tag>     Install that release instead"
     Write-Output "  --list-versions     List releases; TTY offers pick-and-install"
     Write-Output "  --reinstall         Wipe app code first, then install"
     Write-Output "  --uninstall         Remove launcher + app + config; keeps storage and database"
-    Write-Output "  --uninstall --purge-data  Also remove storage; confirms first"
+    Write-Output "  --uninstall --purge-data  Also remove storage; needs a TTY prompt or typed PURGE"
+    Write-Output "  --allow-unverified  Opt in to mutable main without TRACE_RELEASE_SHA256 or TRACE_COSIGN_BUNDLE_URL"
     Write-Output "  --verbose           Full step-by-step output"
     Write-Output "  --help              Usage; exit 0"
 }
@@ -118,8 +161,55 @@ function Invoke-LoggedCommand {
     }
 }
 
+function Invoke-TraceDownload {
+    param([string]$Uri, [string]$OutFile, [hashtable]$Headers = @{})
+    $next = $Uri
+    for ($hop = 0; $hop -lt 6; $hop++) {
+        if (-not $next.StartsWith("https://", [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing a non-HTTPS download URL."
+        }
+        $request = [Net.HttpWebRequest]::Create($next)
+        $request.Timeout = 60000
+        $request.ReadWriteTimeout = 60000
+        $request.AllowAutoRedirect = $false
+        foreach ($key in $Headers.Keys) { $request.Headers[$key] = $Headers[$key] }
+        $response = $request.GetResponse()
+        $status = [int]$response.StatusCode
+        if ($status -ge 300 -and $status -lt 400) {
+            $location = $response.Headers["Location"]
+            $response.Close()
+            if (-not $location) { throw "Redirect without a Location header." }
+            $next = $location
+            continue
+        }
+        try {
+            if ($status -ne 200) { throw "Unexpected HTTP status $status." }
+            $source = $response.GetResponseStream()
+            $dest = [IO.File]::Create($OutFile)
+            try { $source.CopyTo($dest) } finally { $dest.Dispose(); $source.Dispose() }
+            return
+        } finally {
+            $response.Close()
+        }
+    }
+    throw "Too many redirects while downloading."
+}
+
+function Remove-TracePath {
+    param([string]$Path, [switch]$Recurse)
+    if (-not $Path -or -not (Test-Path $Path)) { return }
+    try {
+        if ($Recurse) { Remove-Item -Recurse -Force $Path -ErrorAction Stop }
+        else { Remove-Item -Force $Path -ErrorAction Stop }
+    } catch {
+        Write-Host "  [!] Could not remove a local file or directory." -ForegroundColor Red
+        Stop-TraceInstall "uninstall"
+    }
+}
+
 function Stop-TraceInstall {
     param([string]$Step)
+    Remove-TraceTempArtifacts
     if ($script:StageRoot -and (Test-Path $script:StageRoot)) {
         Remove-Item -Recurse -Force $script:StageRoot -ErrorAction SilentlyContinue
     }
@@ -161,19 +251,30 @@ function Show-Success {
     }
 }
 
+function Test-TraceRef {
+    param([string]$Ref)
+    if ([string]::IsNullOrWhiteSpace($Ref) -or $Ref.StartsWith("-") -or $Ref.Contains("..")) {
+        Write-Host "Invalid ref '$Ref'." -ForegroundColor Red
+        exit 2
+    }
+}
+
 function Test-ReleaseTag {
     param([string]$Tag)
+    Test-TraceRef -Ref $Tag
     $gitCmd = Get-Command "git" -ErrorAction SilentlyContinue
     if ($gitCmd) {
-        $out = & git ls-remote --tags https://github.com/nirjxr26/Trace.git $Tag 2>&1
-        if ($out -match [regex]::Escape($Tag)) {
+        $out = & git ls-remote --tags https://github.com/nirjxr26/Trace.git "refs/tags/$Tag" 2>&1
+        $pattern = "\s" + [regex]::Escape("refs/tags/$Tag") + "$"
+        if (@($out | Where-Object { $_ -match $pattern }).Count -gt 0) {
             return
         }
         Write-Host "Unknown tag '$Tag'. Run with --list-versions to see releases." -ForegroundColor Red
         exit 1
     }
+    $encoded = [uri]::EscapeDataString($Tag)
     try {
-        Invoke-WebRequest -Uri "https://api.github.com/repos/nirjxr26/Trace/releases/tags/$Tag" -UseBasicParsing -ErrorAction Stop | Out-Null
+        Invoke-WebRequest -Uri "https://api.github.com/repos/nirjxr26/Trace/releases/tags/$encoded" -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop | Out-Null
     } catch {
         Write-Host "Unknown tag '$Tag'. Run with --list-versions to see releases." -ForegroundColor Red
         exit 1
@@ -182,7 +283,7 @@ function Test-ReleaseTag {
 
 function Show-ReleaseList {
     try {
-        $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/nirjxr26/Trace/releases?per_page=20" -ErrorAction Stop
+        $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/nirjxr26/Trace/releases?per_page=20" -TimeoutSec 60 -ErrorAction Stop
     } catch {
         Write-Output "Could not list releases (offline?). Try --version vX.Y.Z explicitly."
         exit 1
@@ -232,26 +333,34 @@ function Uninstall-TraceApp {
         $envFile = Join-Path $RepoRoot ".env"
     }
     if ([bool]$PurgeData) {
-        $confirm = Read-Host "Remove storage and config? Database server is kept. Confirm y/N"
-        if ($confirm -ne "y" -and $confirm -ne "Y") {
-            Write-Output "Cancelled."
-            exit 0
+        if ([Console]::IsInputRedirected) {
+            $confirm = Read-Host "Remove storage and config? Database server is kept. Type PURGE to confirm"
+            if ($confirm -ne "PURGE") {
+                Write-Output "Cancelled."
+                exit 0
+            }
+        } else {
+            $confirm = Read-Host "Remove storage and config? Database server is kept. Confirm y/N"
+            if ($confirm -ne "y" -and $confirm -ne "Y") {
+                Write-Output "Cancelled."
+                exit 0
+            }
         }
     }
-    Remove-Item -Force $shim -ErrorAction SilentlyContinue
+    Remove-TracePath -Path $shim
     if (Test-Path $appDir) {
-        Remove-Item -Recurse -Force $appDir -ErrorAction SilentlyContinue
+        Remove-TracePath -Path $appDir -Recurse
     }
     if ($envFile -and (Test-Path $envFile)) {
-        Remove-Item -Force $envFile -ErrorAction SilentlyContinue
+        Remove-TracePath -Path $envFile
     }
     $appEnv = Join-Path $Home ".trace\app\.env"
     if (Test-Path $appEnv) {
-        Remove-Item -Force $appEnv -ErrorAction SilentlyContinue
+        Remove-TracePath -Path $appEnv
     }
     if ([bool]$PurgeData) {
-        Remove-Item -Recurse -Force (Join-Path $Home ".trace\trust") -ErrorAction SilentlyContinue
-        Remove-Item -Recurse -Force (Join-Path $Home ".trace\storage") -ErrorAction SilentlyContinue
+        Remove-TracePath -Path (Join-Path $Home ".trace\trust") -Recurse
+        Remove-TracePath -Path (Join-Path $Home ".trace\storage") -Recurse
         Write-Output "Removed launcher, app, config, trust, storage."
         Write-Output "Kept: PostgreSQL server. To drop data run: DROP DATABASE trace;"
     } else {
@@ -268,6 +377,7 @@ if ([bool]$Help) {
 
 New-Item -ItemType Directory -Force -Path $TraceHomeDir -ErrorAction SilentlyContinue | Out-Null
 "" | Add-Content -Path $InstallLog -ErrorAction SilentlyContinue
+Protect-TraceFile $InstallLog
 
 Write-TraceLog ("install started verbose={0} reinstall={1} uninstall={2}" -f $VerboseMode, [bool]$Reinstall, [bool]$Uninstall)
 
@@ -292,6 +402,14 @@ if (-not $RepoRoot -or -not (Test-Path (Join-Path $RepoRoot "pyproject.toml"))) 
         }
         Write-TraceLog ("remote install root {0} ref {1}" -f $RepoRoot, ${env:TRACE_REF})
         if ((-not (Test-Path (Join-Path $RepoRoot "pyproject.toml"))) -or [bool]$Reinstall -or ($Version -ne "")) {
+            if (-not $env:TRACE_RELEASE_SHA256 -and -not $env:TRACE_COSIGN_BUNDLE_URL -and -not [bool]$AllowUnverified -and $env:TRACE_ALLOW_UNVERIFIED -ne "1") {
+                Write-Host "  [!] Refusing unverified source. Pin TRACE_RELEASE_SHA256 or TRACE_COSIGN_BUNDLE_URL, or pass --allow-unverified (or set TRACE_ALLOW_UNVERIFIED=1)." -ForegroundColor Red
+                Stop-TraceInstall "source"
+            }
+            if ($env:TRACE_COSIGN_BUNDLE_URL -and -not $env:TRACE_COSIGN_BUNDLE_URL.StartsWith("https://", [StringComparison]::OrdinalIgnoreCase)) {
+                Write-Host "  [!] TRACE_COSIGN_BUNDLE_URL must use https://." -ForegroundColor Red
+                Stop-TraceInstall "source"
+            }
             if (-not (Test-Path $TraceHome)) {
                 New-Item -ItemType Directory -Force -Path $TraceHome | Out-Null
             }
@@ -303,8 +421,9 @@ if (-not $RepoRoot -or -not (Test-Path (Join-Path $RepoRoot "pyproject.toml"))) 
             $Token = $env:GH_TOKEN
             if (-not $Token) { $Token = $env:GITHUB_TOKEN }
             $TraceRef = if ($env:TRACE_REF) { $env:TRACE_REF } else { "main" }
+            Test-TraceRef -Ref $TraceRef
             $RefKind = if ($TraceRef -like "v*") { "tags" } else { "heads" }
-            $ArchiveUrl = "https://github.com/nirjxr26/Trace/archive/refs/$RefKind/$TraceRef.zip"
+            $ArchiveUrl = "https://github.com/nirjxr26/Trace/archive/refs/$RefKind/$([uri]::EscapeDataString($TraceRef)).zip"
             $WebHeaders = if ($Token) { @{ Authorization = "Bearer $Token" } } else { @{} }
 
             $GitCmd = Get-Command "git" -ErrorAction SilentlyContinue
@@ -313,6 +432,7 @@ if (-not $RepoRoot -or -not (Test-Path (Join-Path $RepoRoot "pyproject.toml"))) 
                 try {
                     if ($Token) {
                         $AskPass = Join-Path ([IO.Path]::GetTempPath()) ("trace-askpass-" + [Guid]::NewGuid().ToString("N") + ".cmd")
+                        Add-TraceTempArtifact $AskPass
                         Set-Content -Path $AskPass -Value "@echo off`r`n@echo %TRACE_GIT_TOKEN%"
                         $OldAskPass = $env:GIT_ASKPASS
                         try {
@@ -342,10 +462,12 @@ if (-not $RepoRoot -or -not (Test-Path (Join-Path $RepoRoot "pyproject.toml"))) 
                     Write-Host "  [!] cosign missing: cannot verify the pinned signature. Aborting." -ForegroundColor Red
                     Stop-TraceInstall "source"
                 }
-                $ZipPath = Join-Path $TraceHome "trace-main.zip"
-                $TempExtract = Join-Path $TraceHome "trace-temp"
+                $ZipPath = Join-Path ([IO.Path]::GetTempPath()) ("trace-archive-" + [Guid]::NewGuid().ToString("N") + ".zip")
+                $TempExtract = Join-Path ([IO.Path]::GetTempPath()) ("trace-extract-" + [Guid]::NewGuid().ToString("N"))
+                Add-TraceTempArtifact $ZipPath
+                Add-TraceTempArtifact $TempExtract
                 try {
-                    Invoke-WebRequest -Uri $ArchiveUrl -Headers $WebHeaders -OutFile $ZipPath
+                    Invoke-TraceDownload -Uri $ArchiveUrl -OutFile $ZipPath -Headers $WebHeaders
                 } catch {
                     Stop-TraceInstall "source"
                 }
@@ -353,14 +475,14 @@ if (-not $RepoRoot -or -not (Test-Path (Join-Path $RepoRoot "pyproject.toml"))) 
                     $ActualSha = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash.ToLower()
                     if ($ActualSha -ne $env:TRACE_RELEASE_SHA256.ToLower()) {
                         Write-Host "  [!] Release digest mismatch: refusing to install." -ForegroundColor Red
-                        Remove-Item -Force $ZipPath -ErrorAction SilentlyContinue
                         Stop-TraceInstall "source"
                     }
                 }
                 if ($env:TRACE_COSIGN_BUNDLE_URL) {
-                    $BundlePath = "$ZipPath.sigstore.json"
+                    $BundlePath = Join-Path ([IO.Path]::GetTempPath()) ("trace-bundle-" + [Guid]::NewGuid().ToString("N") + ".sigstore.json")
+                    Add-TraceTempArtifact $BundlePath
                     try {
-                        Invoke-WebRequest -Uri $env:TRACE_COSIGN_BUNDLE_URL -Headers $WebHeaders -OutFile $BundlePath
+                        Invoke-TraceDownload -Uri $env:TRACE_COSIGN_BUNDLE_URL -OutFile $BundlePath -Headers $WebHeaders
                     } catch {
                         Stop-TraceInstall "source"
                     }
@@ -374,16 +496,29 @@ if (-not $RepoRoot -or -not (Test-Path (Join-Path $RepoRoot "pyproject.toml"))) 
                     } catch {
                         Stop-TraceInstall "source"
                     }
-                    Remove-Item -Force $BundlePath -ErrorAction SilentlyContinue
                 }
                 if (-not $env:TRACE_RELEASE_SHA256 -and -not $env:TRACE_COSIGN_BUNDLE_URL) {
-                    Write-Trace ("  [!] No TRACE_RELEASE_SHA256 pinned: installing unverified {0}." -f $TraceRef)
+                    Write-Trace ("  [!] Installing unverified {0} by explicit opt-in." -f $TraceRef)
                 }
-                Expand-Archive -Path $ZipPath -DestinationPath $TempExtract -Force
-                $ExtractedFolder = (Get-ChildItem -Directory -Path $TempExtract | Select-Object -First 1).FullName
-                Move-Item -Path $ExtractedFolder -Destination $RepoRoot
-                Remove-Item -Force $ZipPath
-                Remove-Item -Recurse -Force $TempExtract
+                if (Test-Path $TempExtract) { Remove-Item -Recurse -Force $TempExtract -ErrorAction SilentlyContinue }
+                New-Item -ItemType Directory -Force -Path $TempExtract | Out-Null
+                try {
+                    Expand-Archive -Path $ZipPath -DestinationPath $TempExtract -Force
+                } catch {
+                    Stop-TraceInstall "source"
+                }
+                $ExtractedFolders = @(Get-ChildItem -Directory -Path $TempExtract)
+                if ($ExtractedFolders.Count -ne 1) {
+                    Write-Host "  [!] Archive layout unexpected: expected one extracted directory." -ForegroundColor Red
+                    Stop-TraceInstall "source"
+                }
+                $ExtractedFolder = $ExtractedFolders[0].FullName
+                try {
+                    Move-Item -Path $ExtractedFolder -Destination $RepoRoot -ErrorAction Stop
+                } catch {
+                    Stop-TraceInstall "source"
+                }
+                Remove-TraceTempArtifacts
             }
         }
     }
@@ -398,15 +533,15 @@ if ([bool]$Reinstall -and -not $script:Staged) {
     try {
         if ($RepoRoot -eq $defaultApp) {
             if (Test-Path $RepoRoot) {
-                Remove-Item -Recurse -Force $RepoRoot
+                Remove-Item -Recurse -Force $RepoRoot -ErrorAction Stop
             }
         } else {
             $venvPath = Join-Path $RepoRoot ".venv"
             if (Test-Path $venvPath) {
-                Remove-Item -Recurse -Force $venvPath
+                Remove-Item -Recurse -Force $venvPath -ErrorAction Stop
             }
             if (Test-Path $defaultApp) {
-                Remove-Item -Recurse -Force $defaultApp
+                Remove-Item -Recurse -Force $defaultApp -ErrorAction Stop
             }
         }
     } catch {
@@ -554,19 +689,20 @@ if ($script:Staged) {
         Copy-Item $OldEnv (Join-Path $RepoRoot ".env")
     }
     $OldRoot = "$FinalRoot.old"
-    Remove-Item -Recurse -Force $OldRoot -ErrorAction SilentlyContinue
+    Remove-TracePath -Path $OldRoot -Recurse
     try {
         if (Test-Path $FinalRoot) {
-            Move-Item -Path $FinalRoot -Destination $OldRoot
+            Move-Item -Path $FinalRoot -Destination $OldRoot -ErrorAction Stop
         }
-        Move-Item -Path $RepoRoot -Destination $FinalRoot
+        Move-Item -Path $RepoRoot -Destination $FinalRoot -ErrorAction Stop
     } catch {
         if ((Test-Path $OldRoot) -and (-not (Test-Path $FinalRoot))) {
-            Move-Item -Path $OldRoot -Destination $FinalRoot -ErrorAction SilentlyContinue
+            try { Move-Item -Path $OldRoot -Destination $FinalRoot -ErrorAction Stop }
+            catch { Stop-TraceInstall "source" }
         }
         Stop-TraceInstall "source"
     }
-    Remove-Item -Recurse -Force $OldRoot -ErrorAction SilentlyContinue
+    Remove-TracePath -Path $OldRoot -Recurse
     $RepoRoot = $FinalRoot
     $VenvDir = Join-Path $RepoRoot ".venv"
     $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
@@ -594,6 +730,7 @@ if (-not (Test-Path $EnvFile)) {
 } else {
     Write-Trace "  [OK] Existing .env file preserved."
 }
+Protect-TraceFile $EnvFile
 
 # Bootstrap anchor, established independently of the release channel. The channel
 # only supplies key bytes; a bundle line is written solely when the id derived from
@@ -602,10 +739,11 @@ if (-not (Test-Path $EnvFile)) {
 # means editing this installer, which is reviewed code.
 $BootstrapKeyIds = @("53712e8bb8a774e6")
 $TrustDir = Join-Path $Home ".trace\trust\releases"
+$Bundle = Join-Path ([IO.Path]::GetTempPath()) ("trace-keys-" + [Guid]::NewGuid().ToString("N") + ".bundle")
+Add-TraceTempArtifact $Bundle
 try {
     New-Item -ItemType Directory -Force -Path $TrustDir | Out-Null
-    $Bundle = Join-Path ([IO.Path]::GetTempPath()) "trace-trusted-keys.bundle"
-    Invoke-LoggedCommand -Action { param($url, $out) Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing } -ActionArgs @("https://github.com/nirjxr26/Trace/releases/latest/download/trusted-keys.bundle", $Bundle)
+    Invoke-TraceDownload -Uri "https://github.com/nirjxr26/Trace/releases/latest/download/trusted-keys.bundle" -OutFile $Bundle
     $Provisioned = 0
     foreach ($line in (Get-Content -Path $Bundle)) {
         $parts = $line.Trim() -split "\s+", 2
@@ -625,7 +763,6 @@ try {
         Set-Content -Path (Join-Path $TrustDir ($derived + ".pub")) -Value $parts[1] -NoNewline
         $Provisioned++
     }
-    Remove-Item -Force $Bundle -ErrorAction SilentlyContinue
     if ($Provisioned -gt 0) {
         Write-Trace ("  [OK] Release trust keys provisioned ({0} bootstrap anchor(s))." -f $Provisioned)
     } else {
@@ -633,6 +770,8 @@ try {
     }
 } catch {
     Write-Trace "  [!] Could not fetch release trust keys (offline or no release yet). Verification stays fail-closed until provisioned."
+} finally {
+    Remove-Item -Force $Bundle -ErrorAction SilentlyContinue
 }
 
 $DefaultStorage = Join-Path $Home ".trace\storage"
